@@ -1,0 +1,7 @@
+CompileFlags:
+  Add:
+    - --target=i386-none-elf
+    - -m32
+    - -ffreestanding
+    - -Ikernel/include
+    - -Ikernel

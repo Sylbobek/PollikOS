@@ -1,0 +1,19 @@
+{
+    "configurations": [
+        {
+            "name": "PollikOS i386 Clang",
+            "compilerPath": "${env:USERPROFILE}/scoop/apps/llvm/current/bin/clang.exe",
+            "compilerArgs": ["--target=i386-none-elf", "-ffreestanding"],
+            "intelliSenseMode": "linux-clang-x86",
+            "includePath": [
+                "${workspaceFolder}/kernel",
+                "${workspaceFolder}/include",
+                "${workspaceFolder}/third_party/**",
+                "${workspaceFolder}/build/bearssl-0.6/inc"
+            ],
+            "cStandard": "c11",
+            "cppStandard": "c++17"
+        }
+    ],
+    "version": 4
+}

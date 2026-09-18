@@ -1,0 +1,17 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Build PollikOS surface regression",
+			"type": "shell",
+			"command": ".\\build.ps1",
+			"args": [
+				"-ImageName",
+				"PollikOS-Surface.img"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "build"
+		}
+	]
+}

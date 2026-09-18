@@ -1,0 +1,104 @@
+param([string]$ImageName = "PollikOS-Alpha.img")
+$ErrorActionPreference = 'Stop'
+Set-Location $PSScriptRoot
+New-Item -ItemType Directory -Force build | Out-Null
+function Invoke-Checked { param([string]$Program, [string[]]$Arguments) & $Program @Arguments; if ($LASTEXITCODE -ne 0) { throw "$Program failed ($LASTEXITCODE)" } }
+# Build the vendored freestanding TLS library, without SIMD (no FPU context switching).
+if (!(Test-Path build/bearssl-freestanding.stamp)) {
+    New-Item -ItemType Directory -Force build/bearssl-obj | Out-Null
+    $tlsObjects = @()
+    foreach ($source in (Get-ChildItem third_party/bearssl/src -Filter '*.c' -Recurse)) {
+        $object = "build/bearssl-obj/$($source.BaseName).o"
+        Invoke-Checked clang @('--target=i386-none-elf','-march=i386','-ffreestanding','-fno-pic','-fno-stack-protector','-mno-sse','-mno-mmx','-Os','-DBR_AES_X86NI=0','-DBR_SSE2=0','-DBR_RDRAND=0','-DBR_USE_URANDOM=0','-DBR_USE_WIN32_RAND=0','-DBR_USE_UNIX_TIME=0','-DBR_USE_WIN32_TIME=0','-Ikernel/include','-Ithird_party/bearssl/inc','-Ithird_party/bearssl/src','-c',$source.FullName,'-o',$object)
+        $tlsObjects += $object
+    }
+    Invoke-Checked llvm-ar (@('rcs','build/libbearssl.a') + $tlsObjects)
+    Set-Content build/bearssl-freestanding.stamp 'BearSSL 0.6; freestanding scalar i386'
+}
+Invoke-Checked nasm @('-f','bin','boot/boot.asm','-o','build/boot.bin')
+Invoke-Checked nasm @('-f','bin','boot/stage2.asm','-o','build/stage2.bin')
+Invoke-Checked nasm @('-f','elf32','kernel/entry.asm','-o','build/entry.o')
+Invoke-Checked nasm @('-f','elf32','kernel/interrupts.asm','-o','build/interrupts.o')
+$netModules = @('net_util','rtl8139','wifi_if','arp','ipv4','icmp','udp','dhcp','dns','tcp','tls','http','net_manager')
+foreach ($module in @('kernel','desktop','compositor','graphics','gfx_device','soft3d','input_dispatch','wm','hw','mem','pmm','vmm','klog','storage','pollikfs','vfs','process','syscall','elf','network','framebuffer','ui')) {
+    Invoke-Checked clang @('--target=i386-none-elf','-m32','-march=i386','-ffreestanding','-fno-pic','-fno-pie','-fno-stack-protector','-mno-sse','-mno-mmx','-Os','-Wall','-Wextra','-Werror','-Ikernel/include','-c',"kernel/$module.c",'-o',"build/$module.o")
+}
+foreach ($m in $netModules) {
+    Invoke-Checked clang @('--target=i386-none-elf','-m32','-march=i386','-ffreestanding','-fno-pic','-fno-pie','-fno-stack-protector','-mno-sse','-mno-mmx','-Os','-Wall','-Wextra','-Werror','-Ikernel/include','-c',"kernel/net/$m.c",'-o',"build/$m.o")
+}
+$browserModules = @('browser_app','html_parser','css_engine','layout','render','js_engine','js_compat','images')
+foreach ($m in $browserModules) {
+    Invoke-Checked clang @('--target=i386-none-elf','-m32','-march=i386','-ffreestanding','-fno-pic','-fno-pie','-fno-stack-protector','-mno-sse','-mno-mmx','-Os','-Wall','-Wextra','-Werror','-Ikernel/include','-c',"kernel/browser/$m.c",'-o',"build/$m.o")
+}
+# Built-in GUI clients remain Ring0, but are independent translation units.
+$guiModules = @('apps','app_edit','welcome','files','notes','terminal','settings','browser_client','pollikmark')
+foreach ($m in $guiModules) {
+    Invoke-Checked clang @('--target=i386-none-elf','-m32','-march=i386','-ffreestanding','-fno-pic','-fno-pie','-fno-stack-protector','-mno-sse','-mno-mmx','-Os','-Wall','-Wextra','-Werror','-Ikernel/include','-c',"kernel/gui/$m.c",'-o',"build/gui_$m.o")
+}
+$guiObjs = @($guiModules | ForEach-Object { "build/gui_$_.o" })
+Invoke-Checked clang @('--target=i386-none-elf','-march=i386','-ffreestanding','-fno-pic','-fno-stack-protector','-mno-sse','-mno-mmx','-Os','-DJS_OPT','-Ikernel/include','-c','third_party/elk/elk.c','-o','build/elk.o')
+# Build userspace applications
+$userApps = @('hello', 'fault_test', 'fault_kernel', 'fault_stack')
+$userElfObjs = @()
+foreach ($app in $userApps) {
+    Invoke-Checked clang @('--target=i386-none-elf','-m32','-march=i386','-ffreestanding','-fno-pic','-fno-pie','-fno-stack-protector','-mno-sse','-mno-mmx','-O2','-Iinclude','-c',"apps/$app/$app.c",'-o',"build/$app.o")
+    Invoke-Checked ld.lld @('-m','elf_i386','-N','-s','-T','apps/user.ld',"build/$app.o",'-o',"build/$app.elf")
+    Invoke-Checked llvm-objcopy @('-I','binary','-O','elf32-i386','-B','i386',"build/$app.elf","build/${app}_elf.o")
+    $userElfObjs += "build/${app}_elf.o"
+}
+$browserObjs = @($browserModules | ForEach-Object { "build/$_.o" })
+$netObjs = @($netModules | ForEach-Object { "build/$_.o" })
+$linkArgs = @('-m','elf_i386','-T','kernel/linker.ld','build/entry.o','build/interrupts.o','build/kernel.o','build/desktop.o','build/compositor.o','build/graphics.o','build/gfx_device.o','build/soft3d.o','build/input_dispatch.o','build/wm.o','build/ui.o','build/hw.o','build/mem.o','build/pmm.o','build/vmm.o','build/klog.o','build/storage.o','build/pollikfs.o','build/vfs.o','build/process.o','build/syscall.o','build/elf.o') + $userElfObjs + @('build/network.o','build/framebuffer.o') + $netObjs + $browserObjs + $guiObjs + @('build/elk.o') + @('build/libbearssl.a','-o','build/kernel.elf')
+Invoke-Checked ld.lld $linkArgs
+Invoke-Checked llvm-objcopy @('-O','binary','build/kernel.elf','build/kernel.bin')
+$kernelBytes = [IO.File]::ReadAllBytes("$PSScriptRoot/build/kernel.bin")
+# Stage 2 loads the image to 1 MiB in 32 KiB chunks; the linker script bounds
+# image + BSS. Keep an explicit cap so a runaway image cannot reach 0x800000.
+$kernelSectors = [int][Math]::Ceiling($kernelBytes.Length / 512)
+if ($kernelBytes.Length -gt 4194304) { throw "Kernel image $($kernelBytes.Length) B exceeds the 4 MiB load cap" }
+$stage2Bytes = [IO.File]::ReadAllBytes("$PSScriptRoot/build/stage2.bin")
+if ($stage2Bytes.Length -ne 4096) { throw "stage2.bin must be exactly 4096 bytes (got $($stage2Bytes.Length))" }
+if ($stage2Bytes[4094] -ne 0 -or $stage2Bytes[4095] -ne 0) { throw 'stage2.bin kernel_sectors placeholder is not zero' }
+$stage2Bytes[4094] = [byte]($kernelSectors -band 0xff)
+$stage2Bytes[4095] = [byte](($kernelSectors -shr 8) -band 0xff)
+$destinationPath = "$PSScriptRoot/build/$ImageName"
+$imagePath = "$destinationPath.pending"
+# A sparse raw image reports 10 GiB to the guest but consumes only sectors
+# actually written by PollikOS on the Windows host.
+$imageFile = [IO.File]::Open($imagePath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::Read)
+$imageFile.Dispose()
+& fsutil sparse setflag $imagePath
+if ($LASTEXITCODE -ne 0) { throw 'Failed to create sparse disk image.' }
+$image = [IO.File]::Open($imagePath, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::Read)
+try {
+    $image.SetLength(0)
+    $image.SetLength(10GB)
+    $bootBytes = [IO.File]::ReadAllBytes("$PSScriptRoot/build/boot.bin")
+    $image.Position = 0
+    $image.Write($bootBytes, 0, $bootBytes.Length)
+    $image.Position = 512
+    $image.Write($stage2Bytes, 0, $stage2Bytes.Length)
+    $image.Position = 4608
+    $image.Write($kernelBytes, 0, $kernelBytes.Length)
+    $image.Flush($true)
+} finally {
+    $image.Dispose()
+}
+$dataPath = "$PSScriptRoot/build/PollikData.img"
+if (!(Test-Path $dataPath) -or (Get-Item $dataPath).Length -lt 10GB) {
+$dataFile = [IO.File]::Open($dataPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::Read)
+$dataFile.Dispose()
+& fsutil sparse setflag $dataPath
+if ($LASTEXITCODE -ne 0) { throw 'Failed to create sparse data disk.' }
+$dataImage = [IO.File]::Open($dataPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::Read)
+try {
+    if ($dataImage.Length -lt 10GB) { $dataImage.SetLength(10GB); $dataImage.Flush($true) }
+} finally { $dataImage.Dispose() }
+}
+try {
+    if (Test-Path $destinationPath) { [IO.File]::Replace($imagePath,$destinationPath,"$destinationPath.previous") }
+    else { [IO.File]::Move($imagePath,$destinationPath) }
+    Write-Host "PollikOS built: build/$ImageName ($($kernelBytes.Length) kernel bytes, $kernelSectors sectors loaded at 1 MiB)"
+} catch [IO.IOException] {
+    Write-Host "Build ready: $imagePath. Close QEMU; run.ps1 will install it at next launch."
+}
