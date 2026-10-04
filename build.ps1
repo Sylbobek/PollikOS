@@ -9,6 +9,7 @@ if (Get-Command python -ErrorAction SilentlyContinue) {
     try { python tools/gen_compile_commands.py | Out-Null } catch {}
 }
 function Invoke-Checked { param([string]$Program, [string[]]$Arguments) & $Program @Arguments; if ($LASTEXITCODE -ne 0) { throw "$Program failed ($LASTEXITCODE)" } }
+Invoke-Checked python @('assets/build_cursor.py','--output','kernel/cursor_sprites.h')
 # Build the vendored freestanding TLS library, without SIMD (no FPU context switching).
 if (!(Test-Path build/bearssl-freestanding.stamp)) {
     New-Item -ItemType Directory -Force build/bearssl-obj | Out-Null
@@ -54,10 +55,7 @@ foreach ($app in $userApps) {
 }
 $browserObjs = @($browserModules | ForEach-Object { "build/$_.o" })
 $netObjs = @($netModules | ForEach-Object { "build/$_.o" })
-Invoke-Checked llvm-objcopy @('-I','binary','-O','elf32-i386','-B','i386','assets/Background_LightTheme.png','build/background_light.o')
-Invoke-Checked llvm-objcopy @('-I','binary','-O','elf32-i386','-B','i386','assets/Background_BlackTheme.png','build/background_dark.o')
-$wallpaperObjs = @('build/background_light.o','build/background_dark.o')
-$linkArgs = @('-m','elf_i386','-T','kernel/linker.ld','build/entry.o','build/interrupts.o','build/kernel.o','build/desktop.o','build/compositor.o','build/graphics.o','build/gfx_device.o','build/soft3d.o','build/input_dispatch.o','build/wm.o','build/ui.o','build/hw.o','build/hal.o','build/mem.o','build/pmm.o','build/vmm.o','build/klog.o','build/ahci.o','build/storage.o','build/pollikfs.o','build/vfs.o','build/process.o','build/syscall.o','build/elf.o','build/trash.o','build/ui_animation.o','build/desktop_items.o','build/auth.o','build/media.o','build/pollikgl.o','build/audio.o') + $wallpaperObjs + $userElfObjs + @('build/network.o','build/framebuffer.o') + $netObjs + $browserObjs + $guiObjs + @('build/elk.o') + @('build/libbearssl.a','-o','build/kernel.elf')
+$linkArgs = @('-m','elf_i386','-T','kernel/linker.ld','build/entry.o','build/interrupts.o','build/kernel.o','build/desktop.o','build/compositor.o','build/graphics.o','build/gfx_device.o','build/soft3d.o','build/input_dispatch.o','build/wm.o','build/ui.o','build/hw.o','build/hal.o','build/mem.o','build/pmm.o','build/vmm.o','build/klog.o','build/ahci.o','build/storage.o','build/pollikfs.o','build/vfs.o','build/process.o','build/syscall.o','build/elf.o','build/trash.o','build/ui_animation.o','build/desktop_items.o','build/auth.o','build/media.o','build/pollikgl.o','build/audio.o') + $userElfObjs + @('build/network.o','build/framebuffer.o') + $netObjs + $browserObjs + $guiObjs + @('build/elk.o') + @('build/libbearssl.a','-o','build/kernel.elf')
 Invoke-Checked ld.lld $linkArgs
 Invoke-Checked llvm-objcopy @('-O','binary','build/kernel.elf','build/kernel.bin')
 $kernelBytes = [IO.File]::ReadAllBytes("$PSScriptRoot/build/kernel.bin")
@@ -98,6 +96,9 @@ try {
 # bootable prefix of the normal runtime image, then writes that prefix to the
 # supported internal ATA target and creates PollikFS at the fixed 8 MiB offset.
 New-Item -ItemType Directory -Force build/install | Out-Null
+$wallpaperPackage = 'build/install/wallpapers_pkg.bin'
+Invoke-Checked python @('tools/build_wallpaper_package.py','--output',$wallpaperPackage)
+Invoke-Checked llvm-objcopy @('-I','binary','-O','elf32-i386','-B','i386',$wallpaperPackage,'build/install/wallpapers_pkg.o')
 $runtimePrefix = 'build/install/runtime-prefix.bin'
 $prefixStream = [IO.File]::Open($runtimePrefix, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::Read)
 try {
@@ -114,11 +115,11 @@ $installerLinkArgs = @()
 for ($i = 0; $i -lt $linkArgs.Count; $i++) {
     if ($linkArgs[$i] -eq 'build/auth.o') { $installerLinkArgs += 'build/install/auth.o'; continue }
     if ($linkArgs[$i] -eq 'build/desktop.o') { $installerLinkArgs += 'build/install/desktop.o'; continue }
-    if ($linkArgs[$i] -eq 'build/background_light.o' -or $linkArgs[$i] -eq 'build/background_dark.o') { continue }
     if ($linkArgs[$i] -eq '-o') { $i++; continue }
     $installerLinkArgs += $linkArgs[$i]
 }
-$installerLinkArgs += @('build/install/installer.o','build/install/runtime-prefix.o','-o','build/install/kernel.elf')
+$installerLinkArgs += @('build/install/installer.o','build/install/runtime-prefix.o',
+                        'build/install/wallpapers_pkg.o','-o','build/install/kernel.elf')
 Invoke-Checked ld.lld $installerLinkArgs
 Invoke-Checked llvm-objcopy @('-O','binary','build/install/kernel.elf','build/install/kernel.bin')
 $installerKernel = [IO.File]::ReadAllBytes("$PSScriptRoot/build/install/kernel.bin")
@@ -153,6 +154,7 @@ if (!(Test-Path $dataPath)) {
         if ($dataImage.Length -lt 10GB) { $dataImage.SetLength(10GB); $dataImage.Flush($true) }
     } finally { $dataImage.Dispose() }
     & python "$PSScriptRoot/tests/format_pollikfs2.py" $dataPath
+    Invoke-Checked python @('tools/install_wallpapers.py',$dataPath)
     Write-Host "Utworzono i zainicjalizowano nowy czysty obraz PollikData.img."
 } elseif ($FormatData) {
     Write-Host "UWAGA: Jawne formatowanie dysku danych (-FormatData)." -ForegroundColor Yellow
@@ -161,6 +163,7 @@ if (!(Test-Path $dataPath)) {
     Copy-Item $dataPath $bakPath
     Write-Host "Kopia zapasowa przed jawnym formatowaniem: $bakPath"
     & python "$PSScriptRoot/tests/format_pollikfs2.py" $dataPath
+    Invoke-Checked python @('tools/install_wallpapers.py',$dataPath)
     Write-Host "Dysk PollikData.img zostal sformatowany na jawne zadanie uzytkownika."
 } else {
     # Existing PollikData.img: strictly protect user data.

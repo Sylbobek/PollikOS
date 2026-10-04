@@ -9,11 +9,9 @@
 #include "auth.h"
 #include "ui_animation.h"
 #include "trash.h"
+#include "cursor_sprites.h"
 
 static u32 *pixels, *wallpaper;
-static u16 *wallpaper_light;
-static int wallpaper_light_width, wallpaper_light_height;
-static u16 wallpaper_light_min_cache[128 * 96];
 static int wallpaper_theme = -1;
 #define DOCK_CACHE_WIDTH (NUM_APPS * 68 + 144)
 static u32 dock_background[DOCK_CACHE_WIDTH * 145];
@@ -34,66 +32,6 @@ enum { DOCK_GLASS_BLUR_ROWS = DOCK_GLASS_BLUR_RADIUS * 2 + 1 };
 static u32 dock_glass_blur_rows[DOCK_GLASS_BLUR_ROWS][DOCK_CACHE_WIDTH];
 static u32 dock_glass_next_blur_row[DOCK_CACHE_WIDTH];
 static int dock_glass_vertical_sum[3][DOCK_CACHE_WIDTH];
-
-static u32 wallpaper_expand_rgb565(u16 color) {
-    u32 red = (color >> 11) & 31u, green = (color >> 5) & 63u, blue = color & 31u;
-    red = (red << 3) | (red >> 2);
-    green = (green << 2) | (green >> 4);
-    blue = (blue << 3) | (blue >> 2);
-    return (red << 16) | (green << 8) | blue;
-}
-
-#define WALLPAPER_LIGHT_MAX_W 4096
-static int wl_x0[WALLPAPER_LIGHT_MAX_W], wl_x1[WALLPAPER_LIGHT_MAX_W];
-static int wl_fx[WALLPAPER_LIGHT_MAX_W];
-static int wl_cache_w = -1, wl_cache_src_w = -1;
-/* The horizontal source mapping depends only on x, so evaluate its division
- * once per width instead of once per pixel per frame. */
-static void wallpaper_light_build_x_cache(int width) {
-    int src_w = wallpaper_light_width;
-    if (width > WALLPAPER_LIGHT_MAX_W) width = WALLPAPER_LIGHT_MAX_W;
-    if (wl_cache_w == width && wl_cache_src_w == src_w) return;
-    for (int x = 0; x < width; x++) {
-        u32 xq = shell.width > 1
-            ? ((u32)x * (u32)(src_w - 1) * 256u / (u32)(shell.width - 1)) : 0;
-        int x0 = (int)(xq >> 8);
-        wl_x0[x] = x0;
-        wl_x1[x] = x0 + 1 < src_w ? x0 + 1 : x0;
-        wl_fx[x] = (int)(xq & 255u);
-    }
-    wl_cache_w = width;
-    wl_cache_src_w = src_w;
-}
-/* Bilinearly samples the RGB565 light wallpaper into a clipped scene region,
- * bit-identical to the previous per-pixel helper. */
-static void __attribute__((unused)) wallpaper_light_region(int rx1, int ry1, int rx2, int ry2) {
-    if (!wallpaper_light || rx2 <= rx1 || ry2 <= ry1) return;
-    int src_w = wallpaper_light_width, src_h = wallpaper_light_height;
-    if (rx1 < 0) rx1 = 0;
-    if (ry1 < 0) ry1 = 0;
-    if (rx2 > shell.width) rx2 = shell.width;
-    if (ry2 > shell.height) ry2 = shell.height;
-    if (rx2 > WALLPAPER_LIGHT_MAX_W) rx2 = WALLPAPER_LIGHT_MAX_W;
-    if (rx2 <= rx1 || ry2 <= ry1) return;
-    wallpaper_light_build_x_cache(rx2);
-    int width = shell.width;
-    for (int y = ry1; y < ry2; y++) {
-        u32 yq = shell.height > 1
-            ? ((u32)y * (u32)(src_h - 1) * 256u / (u32)(shell.height - 1)) : 0;
-        int y0 = (int)(yq >> 8), y1 = y0 + 1 < src_h ? y0 + 1 : y0;
-        int fy = (int)(yq & 255u);
-        const u16 *row0 = wallpaper_light + y0 * src_w;
-        const u16 *row1 = wallpaper_light + y1 * src_w;
-        u32 *dst = pixels + y * width;
-        for (int x = rx1; x < rx2; x++) {
-            u32 top = blend(wallpaper_expand_rgb565(row0[wl_x0[x]]),
-                            wallpaper_expand_rgb565(row0[wl_x1[x]]), wl_fx[x]);
-            u32 bottom = blend(wallpaper_expand_rgb565(row1[wl_x0[x]]),
-                               wallpaper_expand_rgb565(row1[wl_x1[x]]), wl_fx[x]);
-            dst[x] = blend(top, bottom, fy);
-        }
-    }
-}
 
 static void dock_glass_blur_row(int source_y, int x1, int x2, int width, int height,
                                 u32 *out) {
@@ -611,7 +549,7 @@ static void draw_snap_preview(void) {
 static inline void set_cursor_px(int x, int y, u32 col) {
     rect(x, y, 1, 1, col);
 }
-static void draw_resize_cursor(int cx, int cy, int kind) {
+static void __attribute__((unused)) draw_resize_cursor(int cx, int cy, int kind) {
     u32 c_out = 0x181822, c_in = 0xffffff;
     int ox = cx, oy = cy;
     if (kind == CURSOR_RESIZE_H) {
@@ -707,7 +645,7 @@ static void draw_resize_cursor(int cx, int cy, int kind) {
 /* Windows-style text I-beam: flat black outline, solid white core, centred on
  * the caret hotspot. Replaces the old gradient sprite so every cursor shares
  * one visual language. */
-static void draw_ibeam_cursor(int cx, int cy) {
+static void __attribute__((unused)) draw_ibeam_cursor(int cx, int cy) {
     u32 o = 0x000000, w = 0xffffff;
     int top = cy - 11, bot = cy + 11;
     rect(cx - 4, top, 9, 3, o);
@@ -723,7 +661,7 @@ static void draw_ibeam_cursor(int cx, int cy) {
 }
 /* Windows-style pointing hand: flat black outline, white face, index finger
  * up and folded fingers marked by two separations. Hotspot near (cx, cy). */
-static void draw_hand_cursor(int cx, int cy) {
+static void __attribute__((unused)) draw_hand_cursor(int cx, int cy) {
     u32 o = 0x000000, w = 0xffffff;
     roundrect(cx + 3, cy, 7, 14, 3, o);
     roundrect(cx - 1, cy + 8, 7, 9, 3, o);
@@ -778,7 +716,7 @@ static void build_arrow_lut(void) {
     }
     arrow_lut_ready = 1;
 }
-static void draw_arrow_cursor(int mx, int my) {
+static void __attribute__((unused)) draw_arrow_cursor(int mx, int my) {
     if (!arrow_lut_ready) build_arrow_lut();
     GraphicsClip clip = graphics_get_clip();
     for (int y = 0; y < ARROW_H; y++) for (int x = 0; x < ARROW_W; x++) {
@@ -793,21 +731,74 @@ static void draw_arrow_cursor(int mx, int my) {
         if (face) *p = blend(*p, 0xffffff, face * 64);
     }
 }
-#define CURSOR_SAVE_W 48
-#define CURSOR_SAVE_H 48
-static GraphicsClip cursor_bounds(int x, int y, int kind) {
-    if (kind == CURSOR_POINTER) {
-        /* Hand face spans (x-1..x+18, y..y+23); hotspot at the fingertip. */
-        return (GraphicsClip){x - 3, y - 1, x + 20, y + 25};
-    } else if (kind == CURSOR_IBEAM) {
-        /* Centred on the caret hotspot. */
-        return (GraphicsClip){x - 5, y - 12, x + 6, y + 13};
-    } else if (kind >= CURSOR_RESIZE_H && kind <= CURSOR_RESIZE_NESW) {
-        /* Centered on border/corner hotspot at (x, y) */
-        return (GraphicsClip){x - 14, y - 14, x + 15, y + 15};
+#define CURSOR_SIDE 32
+static u32 cursor_saved[CURSOR_SIDE * CURSOR_SIDE];
+static int cursor_saved_x, cursor_saved_y, cursor_saved_w, cursor_saved_h;
+static int cursor_saved_valid;
+static u32 cursor_old_frame[CURSOR_SIDE * CURSOR_SIDE];
+static u32 cursor_new_frame[CURSOR_SIDE * CURSOR_SIDE];
+static int cursor_sprite_for_kind(int kind) {
+    if (kind == CURSOR_IBEAM) return CURSOR_SPRITE_IBEAM;
+    if (kind == CURSOR_POINTER) return CURSOR_SPRITE_HAND;
+    if (kind == CURSOR_RESIZE_H) return CURSOR_SPRITE_RESIZE_EW;
+    if (kind == CURSOR_RESIZE_V) return CURSOR_SPRITE_RESIZE_NS;
+    if (kind == CURSOR_RESIZE_NWSE) return CURSOR_SPRITE_RESIZE_NWSE;
+    if (kind == CURSOR_RESIZE_NESW) return CURSOR_SPRITE_RESIZE_NESW;
+    if (kind == CURSOR_BUSY) return CURSOR_SPRITE_BUSY;
+    if (kind == CURSOR_MOVE) return CURSOR_SPRITE_MOVE;
+    if (kind == CURSOR_NOT_ALLOWED) return CURSOR_SPRITE_NOT_ALLOWED;
+    return CURSOR_SPRITE_ARROW;
+}
+static void cursor_geometry(int x, int y, int kind, int *sprite_out,
+                            int *left_out, int *top_out, int *flip_x_out, int *flip_y_out) {
+    int sprite = cursor_sprite_for_kind(kind);
+    int flip_x = 0, flip_y = 0;
+    int hot_x = cursor_hotspots[sprite][0], hot_y = cursor_hotspots[sprite][1];
+    if (kind == CURSOR_DEFAULT) {
+        if (x - hot_x + CURSOR_SIDE > shell.width) { flip_x = 1; hot_x = CURSOR_SIDE - 1; }
+        if (y - hot_y + CURSOR_SIDE > shell.height) { flip_y = 1; hot_y = CURSOR_SIDE - 1; }
     }
-    /* Arrow cursor hotspot at (0, 0) */
-    return (GraphicsClip){x - 2, y - 2, x + 24, y + 32};
+    *sprite_out = sprite; *left_out = x - hot_x; *top_out = y - hot_y;
+    *flip_x_out = flip_x; *flip_y_out = flip_y;
+}
+static GraphicsClip cursor_bounds(int x, int y, int kind) {
+    int sprite, left, top, flip_x, flip_y;
+    cursor_geometry(x, y, kind, &sprite, &left, &top, &flip_x, &flip_y);
+    (void)sprite; (void)flip_x; (void)flip_y;
+    return clip_intersection((GraphicsClip){left, top, left + CURSOR_SIDE, top + CURSOR_SIDE},
+                             (GraphicsClip){0, 0, shell.width, shell.height});
+}
+static void cursor_copy_background(u32 *out, GraphicsClip rect, int x, int y,
+                                   int allow_saved) {
+    int w = rect.x2 - rect.x1, h = rect.y2 - rect.y1;
+    if (allow_saved && cursor_saved_valid && x == cursor_saved_x && y == cursor_saved_y &&
+        w == cursor_saved_w && h == cursor_saved_h) {
+        memcpy(out, cursor_saved, (u32)w * (u32)h * sizeof(u32));
+        return;
+    }
+    for (int row = 0; row < h; ++row)
+        memcpy(out + row * w, pixels + (rect.y1 + row) * shell.width + rect.x1,
+               (u32)w * sizeof(u32));
+}
+static void cursor_compose_sprite(u32 *out, GraphicsClip rect, int x, int y, int kind) {
+    int sprite, left, top, flip_x, flip_y;
+    cursor_geometry(x, y, kind, &sprite, &left, &top, &flip_x, &flip_y);
+    int w = rect.x2 - rect.x1, h = rect.y2 - rect.y1;
+    for (int py = rect.y1; py < rect.y2; ++py) {
+        for (int px = rect.x1; px < rect.x2; ++px) {
+            int sx = px - left, sy = py - top;
+            if (flip_x) sx = CURSOR_SIDE - 1 - sx;
+            if (flip_y) sy = CURSOR_SIDE - 1 - sy;
+            u32 argb = cursor_pixels[sprite][sy * CURSOR_SIDE + sx];
+            u32 alpha = argb >> 24;
+            if (alpha) {
+                u32 color = argb & 0x00ffffffu;
+                u32 index = (u32)(py - rect.y1) * (u32)w + (u32)(px - rect.x1);
+                out[index] = blend(out[index], color, (int)((alpha * 256u + 127u) / 255u));
+            }
+        }
+    }
+    (void)h;
 }
 static void present_clip(GraphicsClip clip) {
     GraphicsClip screen = {0, 0, shell.width, shell.height};
@@ -819,68 +810,55 @@ static void present_clip(GraphicsClip clip) {
 }
 static u32 present_with_cursor(const GraphicsClip *scene, int scene_count, int force_cursor) {
     int mx = input_pointer_x(), my = input_pointer_y(), kind = input_cursor_kind();
-    GraphicsClip screen = {0, 0, shell.width, shell.height};
     GraphicsClip current = cursor_bounds(mx, my, kind);
-    current = clip_intersection(current, screen);
     int moved = !cursor_previous_valid || mx != cursor_previous_x || my != cursor_previous_y ||
                 kind != cursor_previous_kind;
     u32 presented = 0;
-    /* Present scene damage without widening it to include a distant cursor. */
     for (int i = 0; i < scene_count; ++i) {
-        GraphicsClip clip = clip_intersection(scene[i], screen);
+        GraphicsClip clip = clip_intersection(scene[i], (GraphicsClip){0, 0, shell.width, shell.height});
         if (clip.x1 >= clip.x2 || clip.y1 >= clip.y2) continue;
         present_clip(clip);
         presented += (u32)(clip.x2 - clip.x1) * (u32)(clip.y2 - clip.y1);
     }
-    /* Restore the old cursor from the clean back buffer after any scene patch
-     * that may have overwritten it. The new cursor is sent last so overlapping
-     * old/new footprints cannot erase it. */
-    if (moved && cursor_previous_valid) {
-        GraphicsClip old = clip_intersection(
-            cursor_bounds(cursor_previous_x, cursor_previous_y, cursor_previous_kind), screen);
-        if (old.x1 < old.x2 && old.y1 < old.y2) {
-            present_clip(old);
-            presented += (u32)(old.x2 - old.x1) * (u32)(old.y2 - old.y1);
-        }
-    }
-    int current_touched = force_cursor || moved || !cursor_previous_valid;
-    for (int i = 0; !current_touched && i < scene_count; ++i) {
+    int repaint_current = force_cursor || moved || !cursor_previous_valid;
+    int repaint_old = moved && cursor_previous_valid;
+    for (int i = 0; i < scene_count; ++i) {
         GraphicsClip overlap = clip_intersection(current, scene[i]);
-        if (overlap.x1 < overlap.x2 && overlap.y1 < overlap.y2) current_touched = 1;
+        if (overlap.x1 < overlap.x2 && overlap.y1 < overlap.y2) repaint_current = 1;
     }
-    if (current_touched && current.x1 < current.x2 && current.y1 < current.y2) {
-        GraphicsClip saved_clip = graphics_get_clip();
-        u32 saved[CURSOR_SAVE_W * CURSOR_SAVE_H];
-        int cw = current.x2 - current.x1;
-        for (int y = current.y1; y < current.y2; y++)
-            memcpy(saved + (y - current.y1) * CURSOR_SAVE_W,
-                   pixels + y * shell.width + current.x1, (u32)cw * sizeof(u32));
-        graphics_set_clip(screen);
-        if (kind == CURSOR_DEFAULT) draw_arrow_cursor(mx, my);
-        else if (kind == CURSOR_IBEAM) draw_ibeam_cursor(mx, my);
-        else if (kind == CURSOR_POINTER) draw_hand_cursor(mx, my);
-        else draw_resize_cursor(mx, my, kind);
-        present_clip(current);
-        presented += (u32)(current.x2 - current.x1) * (u32)(current.y2 - current.y1);
-        g_perf_stats.composed_pixels += (u32)cw * (u32)(current.y2 - current.y1);
-        g_perf_stats.effective_rects++;
-        for (int y = current.y1; y < current.y2; y++)
-            memcpy(pixels + y * shell.width + current.x1,
-                   saved + (y - current.y1) * CURSOR_SAVE_W, (u32)cw * sizeof(u32));
-        graphics_set_clip(saved_clip);
-        cursor_previous_x = mx;
-        cursor_previous_y = my;
-        cursor_previous_kind = kind;
-        cursor_previous_valid = 1;
-    } else if (moved) {
-        cursor_previous_x = mx;
-        cursor_previous_y = my;
-        cursor_previous_kind = kind;
-        cursor_previous_valid = 1;
+    if (!repaint_current) return presented;
+    GraphicsClip old = cursor_previous_valid
+        ? cursor_bounds(cursor_previous_x, cursor_previous_y, cursor_previous_kind)
+        : (GraphicsClip){0,0,0,0};
+    int old_w = old.x2 - old.x1, old_h = old.y2 - old.y1;
+    int new_w = current.x2 - current.x1, new_h = current.y2 - current.y1;
+    if (repaint_old && old_w > 0 && old_h > 0) {
+        int old_saved = 1;
+        for (int i = 0; i < scene_count; ++i) {
+            GraphicsClip overlap = clip_intersection(old, scene[i]);
+            if (overlap.x1 < overlap.x2 && overlap.y1 < overlap.y2) old_saved = 0;
+        }
+        cursor_copy_background(cursor_old_frame, old, cursor_previous_x, cursor_previous_y, old_saved);
     }
+    if (new_w > 0 && new_h > 0) {
+        cursor_copy_background(cursor_saved, current, mx, my, 0);
+        memcpy(cursor_new_frame, cursor_saved, (u32)new_w * (u32)new_h * sizeof(u32));
+        cursor_compose_sprite(cursor_new_frame, current, mx, my, kind);
+        cursor_saved_x = mx; cursor_saved_y = my;
+        cursor_saved_w = new_w; cursor_saved_h = new_h; cursor_saved_valid = 1;
+    }
+    framebuffer_present_cursor_pair(repaint_old ? cursor_old_frame : 0,
+        old.x1, old.y1, old_w, old_h, new_w > 0 && new_h > 0 ? cursor_new_frame : 0,
+        current.x1, current.y1, new_w, new_h);
+    presented += (u32)(old_w * old_h) * (u32)(repaint_old != 0) + (u32)new_w * (u32)new_h;
+    g_perf_stats.composed_pixels += (u32)new_w * (u32)new_h;
+    g_perf_stats.effective_rects++;
+    cursor_previous_x = mx; cursor_previous_y = my; cursor_previous_kind = kind;
+    cursor_previous_valid = 1;
     return presented;
 }
 void compositor_draw_cursor(int full) {
+    if (!pixels || !wallpaper) return;
     if (!full && cursor_previous_valid && cursor_previous_x == input_pointer_x() &&
         cursor_previous_y == input_pointer_y() && cursor_previous_kind == input_cursor_kind()) return;
     perf_begin();
@@ -1091,39 +1069,6 @@ void compositor_init(void) {
     u32 scene_pages = ((u32)scene_bytes + PMM_PAGE_SIZE - 1u) / PMM_PAGE_SIZE;
     pixels = (u32 *)pmm_alloc_pages(scene_pages);
     if (pixels) wallpaper = (u32 *)pmm_alloc_pages(scene_pages);
-    u32 light_bytes = 0;
-    if (wallpaper) {
-        int cache_width = width > 1024 ? 1024 : width;
-        int cache_height = (int)((u32)height * (u32)cache_width / (u32)width);
-        if (cache_height > 768) {
-            cache_height = 768;
-            cache_width = (int)((u32)width * (u32)cache_height / (u32)height);
-        }
-        if (cache_width < 1) cache_width = 1;
-        if (cache_height < 1) cache_height = 1;
-        int first_cache_attempt = 1;
-        for (;;) {
-            light_bytes = (u32)cache_width * (u32)cache_height * (u32)sizeof(u16);
-            u32 light_pages = (light_bytes + PMM_PAGE_SIZE - 1u) / PMM_PAGE_SIZE;
-            if (pmm_get_free_pages_count() >= light_pages)
-                wallpaper_light = (u16 *)pmm_alloc_pages(light_pages);
-            if (!wallpaper_light && first_cache_attempt)
-                wallpaper_light = (u16 *)kmalloc(light_bytes);
-            if (wallpaper_light || (cache_width <= 128 && cache_height <= 96)) break;
-            first_cache_attempt = 0;
-            cache_width = (cache_width + 1) / 2;
-            cache_height = (cache_height + 1) / 2;
-        }
-        if (wallpaper_light) {
-            wallpaper_light_width = cache_width;
-            wallpaper_light_height = cache_height;
-        } else {
-            wallpaper_light = wallpaper_light_min_cache;
-            wallpaper_light_width = 128;
-            wallpaper_light_height = 96;
-            light_bytes = sizeof(wallpaper_light_min_cache);
-        }
-    }
     if (!pixels || !wallpaper) {
         if (pixels) pmm_free_pages((uintptr_t)pixels, scene_pages);
         pixels = 0;
@@ -1132,15 +1077,18 @@ void compositor_init(void) {
     }
     memset(pixels, 0, scene_pages * PMM_PAGE_SIZE);
     memset(wallpaper, 0, scene_pages * PMM_PAGE_SIZE);
-    if (wallpaper_light) memset(wallpaper_light, 0, light_bytes);
     set_target(pixels, width, height, width);
     klog_dec(KLOG_CAT_GUI, "Scene and wallpaper allocated bytes: ",
-             scene_pages * PMM_PAGE_SIZE * 2u + light_bytes);
+             scene_pages * PMM_PAGE_SIZE * 2u);
 }
 void compositor_prepare_wallpapers(void) {
-    if (wallpaper_light) desktop_prepare_theme_wallpapers(wallpaper, wallpaper_light,
-        wallpaper_light_width, wallpaper_light_height);
-    else desktop_paint_wallpaper(wallpaper);
+    desktop_paint_wallpaper(wallpaper);
+    wallpaper_theme = shell.theme;
+}
+void compositor_wallpaper_changed(void) {
+    wallpaper_theme = -1;
+    dock_background_valid = 0;
+    request_scene_redraw();
 }
 /* Boot splash: a calm animated-looking screen that owns the display while the
  * kernel brings subsystems online, so early heavy init never shows as a frozen

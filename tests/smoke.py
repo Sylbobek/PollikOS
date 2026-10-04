@@ -69,6 +69,21 @@ try:
             dy -= sy
             time.sleep(.005)
 
+    def move_mouse_precise(dx, dy):
+        while dx or dy:
+            sx = max(-5, min(5, dx))
+            sy = max(-5, min(5, dy))
+            hmp(f"mouse_move {sx} {sy}")
+            dx -= sx
+            dy -= sy
+            time.sleep(.005)
+
+    def changed_patch(a, b, x, y, width, height):
+        a, b = a[-1024*768*3:], b[-1024*768*3:]
+        return sum(a[(py*1024+px)*3:(py*1024+px+1)*3] !=
+                   b[(py*1024+px)*3:(py*1024+px+1)*3]
+                   for py in range(y, y+height) for px in range(x, x+width))
+
     def key(name):
         hmp("sendkey " + name)
         time.sleep(.15)
@@ -102,6 +117,18 @@ try:
             raise AssertionError("First-run account setup did not complete")
         time.sleep(.1)
     desktop = shot("welcome")
+    # Account creation writes its serial marker just before the auth surface is
+    # replaced by the desktop. Wait for two identical frames so the cursor-only
+    # comparison cannot accidentally include that full-screen transition.
+    previous = desktop
+    for attempt in range(12):
+        stable = shot(f"welcome-stable-{attempt}")
+        if stable == previous:
+            desktop = stable
+            break
+        previous = stable
+    else:
+        raise AssertionError("Desktop did not settle before cursor-only check")
     assert b"1024 768" in desktop[:40], "Wrong display dimensions"
     assert "INPUT PS/2 wheel ready" in log.read_text()
     # Moving only the pointer must leave every other desktop pixel untouched.
@@ -110,6 +137,34 @@ try:
     a,b=desktop[-1024*768*3:],moved[-1024*768*3:]
     changed=sum(a[i:i+3]!=b[i:i+3] for i in range(0,len(a),3))
     assert 0<changed<2304, f"Cursor invalidated unrelated pixels: {changed}"
+    # The hotspot remains visible at every edge/corner; the arrow mirrors toward
+    # the display when its normal top-left orientation would be clipped away.
+    corner_targets = ((-2048,-2048,0,0,0,0), (2048,0,992,0,1020,0),
+                      (0,2048,992,736,1020,764), (-2048,0,0,736,0,764))
+    previous = desktop
+    for index,(dx,dy,px,py,hx,hy) in enumerate(corner_targets):
+        move_mouse(dx,dy)
+        current = shot(f"cursor-corner-{index}")
+        pixels = changed_patch(previous,current,px,py,32,32)
+        assert 0<pixels<=32*32, f"Cursor missing or unbounded at corner {index}: {pixels} pixels"
+        tip_w = min(4, 1024-hx); tip_h = min(4, 768-hy)
+        assert changed_patch(previous,current,hx,hy,tip_w,tip_h)>0, \
+            f"Cursor artwork missing near the hotspot at corner {index}"
+        previous = current
+    move_mouse_precise(512,-55)
+    dock_frame = shot("cursor-over-dock")
+    dock_pixels = changed_patch(previous,dock_frame,496,696,32,32)
+    assert 0<dock_pixels<=32*32, f"Cursor missing or unbounded over the dock: {dock_pixels} pixels"
+    # Open Notes while the pointer is stationary over its future client area.
+    # The window scene changes beneath the cursor; the saved background must be
+    # refreshed before any later pointer movement.
+    move_mouse_precise(-12,-412)
+    stationary_before = shot("cursor-stationary-before-window")
+    key("f4")
+    stationary_after = shot("cursor-stationary-after-window")
+    assert changed_patch(stationary_before,stationary_after,484,284,32,32)>0, \
+        "Opening a window beneath a stationary cursor did not repaint the scene"
+    print("PASS: cursor visible at four corners; stationary-cursor scene repaint")
     hmp("mouse_move 100 100")
     key("f3")
     terminal = shot("terminal")

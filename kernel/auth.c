@@ -284,6 +284,13 @@ static void submit(void) {
             copy_text(message, "Formatting failed; disk was not mounted", sizeof(message));
             return;
         }
+#ifdef POLLIK_INSTALL_MEDIA
+        if (!installer_install_wallpapers()) {
+            state = AUTH_FORMAT_WARNING;
+            copy_text(message, "Wallpaper installation failed", sizeof(message));
+            return;
+        }
+#endif
         serial("SETUP: explicit PollikFS format complete\n");
         state = AUTH_SETUP_NAME;
         clear_input();

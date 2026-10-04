@@ -45,6 +45,8 @@ void serial(const char *);
 void number(char *, u32);
 int framebuffer_init(const u8 *);
 void framebuffer_present(const u32 *, int, int, int, int);
+void framebuffer_present_cursor_pair(const u32 *, int, int, int, int,
+                                     const u32 *, int, int, int, int);
 void framebuffer_info(char *);
 int sys_text_width(const char *s, int scale);
 int sys_get_glyph_advance(u8 c, int scale);

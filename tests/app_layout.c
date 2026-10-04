@@ -14,6 +14,8 @@ static int checks, current, sw, sh, drawing, paints, saves, opened, theme, anima
 static int terminal_invalidations;
 static GuiAppSize test_sizes[APP_COUNT];
 static int terminal_glyph_count, terminal_first_x, terminal_second_x, terminal_first_y, terminal_rounded_paints;
+static int terminal_input_glyph_count, terminal_input_first_x, terminal_input_first_y;
+static int terminal_input_last_y, terminal_input_first_row_glyphs;
 static void (*dialog_input_callback)(const char *);
 File files[FS_FILES];
 int fs_ready, net_ready;
@@ -41,6 +43,14 @@ void app_draw_letter(int x,int y,u8 c,u32 color,int scale) {
         if (terminal_glyph_count == 0) { terminal_first_x=x; terminal_first_y=y; }
         else if (terminal_glyph_count == 1) terminal_second_x=x;
         terminal_glyph_count++;
+        if (color == TERM_INPUT_TEXT_COLOR) {
+            if (terminal_input_glyph_count == 0) {
+                terminal_input_first_x=x; terminal_input_first_y=y;
+            }
+            if (y == terminal_input_first_y) terminal_input_first_row_glyphs++;
+            terminal_input_last_y=y;
+            terminal_input_glyph_count++;
+        }
     }
     bounds(x,y,sys_get_glyph_advance(c,scale),font_h(scale));
 }
@@ -131,6 +141,7 @@ void desktop_items_scan(void) { }
 int trash_empty(void) { return 1; }
 int trash_restore_item(const char *name) { (void)name; return 0; }
 int trash_move_item(const char *path) { (void)path; return 0; }
+int trash_delete_permanent(const char *name) { (void)name; return 0; }
 void *kmalloc(u32 n) { (void)n; return 0; }
 void kfree(void *p) { (void)p; }
 void media_free(void *p) { (void)p; }
@@ -263,6 +274,19 @@ int main(void) {
     for (int i=0;i<180;i++) terminal_key(30,'W',0,0);
     CHECK(cmdlen==TERM_COMMAND_LENGTH-1); /* Display resizing must not change command semantics. */
     cmdlen=cmdcursor=0; command[0]=0; transcript[0]=0;
+    for (int i=0;i<180;i++) terminal_key(30,'W',0,0);
+    current=APP_TERMINAL;
+    terminal_input_glyph_count=terminal_input_first_row_glyphs=0;
+    sw=480; sh=800;
+    test_sizes[APP_TERMINAL]=(GuiAppSize){480,800};
+    drawing=1; terminal_render(480,800,1); drawing=0;
+    int prompt_width=sys_text_width("pollik:/home/Desktop$ ",1);
+    int input_columns=(480-24-18-prompt_width)/sys_get_glyph_advance('W',1);
+    CHECK(terminal_input_glyph_count==cmdlen);
+    CHECK(terminal_input_first_x==18+prompt_width);
+    CHECK(terminal_input_first_row_glyphs==input_columns);
+    CHECK(terminal_input_last_y>terminal_input_first_y);
+    cmdlen=cmdcursor=0; command[0]=0;
     terminal_key(0,'h',0,0); terminal_key(0,'e',0,0); terminal_key(0,'l',0,0); terminal_key(0,'p',0,0);
     terminal_invalidations=0;
     terminal_key(28,0,0,0);
@@ -307,6 +331,6 @@ int main(void) {
     int final_note_bottom=82+note_rows()*20+20;
     CHECK(notes_cursor(665,final_note_bottom-1) && !notes_cursor(666,final_note_bottom-1) &&
           !notes_cursor(665,final_note_bottom));
-    printf("PASS: real app geometry, hit bounds, file scrolling, Notes wrapping/cursor, Terminal prompt layout (%d checks)\n",checks);
+    printf("PASS: real app geometry, hit bounds, file scrolling, Notes wrapping/cursor, Terminal prompt wrapping (%d checks)\n",checks);
     return 0;
 }

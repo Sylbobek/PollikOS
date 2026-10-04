@@ -2,6 +2,11 @@
 #include "../net/http.h"
 #include "../media.h"
 static u32 g_image_pixels;
+static int is_png_or_jpeg(const u8 *data,u32 len) {
+ static const u8 png_signature[8]={0x89,'P','N','G',0x0d,0x0a,0x1a,0x0a};
+ return (len>=8&&!memcmp(data,png_signature,8)) ||
+        (len>=3&&data[0]==0xff&&data[1]==0xd8&&data[2]==0xff);
+}
 static void load(DomNode *n,const char *base,int *count) {
  if(!n)return;
  browser_work_checkpoint();
@@ -20,7 +25,9 @@ static void load(DomNode *n,const char *base,int *count) {
      } else {
       n->gif=gif;n->image=px;n->image_w=w;n->image_h=h;
       g_image_pixels+=(u32)w*(u32)h;
-      serial(gif&&media_gif_animating(gif)?"IMAGE: animated GIF decoded\n":"IMAGE: decoded\n");
+      if(gif&&media_gif_animating(gif)) serial("IMAGE: animated GIF decoded\n");
+      else if(!gif&&is_png_or_jpeg((const u8*)r.body,r.body_len)) serial("IMAGE: PNG/JPEG decoded\n");
+      else serial("IMAGE: decoded\n");
      }
     }
     if(!px) { if(gif)media_gif_close(gif);serial("IMAGE: decode failed\n"); }

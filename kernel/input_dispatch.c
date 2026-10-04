@@ -15,7 +15,10 @@ static int alt_held;
 static int window_only;
 static int s_ctrl_held = 0;
 static int app_pointer_capture = -1;
+static int pointer_acceleration = 1;
 int input_ctrl_held(void) { return s_ctrl_held; }
+void input_set_pointer_acceleration(int enabled) { pointer_acceleration = enabled != 0; }
+int input_get_pointer_acceleration(void) { return pointer_acceleration; }
 int input_pointer_x(void) { return mx; }
 int input_pointer_y(void) { return my; }
 void cancel_interaction(int id) {
@@ -43,6 +46,7 @@ static SnapTarget drag_snap_target(int id) {
     return target;
 }
 int input_cursor_kind(void) {
+    if (shell.drag && shell.drag_moved) return CURSOR_MOVE;
     if (shell.resizing >= 0) {
         if ((shell.resize_edges & (RESIZE_LEFT | RESIZE_TOP)) == (RESIZE_LEFT | RESIZE_TOP) ||
             (shell.resize_edges & (RESIZE_RIGHT | RESIZE_BOTTOM)) == (RESIZE_RIGHT | RESIZE_BOTTOM)) return CURSOR_RESIZE_NWSE;
@@ -339,6 +343,11 @@ static void pointer_packet(const u8 *packet) {
     if (packet[0] & 0xc0) return;
     int pdx = (int)packet[1] - ((packet[0] & 16) ? 256 : 0);
     int pdy = -((int)packet[2] - ((packet[0] & 32) ? 256 : 0));
+    if (pointer_acceleration) {
+        int ax = pdx < 0 ? -pdx : pdx, ay = pdy < 0 ? -pdy : pdy;
+        int speed = ax > ay ? ax : ay;
+        if (speed >= 6) { pdx += pdx / 5; pdy += pdy / 5; }
+    }
     mx += pdx; my += pdy;
     if (mx < 0) mx = 0;
     if (mx > shell.width - 1) mx = shell.width - 1;
@@ -346,6 +355,7 @@ static void pointer_packet(const u8 *packet) {
     if (my > shell.height - 1) my = shell.height - 1;
     if (auth_is_active()) {
         if (auth_pointer(mx, my, packet[0] & 1)) request_scene_redraw();
+        compositor_draw_cursor(0);
         return;
     }
     /* A modal dialog repaints only its own card: focused-button changes and
@@ -572,6 +582,7 @@ static void pointer_packet(const u8 *packet) {
         }
     }
     held = down;
+    compositor_draw_cursor(0);
 }
 void input_dispatch_poll(void) {
     static u8 packet[4];

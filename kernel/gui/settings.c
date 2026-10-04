@@ -185,6 +185,25 @@ void settings_render(int width, int height, int active) {
         roundrect(cx + cw - 120, 314, 104, 24, 6, dark ? 0x223046 : 0xe9e2f2);
         centered(cx + cw - 120, 319, 104, "Hardware 32bpp", dark ? 0x93c5fd : 0x5a4878, 1);
 
+        AppRect card4 = {cx, 370, cw, 128};
+        draw_card(card4, l.bg_card, l.border_card, 12);
+        text(cx + 14, 378, "Wallpaper", l.text_head, 1);
+        int wallpaper_count = app_host_wallpaper_count();
+        const char *selected_wallpaper = app_host_selected_wallpaper();
+        if (!wallpaper_count) text(cx + 16, 398, "No PNG files found; using the built-in gradient.", l.text_muted, 1);
+        for (int i = 0; i < wallpaper_count; i++) {
+            const char *name = app_host_wallpaper_name(i);
+            if (!name) continue;
+            int selected = 1, j = 0;
+            while (name[j] || selected_wallpaper[j]) {
+                if (name[j] != selected_wallpaper[j]) { selected = 0; break; }
+                ++j;
+            }
+            int row_y = 396 + i * 13;
+            if (selected) roundrect(cx + 10, row_y - 1, cw - 20, 12, 4, acc);
+            text(cx + 18, row_y, name, selected ? 0xffffff : l.text_body, 1);
+        }
+
     } else if (g_settings_tab == TAB_DESKTOP_DOCK) {
         text(cx, 68, "Control dock behavior, magnification and desktop item snapping.", l.text_muted, 1);
 
@@ -221,6 +240,13 @@ void settings_render(int width, int height, int active) {
         text(cx + 14, 278, "Desktop Grid & Layout Persistence", l.text_head, 1);
         text(cx + 14, 296, "Automatic 104x96 px grid snapping prevents overlapping icons.", l.text_body, 1);
         text(cx + 14, 312, "Layouts persist safely across reboots in /home/Desktop/.layout", l.text_muted, 1);
+
+        AppRect card4 = {cx, 358, cw, 58};
+        draw_card(card4, l.bg_card, l.border_card, 12);
+        text(cx + 14, 366, "Pointer Acceleration", l.text_head, 1);
+        int accel = app_host_pointer_acceleration();
+        roundrect(cx + 14, 384, 146, 24, 7, accel ? acc : (dark ? 0x161a26 : 0xe9e1f3));
+        centered(cx + 14, 390, 146, accel ? "Modest: Enabled" : "Disabled", accel ? 0xffffff : l.text_body, 1);
 
     } else if (g_settings_tab == TAB_DISPLAY) {
         text(cx, 68, "View display resolution, color profile and graphics pipeline stats.", l.text_muted, 1);
@@ -413,6 +439,7 @@ void settings_click(int x, int y) {
     }
 
     int cx = l.content.x;
+    int cw = l.content.w;
 
     /* 2. Tab content clicks */
     if (g_settings_tab == TAB_APPEARANCE) {
@@ -435,6 +462,15 @@ void settings_click(int x, int y) {
                 break;
             }
         }
+        int wallpaper_count = app_host_wallpaper_count();
+        for (int i = 0; i < wallpaper_count; i++) {
+            int row_y = 396 + i * 13;
+            if (x >= cx + 10 && x < cx + cw - 10 && y >= row_y - 1 && y < row_y + 11) {
+                app_host_set_wallpaper(i);
+                app_host_invalidate(APP_SETTINGS);
+                break;
+            }
+        }
     } else if (g_settings_tab == TAB_DESKTOP_DOCK) {
         /* Smooth animations: cx + 14, 134, 130, 26 */
         if (x >= cx + 14 && x <= cx + 144 && y >= 134 && y <= 160) {
@@ -450,6 +486,10 @@ void settings_click(int x, int y) {
         /* Dock zoom: cx + 14, 224, 130, 26 */
         else if (x >= cx + 14 && x <= cx + 144 && y >= 224 && y <= 250) {
             app_host_set_dock_zoom(!app_host_dock_zoom());
+            app_host_invalidate(APP_SETTINGS);
+        }
+        if (x >= cx + 14 && x <= cx + 160 && y >= 384 && y <= 408) {
+            app_host_set_pointer_acceleration(!app_host_pointer_acceleration());
             app_host_invalidate(APP_SETTINGS);
         }
     } else if (g_settings_tab == TAB_DISPLAY) {

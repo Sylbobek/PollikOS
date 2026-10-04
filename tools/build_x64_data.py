@@ -207,6 +207,8 @@ def build(output):
     usr_inode = add_directory(1, "usr")
     include_inode = add_directory(usr_inode, "include")
     lib_inode = add_directory(usr_inode, "lib")
+    share_inode = add_directory(usr_inode, "share")
+    wallpapers_inode = add_directory(share_inode, "wallpapers")
     src_inode = add_directory(usr_inode, "src")
     libc_src_inode = add_directory(src_inode, "libc")
     pollikos_inode = add_directory(include_inode, "pollikos")
@@ -233,6 +235,10 @@ def build(output):
     reserve_tree_file(lib_inode, "crt0.o", (output / "sdk/crt0.o").read_bytes())
     reserve_tree_file(lib_inode, "libc.a", (output / "userspace/libc-native.a").read_bytes())
     reserve_tree_file(tcc_inode, "libtcc1.a", (output / "userspace/libtcc1.a").read_bytes())
+    reserve_tree_file(wallpapers_inode, "light.png",
+                      (ROOT / "assets/Background_LightTheme.png").read_bytes())
+    reserve_tree_file(wallpapers_inode, "dark.png",
+                      (ROOT / "assets/Background_BlackTheme.png").read_bytes())
     # Interactive shell fixture: the canonical self-host source in /home so the
     # terminal workflow can compile it without redirection support.
     reserve_tree_file(3, "hello.c",

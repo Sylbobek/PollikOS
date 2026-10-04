@@ -96,6 +96,11 @@ class PollikFsImage:
         offset = self.inode_offset(number)
         struct.pack_into("<15I", self.data, offset, mode, size, *directs, indirect, 0, 0, 0, 0)
 
+    def _write_inode_full(self, number, mode, size, direct, indirect=0, double_indirect=0):
+        directs = (list(direct) + [0] * DIRECT_BLOCKS)[:DIRECT_BLOCKS]
+        struct.pack_into("<15I", self.data, self.inode_offset(number),
+                         mode, size, *directs, indirect, 0, 0, double_indirect, 0)
+
     def allocate_inode(self):
         for number in range(1, self.inode_count):
             if self.read_inode(number)[0] == 0:
@@ -144,6 +149,54 @@ class PollikFsImage:
                 raise PollikFsError(f"not a directory: /{part}")
             current = entry["inode"]
         return current
+
+    def ensure_directory(self, path):
+        """Create a directory path without changing existing disk structures."""
+        if not path.startswith("/"):
+            raise PollikFsError("absolute directory path required")
+        current = self.root_inode
+        for part in [piece for piece in path.split("/") if piece]:
+            entry = next((item for item in self.directory_entries(current)
+                          if item["name"] == part), None)
+            if entry:
+                if self.read_inode(entry["inode"])[0] != VFS_DIR:
+                    raise PollikFsError(f"not a directory: {part}")
+                current = entry["inode"]
+                continue
+            child = self.allocate_inode()
+            block = self.allocate_block()
+            start = START + block * BLOCK_SIZE
+            self.data[start:start + BLOCK_SIZE] = bytes(BLOCK_SIZE)
+            self._write_inode_full(child, VFS_DIR, BLOCK_SIZE, [block])
+            self._insert_dirent(current, part, child, VFS_DIR)
+            self._write_superblock()
+            current = child
+        return current
+
+    def read_file(self, path):
+        directory_path, _, name = path.rpartition("/")
+        directory = self.resolve_directory(directory_path or "/")
+        entry = next((item for item in self.directory_entries(directory)
+                      if item["name"] == name), None)
+        if not entry:
+            raise PollikFsError(f"no such file: {path}")
+        mode, size, direct, indirect = self.read_inode(entry["inode"])
+        if mode != VFS_FILE:
+            raise PollikFsError(f"not a regular file: {path}")
+        blocks = [block for block in direct if block]
+        if indirect:
+            blocks += self._indirect_blocks(indirect)
+        offset = self.inode_offset(entry["inode"]) + 52
+        double_indirect = struct.unpack_from("<I", self.data, offset)[0]
+        if double_indirect:
+            middle = struct.unpack_from("<256I", self.data,
+                                        START + double_indirect * BLOCK_SIZE)
+            for table in middle:
+                if table:
+                    blocks += self._indirect_blocks(table)
+        return b"".join(self.data[START + block * BLOCK_SIZE:
+                                   START + (block + 1) * BLOCK_SIZE]
+                         for block in blocks)[:size]
 
     def _slot_offsets(self, inode_number):
         mode, size, direct, indirect = self.read_inode(inode_number)
@@ -199,10 +252,30 @@ class PollikFsImage:
         indirect = 0
         if len(blocks) > DIRECT_BLOCKS:
             indirect = self.allocate_block()
-            tail = blocks[DIRECT_BLOCKS:]
-            struct.pack_into(f"<{len(tail)}I", self.data, START + indirect * BLOCK_SIZE, *tail)
+            self.data[START + indirect * BLOCK_SIZE:START + (indirect + 1) * BLOCK_SIZE] = bytes(BLOCK_SIZE)
+            tail = blocks[DIRECT_BLOCKS:DIRECT_BLOCKS + BLOCK_SIZE // 4]
+            struct.pack_into(f"<{len(tail)}I", self.data,
+                             START + indirect * BLOCK_SIZE, *tail)
+        double_indirect = 0
+        if len(blocks) > DIRECT_BLOCKS + BLOCK_SIZE // 4:
+            double_indirect = self.allocate_block()
+            self.data[START + double_indirect * BLOCK_SIZE:
+                      START + (double_indirect + 1) * BLOCK_SIZE] = bytes(BLOCK_SIZE)
+            remaining = blocks[DIRECT_BLOCKS + BLOCK_SIZE // 4:]
+            tables = []
+            for offset in range(0, len(remaining), BLOCK_SIZE // 4):
+                table = self.allocate_block()
+                tables.append(table)
+                self.data[START + table * BLOCK_SIZE:
+                          START + (table + 1) * BLOCK_SIZE] = bytes(BLOCK_SIZE)
+                group = remaining[offset:offset + BLOCK_SIZE // 4]
+                struct.pack_into(f"<{len(group)}I", self.data,
+                                 START + table * BLOCK_SIZE, *group)
+            struct.pack_into(f"<{len(tables)}I", self.data,
+                             START + double_indirect * BLOCK_SIZE, *tables)
         inode = self.allocate_inode()
-        self.write_inode(inode, file_type, len(payload), blocks[:DIRECT_BLOCKS], indirect)
+        self._write_inode_full(inode, file_type, len(payload), blocks[:DIRECT_BLOCKS],
+                               indirect, double_indirect)
         self._insert_dirent(directory, name, inode, file_type)
         self._write_superblock()
         return inode, blocks

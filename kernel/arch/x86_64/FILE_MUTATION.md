@@ -80,8 +80,9 @@ before.
   directory source or destination returns `EISDIR`; a missing destination uses
   the existing rename path. It updates existing directory records without
   allocation, leaves the source name/data in place if validation fails, and
-  runs as one non-preemptible filesystem operation. Existing `rename` keeps its
-  `EEXIST` behavior.
+  runs as one non-preemptible filesystem operation. This is atomic with respect
+  to other processes, but it is not crash-atomic and does not promise an all-or-
+  nothing result after power loss. Existing `rename` keeps its `EEXIST` behavior.
 
 ## Errors and accounting
 

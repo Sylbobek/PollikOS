@@ -43,7 +43,7 @@ static const GuiApp registry[APP_COUNT] = {
     [APP_NOTES] = { .name = "Notes", .icon = ICON(APP_NOTES), MIN_SIZE, LIGHT_BODY, .init = notes_init,
         .render = notes_render, .key = notes_client_key, .click = notes_click,
         .drag = notes_client_drag, .resize = notes_resized, .scroll = notes_client_scroll, .cursor = notes_cursor },
-    [APP_SETTINGS] = { .name = "Settings", .icon = ICON(APP_SETTINGS), .min_width = 640, .min_height = 410, LIGHT_BODY,
+    [APP_SETTINGS] = { .name = "Settings", .icon = ICON(APP_SETTINGS), .min_width = 640, .min_height = 520, LIGHT_BODY,
         .render = settings_render, .click = settings_click },
     [APP_BROWSER] = { .name = "Browser", .icon = ICON(APP_BROWSER), MIN_SIZE, LIGHT_BODY, .bottom_inset = 18,
         .init = browser_client_init, .render = browser_client_render, .key = browser_client_key,

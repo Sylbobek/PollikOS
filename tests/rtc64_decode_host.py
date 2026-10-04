@@ -17,6 +17,7 @@ def main():
             f"-I{ROOT / 'kernel' / 'arch' / 'x86_64'}",
             str(ROOT / "tests" / "rtc64_decode_host.c"),
             str(ROOT / "kernel" / "arch" / "x86_64" / "rtc64_decode.c"),
+            str(ROOT / "kernel" / "arch" / "x86_64" / "rtc64.c"),
             "-o", str(output),
         ], cwd=ROOT, check=True)
         subprocess.run([str(output)], cwd=ROOT, check=True)

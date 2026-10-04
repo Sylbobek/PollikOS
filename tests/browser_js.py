@@ -135,7 +135,7 @@ try:
     rendered = shot("browser-js")
     assert rendered != loading, 'Page did not repaint after the request without user input'
     assert "BROWSER title: JS PASS" in log.read_text(),log.read_text()
-    assert "IMAGE: decoded" in log.read_text(),log.read_text()
+    assert "IMAGE: PNG/JPEG decoded" in log.read_text(),log.read_text()
     assert "IMAGE: animated GIF decoded" in log.read_text(),log.read_text()
     frame_a = shot("browser-gif-frame-a")
     frame_b = shot("browser-gif-frame-b")

@@ -87,7 +87,10 @@ typedef enum {
     CURSOR_RESIZE_H = 3,
     CURSOR_RESIZE_V = 4,
     CURSOR_RESIZE_NWSE = 5,
-    CURSOR_RESIZE_NESW = 6
+    CURSOR_RESIZE_NESW = 6,
+    CURSOR_BUSY = 7,
+    CURSOR_MOVE = 8,
+    CURSOR_NOT_ALLOWED = 9
 } CursorKind;
 
 /* Snapping Enum */

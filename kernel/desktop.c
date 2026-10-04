@@ -6,6 +6,7 @@
 #include "gui/app_host.h"
 #include "klog.h"
 #include "pmm.h"
+#include "mem.h"
 #include "input_dispatch.h"
 #include "desktop_items.h"
 #include "ui_animation.h"
@@ -17,13 +18,12 @@
 #include "media.h"
 
 static int desktop_ready;
+static char g_wallpaper_choice[56];
+static char g_wallpaper_names[8][56];
+static int g_wallpaper_count;
+static int g_wallpaper_scan_done;
+static int g_wallpaper_failure_logged;
 static int desktop_present(void);
-#ifndef POLLIK_INSTALL_MEDIA
-extern const u8 _binary_assets_Background_LightTheme_png_start[];
-extern const u8 _binary_assets_Background_LightTheme_png_end[];
-extern const u8 _binary_assets_Background_BlackTheme_png_start[];
-extern const u8 _binary_assets_Background_BlackTheme_png_end[];
-#endif
 enum { BAR_SYSTEM, BAR_APP, BAR_FILE, BAR_WINDOW, BAR_HELP, BAR_ITEM_COUNT };
 static int g_bar_menu_open = -1;
 static int g_bar_menu_hover = -1;
@@ -63,6 +63,56 @@ static int g_dock_pinned[APP_COUNT];
 static int g_dock_initialized = 0;
 static int g_settings_initialized = 0;
 
+static void desktop_scan_wallpapers(void) {
+    if (g_wallpaper_scan_done) return;
+    g_wallpaper_scan_done = 1;
+    int fd = vfs_open("/usr/share/wallpapers", O_RDONLY);
+    if (fd < 0) return;
+    vfs_dirent_t entry;
+    while (g_wallpaper_count < 8 && vfs_readdir(fd, &entry) > 0) {
+        int n = 0;
+        while (n < VFS_MAX_NAME && entry.name[n]) ++n;
+        if (entry.type != VFS_FILE || n < 5 || n >= (int)sizeof(g_wallpaper_names[0]) ||
+            entry.name[n-4] != '.') continue;
+        char a = entry.name[n-3], b = entry.name[n-2], c = entry.name[n-1];
+        if (!((a == 'p' || a == 'P') && (b == 'n' || b == 'N') &&
+              (c == 'g' || c == 'G'))) continue;
+        memcpy(g_wallpaper_names[g_wallpaper_count], entry.name, (u32)n);
+        g_wallpaper_names[g_wallpaper_count][n] = 0;
+        ++g_wallpaper_count;
+    }
+    vfs_close(fd);
+}
+
+int app_host_wallpaper_count(void) { desktop_scan_wallpapers(); return g_wallpaper_count; }
+const char *app_host_wallpaper_name(int index) {
+    desktop_scan_wallpapers();
+    return index >= 0 && index < g_wallpaper_count ? g_wallpaper_names[index] : 0;
+}
+const char *app_host_selected_wallpaper(void) {
+    if (g_wallpaper_choice[0]) return g_wallpaper_choice;
+    return shell.theme ? "light.png" : "dark.png";
+}
+int app_host_set_wallpaper(int index) {
+    const char *name = app_host_wallpaper_name(index);
+    if (!name) return 0;
+    int i = 0;
+    while (name[i] && i < (int)sizeof(g_wallpaper_choice) - 1) {
+        g_wallpaper_choice[i] = name[i];
+        ++i;
+    }
+    if (name[i]) return 0;
+    g_wallpaper_choice[i] = 0;
+    app_host_save_settings();
+    compositor_wallpaper_changed();
+    return 1;
+}
+int app_host_pointer_acceleration(void) { return input_get_pointer_acceleration(); }
+void app_host_set_pointer_acceleration(int enabled) {
+    input_set_pointer_acceleration(enabled);
+    app_host_save_settings();
+}
+
 void app_host_save_settings(void) {
     vfs_mkdir("/home");
     vfs_mkdir("/home/.config");
@@ -81,6 +131,12 @@ void app_host_save_settings(void) {
         buf[len++] = '\n'; \
     } while(0)
 
+    #define WRITE_TEXT_SETTING(k, v) do { \
+        const char *ks = (k); while (*ks) buf[len++] = *ks++; \
+        const char *vs = (v); while (*vs) buf[len++] = *vs++; \
+        buf[len++] = '\n'; \
+    } while(0)
+
     WRITE_SETTING("theme=", shell.theme);
     WRITE_SETTING("accent=", ui_get_accent_index());
     WRITE_SETTING("animations=", shell.animations_mode);
@@ -88,8 +144,11 @@ void app_host_save_settings(void) {
     WRITE_SETTING("target_fps=", wm_get_target_fps());
     WRITE_SETTING("sound_freq=", sound_get_freq());
     WRITE_SETTING("sound_muted=", sound_is_muted());
+    if (g_wallpaper_choice[0]) WRITE_TEXT_SETTING("wallpaper=", g_wallpaper_choice);
+    WRITE_SETTING("pointer_accel=", input_get_pointer_acceleration());
 
     #undef WRITE_SETTING
+    #undef WRITE_TEXT_SETTING
 
     vfs_write(fd, buf, len);
     vfs_close(fd);
@@ -143,6 +202,21 @@ static void desktop_load_settings(void) {
         } else if (memcmp(line, "sound_muted=", 12) == 0) {
             int val = line[12] - '0';
             sound_set_muted(val);
+        } else if (memcmp(line, "wallpaper=", 10) == 0) {
+            int n = 0;
+            while (line[10+n] && n < (int)sizeof(g_wallpaper_choice)-1) {
+                char c = line[10+n];
+                if (c == '/' || c == '\\' || c == ':' || c == '.') {
+                    if (c == '.' && n > 0) { g_wallpaper_choice[n++] = c; continue; }
+                    break;
+                }
+                if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                      (c >= '0' && c <= '9') || c == '_' || c == '-')) break;
+                g_wallpaper_choice[n++] = c;
+            }
+            g_wallpaper_choice[n] = 0;
+        } else if (memcmp(line, "pointer_accel=", 14) == 0) {
+            input_set_pointer_acceleration(line[14] == '1');
         }
     }
 }
@@ -1123,17 +1197,35 @@ void desktop_draw_overlays(void) {
 }
 
 static u8 *desktop_decode_theme_wallpaper(int dark, int *width, int *height) {
-#ifdef POLLIK_INSTALL_MEDIA
-    (void)dark; (void)width; (void)height;
-    return 0;
-#else
-    const u8 *start = dark ? _binary_assets_Background_BlackTheme_png_start
-                           : _binary_assets_Background_LightTheme_png_start;
-    const u8 *end = dark ? _binary_assets_Background_BlackTheme_png_end
-                         : _binary_assets_Background_LightTheme_png_end;
-    u32 size = (u32)((uintptr_t)end - (uintptr_t)start);
-    return media_decode(start, size, width, height);
-#endif
+    (void)dark;
+    desktop_scan_wallpapers();
+    const char *name = app_host_selected_wallpaper();
+    char path[VFS_MAX_PATH];
+    const char *prefix = "/usr/share/wallpapers/";
+    u32 length = 0;
+    while (prefix[length]) { path[length] = prefix[length]; ++length; }
+    u32 n = 0;
+    while (name[n] && length + n + 1 < sizeof(path)) { path[length+n] = name[n]; ++n; }
+    if (!name[n] || length + n >= sizeof(path)) return 0;
+    path[length+n] = 0;
+    vfs_stat_t st;
+    if (!vfs_is_ready() || vfs_stat(path, &st) != VFS_OK || st.type != VFS_FILE ||
+        !st.size || st.size > 8u * 1024u * 1024u) return 0;
+    int fd = vfs_open(path, O_RDONLY);
+    if (fd < 0) return 0;
+    u8 *encoded = (u8 *)kmalloc(st.size);
+    if (!encoded) { vfs_close(fd); return 0; }
+    int got = vfs_read(fd, encoded, st.size);
+    vfs_close(fd);
+    if (got != (int)st.size) { kfree(encoded); return 0; }
+    u8 *decoded = media_decode(encoded, st.size, width, height);
+    kfree(encoded);
+    if (!decoded || *width <= 0 || *height <= 0 ||
+        (u64)(u32)*width * (u32)*height > 16u * 1024u * 1024u) {
+        if (decoded) media_free(decoded);
+        return 0;
+    }
+    return decoded;
 }
 
 static u32 desktop_theme_wallpaper_pixel(const u8 *rgba, int image_width,
@@ -1239,70 +1331,16 @@ static void desktop_paint_wallpaper_for_mode(u32 *wallpaper, int dark) {
         media_free(image);
         return;
     }
+    if (!g_wallpaper_failure_logged) {
+        serial("GFX wallpaper unavailable; procedural background active\n");
+        g_wallpaper_failure_logged = 1;
+    }
     desktop_paint_procedural_wallpaper(wallpaper, width, height, dark);
 }
 
-static u16 desktop_rgb565(u32 color) {
-    return (u16)((((color >> 19) & 31u) << 11) |
-                 (((color >> 10) & 63u) << 5) | ((color >> 3) & 31u));
-}
-
-static void desktop_paint_light_wallpaper565(u16 *destination, int dest_width, int dest_height) {
-    int width = shell.width, height = shell.height;
-    if (!destination || dest_width <= 0 || dest_height <= 0 || width <= 0 || height <= 0) return;
-    int image_width = 0, image_height = 0;
-    u8 *image = desktop_decode_theme_wallpaper(0, &image_width, &image_height);
-    if (image) {
-        int visible_width = image_width, visible_height = image_height;
-        int crop_x = 0, crop_y = 0;
-        if (image_width * height > image_height * width) {
-            visible_width = image_height * width / height;
-            crop_x = (image_width - visible_width) / 2;
-        } else {
-            visible_height = image_width * height / width;
-            crop_y = (image_height - visible_height) / 2;
-        }
-        if (visible_width < 1) visible_width = 1;
-        if (visible_height < 1) visible_height = 1;
-        int step_x = (visible_width << 16) / dest_width;
-        int step_y = (visible_height << 16) / dest_height;
-        int source_y_q16 = 0;
-        for (int y = 0; y < dest_height; ++y) {
-            int sy = crop_y + (source_y_q16 >> 16);
-            if (sy >= image_height) sy = image_height - 1;
-            int screen_y = y * height / dest_height;
-            int source_x_q16 = 0;
-            for (int x = 0; x < dest_width; ++x) {
-                int sx = crop_x + (source_x_q16 >> 16);
-                if (sx >= image_width) sx = image_width - 1;
-                u32 color = desktop_theme_wallpaper_pixel(image, image_width, sx, sy, screen_y, 0);
-                destination[y * dest_width + x] = desktop_rgb565(color);
-                source_x_q16 += step_x;
-            }
-            source_y_q16 += step_y;
-        }
-        media_free(image);
-        return;
-    }
-
-    /* A compact low-memory fallback that keeps the light palette usable. */
-    for (int y = 0; y < dest_height; ++y) {
-        int screen_y = y * height / dest_height;
-        int t = screen_y * 256 / height;
-        for (int x = 0; x < dest_width; ++x) {
-            u32 color = blend(0xb8b1ef, 0x49438e, t);
-            if (screen_y < 32) color = blend(color, 0xf7f7ff, 208);
-            if (screen_y == 31) color = blend(color, 0xdad4e4, 180);
-            destination[y * dest_width + x] = desktop_rgb565(color);
-        }
-    }
-}
-
-void desktop_prepare_theme_wallpapers(u32 *dark_buffer, u16 *light_buffer,
-                                     int light_width, int light_height) {
-    if (dark_buffer) desktop_paint_wallpaper_for_mode(dark_buffer, 1);
-    if (light_buffer) desktop_paint_light_wallpaper565(light_buffer, light_width, light_height);
-    else if (dark_buffer) desktop_paint_wallpaper_for_mode(dark_buffer, ui_is_dark());
+void desktop_prepare_theme_wallpapers(u32 *buffer, u16 *unused, int unused_width, int unused_height) {
+    (void)unused; (void)unused_width; (void)unused_height;
+    if (buffer) desktop_paint_wallpaper_for_mode(buffer, ui_is_dark());
 }
 
 void desktop_paint_wallpaper(u32 *wallpaper) {

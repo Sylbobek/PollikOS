@@ -118,6 +118,41 @@ void framebuffer_present(const u32 *source, int x, int y, int w, int h) {
     presents++;
     transferred += (u32)w * h;
 }
+/* Cursor-only update: restore the old saved-under rectangle and paint the new
+ * rectangle through one presentation call, without asking the scene composer
+ * to redraw unrelated pixels. Both sources are tightly packed rectangles. */
+void framebuffer_present_cursor_pair(const u32 *old_pixels, int old_x, int old_y,
+                                     int old_w, int old_h, const u32 *new_pixels,
+                                     int new_x, int new_y, int new_w, int new_h) {
+    if (!address) return;
+    const u32 *sources[2] = {old_pixels, new_pixels};
+    int xs[2] = {old_x, new_x}, ys[2] = {old_y, new_y};
+    int widths[2] = {old_w, new_w}, heights[2] = {old_h, new_h};
+    for (int region = 0; region < 2; ++region) {
+        const u32 *source = sources[region];
+        int x = xs[region], y = ys[region], w = widths[region], h = heights[region];
+        if (!source || w <= 0 || h <= 0) continue;
+        int sx = 0, sy = 0;
+        if (x < 0) { sx = -x; w -= sx; x = 0; }
+        if (y < 0) { sy = -y; h -= sy; y = 0; }
+        if (x + w > screen_w) w = screen_w - x;
+        if (y + h > screen_h) h = screen_h - y;
+        if (w <= 0 || h <= 0) continue;
+        for (int row = 0; row < h; ++row) {
+            const u32 *s = source + (sy + row) * widths[region] + sx;
+            volatile u8 *dest = address + (y + row) * stride + x * bytes;
+            if (bytes == 4) memcpy((void *)dest, s, (u32)w * sizeof(u32));
+            else for (int col = 0; col < w; ++col) {
+                u32 c = s[col];
+                dest[col * 3] = (u8)c;
+                dest[col * 3 + 1] = (u8)(c >> 8);
+                dest[col * 3 + 2] = (u8)(c >> 16);
+            }
+        }
+        transferred += (u32)w * (u32)h;
+    }
+    presents++;
+}
 void framebuffer_info(char *out) {
     const char *s = "VBE / partial updates\nPixel depth: ";
     char *p = out;
