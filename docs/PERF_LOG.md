@@ -211,3 +211,52 @@ AssertionError: dock slot 6 -> app 6
 The target window is already visible and hovered at failure, but the harness
 does not observe focus moving from app 5. No rasterizer change has been made,
 and guest PollikMark triangle/compositor data are NOT RUN.
+
+One more run changed the emulated CPU type from `qemu64` to `max` and failed at
+the same dock-focus assertion, so no further PollikMark harness retries are
+being used for this rasterizer experiment:
+
+```text
+$env:POLLIK_GUI_IMAGE='PollikOS-Alpha.img'; $env:POLLIK_GUI_ACCEL='tcg'; $env:POLLIK_GUI_CPU='max'; python tests/pollikmark.py --resolution 1024x768
+dock probe state: {'slot': 6, 'expected_app': 6, 'pointer': (716, 712), 'focused': 5, 'hover': 6, 'window': (6, 0, 170, 125, 680, 410, 0, 1, 0, 0, 1, 0, 480, 280, 1024, 768, 170, 125, 680, 410, 1490712)}
+AssertionError: dock slot 6 -> app 6
+```
+
+A second golden harness now keeps fixed SHA-256 checksums for the current
+reference rasterizer and benchmarks both 1024x768 and 1920x1080 native scenes.
+After the experimental source was removed, the baseline gate and existing
+native regression output were:
+
+```text
+$ python tests/soft3d_bench.py
+GOLDEN res=1024x768 scene=triangle writes=335826 sha256=8008a1c1d787cc84f03b475d30ef74f1191d0a3a6d21d8e92460f97c59c9cbf0
+BENCH mode=current res=1024x768 scene=triangle rounds=8 ms=11.161,11.357,11.297
+GOLDEN res=1024x768 scene=perspective_texture writes=335826 sha256=22beb925133fca077179b9081d0b9ce7b82403e60dc6f3d370de0e2145287112
+BENCH mode=current res=1024x768 scene=perspective_texture rounds=8 ms=10.849,11.008,10.774
+GOLDEN res=1920x1080 scene=triangle writes=886465 sha256=42d3106651618ccb3cd0554e2c9297a32929da848ac774956dd7e81ef6fcdf89
+BENCH mode=current res=1920x1080 scene=triangle rounds=8 ms=28.805,28.361,28.759
+GOLDEN res=1920x1080 scene=perspective_texture writes=886465 sha256=9a88176a8dac74a6faf0f001d165c82767d188ee72b6212641ae743a63423a6a
+BENCH mode=current res=1920x1080 scene=perspective_texture rounds=8 ms=35.851,28.894,28.431
+$ python tests/soft3d_native.py
+soft3d native: PASS (matrices, depth, culling, clipping, bounds, texture)
+```
+
+I tried linear perspective correction blocks of 8 and then 4 pixels, retaining
+the previous per-pixel path under `SOFT3D_REFERENCE` during the experiments.
+Both were discarded before commit. The reference goldens exposed changes up to
+3 RGB levels; both also slowed down in the measured host runs. Raw failure
+lines:
+
+```text
+GOLDEN res=1920x1080 scene=perspective_texture pixels=2073600 writes=886465 differing_pixels=4 max_rgb_error=3 ref_sha256=9a88176a8dac74a6faf0f001d165c82767d188ee72b6212641ae743a63423a6a fast_sha256=26a9b473bc7c68adf643d85ba727ab342542e40c8cf05401a71a9454007c895a
+1920x1080 perspective_texture: max RGB error 3 > 1
+GOLDEN res=1024x768 scene=perspective_texture pixels=786432 writes=335826 differing_pixels=1 max_rgb_error=3 ref_sha256=22beb925133fca077179b9081d0b9ce7b82403e60dc6f3d370de0e2145287112 fast_sha256=16aa7e95fd45f87b8f2d9484d93d477c6006ab13dad69d572f17c09cb816a2da
+1024x768 perspective_texture: max RGB error 3 > 1
+```
+
+This path was reverted because it failed the visual gate and the host timing
+showed extra per-pixel branch/step overhead (for example, at 1024x768 triangle
+rounds were 10.951,10.987,11.120 ms reference vs 15.183,14.492,15.176 ms
+experimental). No rasterizer optimization is integrated. The current native
+golden harness locks reference output exactly; the randomized and boundary
+coverage in `soft3d_native.py` still passes.
