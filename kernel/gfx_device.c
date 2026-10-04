@@ -4,13 +4,17 @@ extern int framebuffer_width(void), framebuffer_height(void), framebuffer_bpp(vo
 void gfx_device_info(GfxInfo *out) {
     if (out) *out = (GfxInfo){framebuffer_width(), framebuffer_height(), framebuffer_bpp(), 31};
 }
-u32 gfx_ratio(u64 n, u32 d) {
+u64 gfx_ratio64(u64 n, u32 d) {
     if (!d) return 0;
     u64 q = 0, r = 0;
     for (int i = 63; i >= 0; i--) {
         r = (r << 1) | ((n >> i) & 1);
         if (r >= d) { r -= d; q |= 1ull << i; }
     }
+    return q;
+}
+u32 gfx_ratio(u64 n, u32 d) {
+    u64 q = gfx_ratio64(n, d);
     return q > 0xffffffffu ? 0xffffffffu : (u32)q;
 }
 int gfx_target_valid(const GfxTarget *t) {

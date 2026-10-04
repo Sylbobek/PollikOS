@@ -1,6 +1,9 @@
 param(
     [string]$ImageName = "PollikOS-Alpha.img",
-    [switch]$FormatData = $false
+    [switch]$FormatData = $false,
+    [switch]$LegacyTsc = $false,
+    [switch]$LegacyDamage = $false,
+    [switch]$NoSync = $false
 )
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
@@ -10,6 +13,10 @@ if (Get-Command python -ErrorAction SilentlyContinue) {
 }
 function Invoke-Checked { param([string]$Program, [string[]]$Arguments) & $Program @Arguments; if ($LASTEXITCODE -ne 0) { throw "$Program failed ($LASTEXITCODE)" } }
 Invoke-Checked python @('assets/build_cursor.py','--output','kernel/cursor_sprites.h')
+$tscCompileFlags = @()
+if ($LegacyTsc) { $tscCompileFlags += '-DPOLLIK_TSC_FORCE_CPUID=1' }
+if ($LegacyTsc) { Write-Host 'TSC reader: legacy CPUID serialization' }
+else { Write-Host 'TSC reader: LFENCE serialization with CPUID fallback' }
 # Build the vendored freestanding TLS library, without SIMD (no FPU context switching).
 if (!(Test-Path build/bearssl-freestanding.stamp)) {
     New-Item -ItemType Directory -Force build/bearssl-obj | Out-Null
@@ -28,7 +35,10 @@ Invoke-Checked nasm @('-f','elf32','kernel/entry.asm','-o','build/entry.o')
 Invoke-Checked nasm @('-f','elf32','kernel/interrupts.asm','-o','build/interrupts.o')
 $netModules = @('net_util','rtl8139','wifi_if','arp','ipv4','icmp','udp','dhcp','dns','tcp','tls','http','net_manager')
 foreach ($module in @('kernel','desktop','compositor','graphics','gfx_device','soft3d','input_dispatch','wm','hw','hal','mem','pmm','vmm','klog','ahci','storage','pollikfs','vfs','process','syscall','elf','network','framebuffer','ui','trash','ui_animation','desktop_items','auth','media','pollikgl','audio')) {
-    Invoke-Checked clang @('--target=i386-none-elf','-m32','-march=i386','-ffreestanding','-fno-pic','-fno-pie','-fno-stack-protector','-mno-sse','-mno-mmx','-Os','-Wall','-Wextra','-Werror','-Ikernel/include','-c',"kernel/$module.c",'-o',"build/$module.o")
+    $optimization = if ($module -eq 'wm') { '-Oz' } else { '-Os' }
+    $moduleFlags = @()
+    if ($module -eq 'compositor' -and $LegacyDamage) { $moduleFlags += '-DPOLLIK_COMPOSITOR_LEGACY_DAMAGE=1' }
+    Invoke-Checked clang (@('--target=i386-none-elf','-m32','-march=i386','-ffreestanding','-fno-pic','-fno-pie','-fno-stack-protector','-mno-sse','-mno-mmx',$optimization,'-Wall','-Wextra','-Werror') + $tscCompileFlags + $moduleFlags + @('-Ikernel/include','-c',"kernel/$module.c",'-o',"build/$module.o"))
 }
 foreach ($m in $netModules) {
     Invoke-Checked clang @('--target=i386-none-elf','-m32','-march=i386','-ffreestanding','-fno-pic','-fno-pie','-fno-stack-protector','-mno-sse','-mno-mmx','-Os','-Wall','-Wextra','-Werror','-Ikernel/include','-c',"kernel/net/$m.c",'-o',"build/$m.o")
@@ -107,14 +117,20 @@ try {
     $prefixStream.Write($kernelBytes, 0, $kernelBytes.Length)
 } finally { $prefixStream.Dispose() }
 Invoke-Checked llvm-objcopy @('-I','binary','-O','elf32-i386','-B','i386',$runtimePrefix,'build/install/runtime-prefix.o')
-$commonCompile = @('--target=i386-none-elf','-m32','-march=i386','-ffreestanding','-fno-pic','-fno-pie','-fno-stack-protector','-mno-sse','-mno-mmx','-Os','-Wall','-Wextra','-Werror','-Ikernel/include')
+$commonCompile = @('--target=i386-none-elf','-m32','-march=i386','-ffreestanding','-fno-pic','-fno-pie','-fno-stack-protector','-mno-sse','-mno-mmx','-Oz','-Wall','-Wextra','-Werror','-Ikernel/include')
 Invoke-Checked clang ($commonCompile + @('-DPOLLIK_INSTALL_MEDIA=1','-c','kernel/auth.c','-o','build/install/auth.o'))
 Invoke-Checked clang ($commonCompile + @('-DPOLLIK_INSTALL_MEDIA=1','-c','kernel/desktop.c','-o','build/install/desktop.o'))
 Invoke-Checked clang ($commonCompile + @('-DPOLLIK_INSTALL_MEDIA=1','-c','kernel/installer.c','-o','build/install/installer.o'))
+foreach ($module in @('compositor','input_dispatch','wm')) {
+    Invoke-Checked clang ($commonCompile + @('-DPOLLIK_INSTALL_MEDIA=1','-c',"kernel/$module.c","-o","build/install/$module.o"))
+}
 $installerLinkArgs = @()
 for ($i = 0; $i -lt $linkArgs.Count; $i++) {
     if ($linkArgs[$i] -eq 'build/auth.o') { $installerLinkArgs += 'build/install/auth.o'; continue }
     if ($linkArgs[$i] -eq 'build/desktop.o') { $installerLinkArgs += 'build/install/desktop.o'; continue }
+    if ($linkArgs[$i] -eq 'build/compositor.o') { $installerLinkArgs += 'build/install/compositor.o'; continue }
+    if ($linkArgs[$i] -eq 'build/input_dispatch.o') { $installerLinkArgs += 'build/install/input_dispatch.o'; continue }
+    if ($linkArgs[$i] -eq 'build/wm.o') { $installerLinkArgs += 'build/install/wm.o'; continue }
     if ($linkArgs[$i] -eq '-o') { $i++; continue }
     $installerLinkArgs += $linkArgs[$i]
 }
@@ -149,12 +165,11 @@ if (!(Test-Path $dataPath)) {
     $dataFile.Dispose()
     & fsutil sparse setflag $dataPath
     if ($LASTEXITCODE -ne 0) { throw 'Failed to create sparse data disk.' }
+    Invoke-Checked python @('-c', 'import sys; sys.path.insert(0,"tests"); from format_pollikfs2 import format_disk; format_disk(sys.argv[1], total_size_mb=40)', $dataPath)
     $dataImage = [IO.File]::Open($dataPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::Read)
     try {
         if ($dataImage.Length -lt 10GB) { $dataImage.SetLength(10GB); $dataImage.Flush($true) }
     } finally { $dataImage.Dispose() }
-    & python "$PSScriptRoot/tests/format_pollikfs2.py" $dataPath
-    Invoke-Checked python @('tools/install_wallpapers.py',$dataPath)
     Write-Host "Utworzono i zainicjalizowano nowy czysty obraz PollikData.img."
 } elseif ($FormatData) {
     Write-Host "UWAGA: Jawne formatowanie dysku danych (-FormatData)." -ForegroundColor Yellow
@@ -162,8 +177,7 @@ if (!(Test-Path $dataPath)) {
     $bakPath = "$dataPath.bak_$bakDate"
     Copy-Item $dataPath $bakPath
     Write-Host "Kopia zapasowa przed jawnym formatowaniem: $bakPath"
-    & python "$PSScriptRoot/tests/format_pollikfs2.py" $dataPath
-    Invoke-Checked python @('tools/install_wallpapers.py',$dataPath)
+    Invoke-Checked python @('-c', 'import sys; sys.path.insert(0,"tests"); from format_pollikfs2 import format_disk; format_disk(sys.argv[1], total_size_mb=40)', $dataPath)
     Write-Host "Dysk PollikData.img zostal sformatowany na jawne zadanie uzytkownika."
 } else {
     # Existing PollikData.img: strictly protect user data.
@@ -177,22 +191,9 @@ if (!(Test-Path $dataPath)) {
     }
 
     if ($fsStatus -eq "current") {
-        # 2. If format is current, continue normally without touching data
+        # Header inspection is read-only; the sync tool additionally validates
+        # the complete filesystem, file length and references under an exclusive lock.
         Write-Host "PollikFS v2: Wykryto aktualny format i geometrie [31, 36]. Dane uzytkownika nienaruszone."
-    } elseif ($fsStatus -eq "legacy_30_35") {
-        # 3. If older geometry, attempt safe migration
-        Write-Host "PollikFS v2: Wykryto starsza geometrie [30, 35]. Rozpoczynanie bezpiecznej migracji..." -ForegroundColor Yellow
-        # 4. Before migration, make a backup of the data disk
-        $bakDate = Get-Date -Format "yyyyMMdd_HHmmss"
-        $bakPath = "$dataPath.bak_$bakDate"
-        Copy-Item $dataPath $bakPath
-        Write-Host "Kopia zapasowa przed migracja zapisana w: $bakPath" -ForegroundColor Green
-
-        & python "$PSScriptRoot/tests/migrate_pollikfs.py" migrate $dataPath
-        if ($LASTEXITCODE -ne 0) {
-            throw "BLAD MIGRACJI: Bezpieczna migracja dysku zakonczyla sie niepowodzeniem! Kopia bezpieczenstwa w: $bakPath"
-        }
-        Write-Host "PollikFS v2: Bezpieczna migracja zakonczona sukcesem. Dane uzytkownika zachowane." -ForegroundColor Green
     } else {
         # 5. If migration is not supported, halt build with a clear message
         Write-Host "================================================================================" -ForegroundColor Red
@@ -210,6 +211,9 @@ if (!(Test-Path $dataPath)) {
         throw "Build zatrzymany w celu ochrony danych uzytkownika w PollikData.img."
     }
 }
+
+if ($NoSync) { Write-Host 'System sync: skipped (-NoSync); data image unchanged.' }
+else { Invoke-Checked python @('tools/sync_system_files.py', $dataPath) }
 
 try {
     if (Test-Path $destinationPath) { [IO.File]::Replace($imagePath,$destinationPath,"$destinationPath.previous") }

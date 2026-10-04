@@ -22,8 +22,8 @@ screen_w, screen_h = map(int, args.resolution.split('x'))
 log = BUILD / f'surface-{args.resolution}.log'
 shot = BUILD / f'surface-{args.resolution}.ppm'
 data = BUILD / 'surface-test-data.img'
-with data.open('wb') as f:
-    f.truncate(64 * 1024 * 1024)
+from gui_fixture import create_gui_disk, finish_setup
+create_gui_disk(data, total_size_mb=64)
 with socket.socket() as reserve:
     reserve.bind(('127.0.0.1', 0))
     port = reserve.getsockname()[1]
@@ -79,13 +79,13 @@ try:
             if (mx, my) == (x, y):
                 break
             assert time.monotonic() < deadline, f'pointer stuck at {(mx, my)}, target={(x, y)}'
-            dx = max(-100, min(100, x - mx))
-            dy = max(-100, min(100, y - my))
+            dx = max(-5, min(5, x - mx))
+            dy = max(-5, min(5, y - my))
             hmp(f'mouse_move {dx} {dy}')
             # Do not enqueue another delta until the guest consumes this one.
             while (record('mx')[0], record('my')[0]) != (mx + dx, my + dy):
                 assert time.monotonic() < deadline, 'PS/2 motion was not consumed'
-                time.sleep(.1)
+                time.sleep(.005)
 
     def click(x, y):
         move(x, y)
@@ -153,6 +153,7 @@ try:
     while not log.exists() or 'desktop ready' not in log.read_text():
         assert process.poll() is None and time.monotonic() < deadline, log.read_text() if log.exists() else ''
         time.sleep(.1)
+    finish_setup(qmp, log)
     assert 'GFX resolution: ' + args.resolution in log.read_text()
     if args.wm:
         # The old hit-test accepted close/maximize/minimize on the blank right
@@ -300,14 +301,14 @@ try:
         assert record('g_focused_window')[0] != 2
         print('PASS: focus, AltTab/cancel, Dock restore, eight resize edges, minimum, cache drag, snap, drag-restore, AltF4', flush=True)
     for app in range(0 if args.wm else APP_COUNT):
-        hmp(f'sendkey f{app + 1}')
+        hmp(f'sendkey f{app + 1} 100')
         time.sleep(1.5)
         w = check('normal', app)
         original = w[2:6]
         click(w[2] + 54, w[3] + 17)
         w = check('maximized', app)
         screen_w, screen_h = map(int, args.resolution.split('x'))
-        assert w[4:6] == (screen_w - 16, screen_h - 142)
+        assert w[2:6] == (0, 32, screen_w, screen_h - 128)
         click(w[2] + 54, w[3] + 17)
         w = check('restored', app)
         assert w[2:6] == original

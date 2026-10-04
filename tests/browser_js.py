@@ -1,5 +1,7 @@
 """Boot the real disk in QEMU and exercise PS/2 input through QMP."""
 import json
+import struct
+import tempfile
 import pathlib
 import os
 import http.server
@@ -33,7 +35,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header('Content-Security-Policy', 'default-src https:; ' + ' ' * 600)
         self.end_headers();self.wfile.write(PAGE)
     def log_message(self,*args):pass
-server=http.server.ThreadingHTTPServer(('127.0.0.1',18080),Handler)
+server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler)
 threading.Thread(target=server.serve_forever,daemon=True).start()
 
 import socket
@@ -47,9 +49,10 @@ with socket.socket() as reserve:
     port = reserve.getsockname()[1]
 log = BUILD / "browser-js.log"
 log.write_text("")
-data_disk = BUILD / "browser-js-data.img"
-from format_pollikfs2 import format_disk
-format_disk(data_disk)
+data_folder=tempfile.TemporaryDirectory(prefix='pollikos-browser-js-')
+data_disk = pathlib.Path(data_folder.name) / "data.img"
+from gui_fixture import create_gui_disk
+create_gui_disk(data_disk)
 process = subprocess.Popen([
     "qemu-system-x86_64", "-machine", "pc", "-cpu", "max", "-rtc", "base=utc", "-m", "2G", "-vga", "std",
     "-drive", f"format=raw,file={BUILD / os.environ.get('POLLIK_TEST_IMAGE', 'PollikOS-Alpha.img')},if=ide,index=0,snapshot=on",
@@ -94,6 +97,27 @@ try:
         return path.read_bytes()
 
     qmp("qmp_capabilities")
+    from browser_support import browser_offsets
+    offsets = browser_offsets()
+    symbols = {}
+    for line in subprocess.check_output(['llvm-nm','-S',str(BUILD/'kernel.elf')],text=True).splitlines():
+        fields=line.split()
+        if len(fields)==4: symbols[fields[3]]=(int(fields[0],16),int(fields[1],16))
+    def memory(address, size):
+        path=BUILD/'browser-js-probe.bin'
+        qmp('pmemsave', {'val':address,'size':size,'filename':str(path)})
+        return path.read_bytes()
+    def scalar(name):
+        return int.from_bytes(memory(symbols[name][0],symbols[name][1]),'little')
+    def browser_field(name):
+        return int.from_bytes(memory(symbols['g_browser'][0]+offsets[name],4),'little')
+    def browser_input():
+        return memory(symbols['g_browser'][0]+offsets['input_url'],256).split(b'\0')[0].decode()
+    def wait(predicate, message, seconds=30):
+        end=time.monotonic()+seconds
+        while not predicate():
+            assert process.poll() is None and time.monotonic()<end,message
+            time.sleep(.02)
     while "desktop ready" not in log.read_text():
         if time.monotonic() > deadline:
             raise AssertionError("Kernel did not reach the desktop")
@@ -118,14 +142,27 @@ try:
         assert time.monotonic()<deadline,log.read_text()
         time.sleep(.1)
     key("f6")
+    wait(lambda: scalar('g_focused_window')==5 and not scalar('load_active') and
+         not browser_field('has_pending_navigation') and not browser_field('is_loading') and
+         browser_field('document'), 'Browser home did not finish before Ctrl+L')
     # Focus the visible address bar with the mouse so the smoke test exercises
     # the same path as a desktop user, independent of host Ctrl-key synthesis.
-    for dx, dy in ((-120, -100), (-120, -100), (0, -100), (-20, -17)):
-        hmp(f"mouse_move {dx} {dy}")
-        time.sleep(.1)
+    def move(x,y):
+        while (scalar('mx'),scalar('my')) != (x,y):
+            mx,my=scalar('mx'),scalar('my')
+            dx,dy=max(-5,min(5,x-mx)),max(-5,min(5,y-my))
+            hmp(f'mouse_move {dx} {dy}')
+            wait(lambda: (scalar('mx'),scalar('my'))==(mx+dx,my+dy),'PS/2 delta consumption')
+    window=struct.unpack('<21I',memory(symbols['g_windows'][0]+5*84,84))
+    move(window[2]+200,window[3]+50)
     hmp("mouse_button 1"); time.sleep(.1); hmp("mouse_button 0")
     key("ctrl-l")
-    for c in "http://10.0.2.2:18080/": key({".":"dot",":":"shift-semicolon","/":"slash"}.get(c,c))
+    wait(lambda: browser_field('is_typing_url') and browser_input()=='','Ctrl+L did not focus/clear address')
+    url=f"http://10.0.2.2:{server.server_port}/"
+    for index,c in enumerate(url):
+        key({".":"dot",":":"shift-semicolon","/":"slash"}.get(c,c))
+        wait(lambda: browser_input()==url[:index+1],'address input diverged: '+browser_input())
+    print('RAW verified address',browser_input(),flush=True)
     key("ret")
     loading = shot("browser-loading")
     deadline=time.monotonic()+35
@@ -138,19 +175,26 @@ try:
     assert "IMAGE: PNG/JPEG decoded" in log.read_text(),log.read_text()
     assert "IMAGE: animated GIF decoded" in log.read_text(),log.read_text()
     frame_a = shot("browser-gif-frame-a")
-    frame_b = shot("browser-gif-frame-b")
+    image_a=Image.open(io.BytesIO(frame_a)).convert('RGB')
+    gif_points=[(x,y) for y in range(image_a.height) for x in range(image_a.width)
+                if image_a.getpixel((x,y)) in ((255,0,255),(0,255,255))]
+    assert len(gif_points)==32*32, 'GIF fixture did not occupy its 32x32 viewport'
+    gif_box=(min(x for x,y in gif_points),min(y for x,y in gif_points),
+             max(x for x,y in gif_points)+1,max(y for x,y in gif_points)+1)
+    first_gif=image_a.crop(gif_box).tobytes()
+    deadline=time.monotonic()+3
+    while True:
+        frame_b = shot("browser-gif-frame-b")
+        second_gif=Image.open(io.BytesIO(frame_b)).convert('RGB').crop(gif_box).tobytes()
+        if second_gif != first_gif: break
+        assert time.monotonic()<deadline, 'GIF viewport did not advance within 3 seconds'
     assert frame_a != frame_b, "Animated GIF did not repaint between frames"
     # HMP sends relative PS/2 packets.  Keep each delta in the signed-byte
     # range; larger deltas set the overflow bit and are intentionally ignored.
     # The system pointer starts at (760,500), heading at about (240,255).
-    hmp("mouse_move -120 50")
-    time.sleep(.12)
-    hmp("mouse_move -120 22")
-    time.sleep(.12)
     # The animated image now occupies one line before the heading, so aim at
     # the heading's updated vertical position.
-    hmp("mouse_move -20 28")
-    time.sleep(.12)
+    move(window[2]+70,window[3]+150)
     hmp("mouse_button 1"); time.sleep(.15); hmp("mouse_button 0")
     deadline=time.monotonic()+3
     while "BROWSER title: CLICK PASS" not in log.read_text():
@@ -158,6 +202,30 @@ try:
         time.sleep(.1)
     assert "Response status: 200" in log.read_text(),log.read_text()
     print("PASS: HTTP document, PNG, Elk arithmetic/loop/conditional, DOM mutation and click event")
+except BaseException:
+    symbols = {}
+    for line in subprocess.check_output(['llvm-nm','-S',str(BUILD/'kernel.elf')],text=True).splitlines():
+        fields=line.split()
+        if len(fields)==4: symbols[fields[3]]=(int(fields[0],16),int(fields[1],16))
+    qmp('stop')
+    def probe(name, size=None):
+        address, length = symbols[name]
+        path=BUILD/'browser-js-diagnostic.bin'
+        qmp('pmemsave', {'val':address,'size':size or length,'filename':str(path)})
+        return path.read_bytes()
+    for name in ('mx','my','g_focused_window','g_windows','load_active'):
+        raw=probe(name)
+        print('RAW failure',name,struct.unpack('<'+'I'*(len(raw)//4),raw) if len(raw)%4==0 else tuple(raw),flush=True)
+    raw=probe('g_browser')
+    off=offsets['input_url']
+    print('RAW failure input_url',raw[off:off+256].split(b'\0')[0],
+          'typing',browser_field('is_typing_url'),'pending',browser_field('has_pending_navigation'),
+          'loading',browser_field('is_loading'),flush=True)
+    qmp('screendump',{'filename':str(BUILD/'browser-js-failure.ppm')})
+    raise
 finally:
     process.terminate()
     process.wait(timeout=5)
+    server.shutdown()
+    server.server_close()
+    data_folder.cleanup()

@@ -10,6 +10,7 @@
 #include "input_dispatch.h"
 #include "desktop_items.h"
 #include "ui_animation.h"
+#include "pollikfs.h"
 #include "trash.h"
 #include "vfs.h"
 #include "hw.h"
@@ -40,6 +41,9 @@ static int g_dock_motion_active[APP_COUNT];
 static int g_dock_motion_initialized;
 static int g_dock_motion_frozen;
 static u32 g_dock_motion_freeze_ms;
+#ifndef POLLIK_INSTALL_MEDIA
+static u32 g_perf_overlay_last_ms;
+#endif
 
 static int dock_ease_out_back(int t) {
     if (t <= 0) return 0;
@@ -112,6 +116,11 @@ void app_host_set_pointer_acceleration(int enabled) {
     input_set_pointer_acceleration(enabled);
     app_host_save_settings();
 }
+int app_host_cursor_size(void) { return compositor_cursor_size(); }
+void app_host_set_cursor_size(int percent) {
+    compositor_set_cursor_size(percent);
+    app_host_save_settings();
+}
 
 void app_host_save_settings(void) {
     vfs_mkdir("/home");
@@ -146,6 +155,7 @@ void app_host_save_settings(void) {
     WRITE_SETTING("sound_muted=", sound_is_muted());
     if (g_wallpaper_choice[0]) WRITE_TEXT_SETTING("wallpaper=", g_wallpaper_choice);
     WRITE_SETTING("pointer_accel=", input_get_pointer_acceleration());
+    WRITE_SETTING("cursor_size=", compositor_cursor_size());
 
     #undef WRITE_SETTING
     #undef WRITE_TEXT_SETTING
@@ -217,6 +227,11 @@ static void desktop_load_settings(void) {
             g_wallpaper_choice[n] = 0;
         } else if (memcmp(line, "pointer_accel=", 14) == 0) {
             input_set_pointer_acceleration(line[14] == '1');
+        } else if (memcmp(line, "cursor_size=", 12) == 0) {
+            int val = 0;
+            char *cs = line + 12;
+            while (*cs >= '0' && *cs <= '9') { val = val * 10 + *cs++ - '0'; }
+            compositor_set_cursor_size(val);
         }
     }
 }
@@ -378,6 +393,8 @@ void dock_activate_app(int id) {
 void toggle_maximize(int id) {
     if (!wm_get_window(id)) return;
     cancel_interaction(id);
+    /* Opening/restoring completion must not overwrite this explicit geometry. */
+    ui_anim_cancel(id);
     wm_toggle_maximize(id);
     compositor_invalidate(id);
     gui_app_resized(id, window_width(id), window_height(id));
@@ -483,6 +500,9 @@ void app_host_metrics(AppPerfView *out) {
     wm_perf_snapshot(&s);
     *out = (AppPerfView){1, s.frame_count, s.presents_sec, s.clock_resolution_us,
         s.paint_time_us, s.compose_time_us, s.present_time_us, s.total_time_us};
+}
+u32 app_host_copy_frame_times(u32 after_frame, u32 count, u32 *out, u32 capacity) {
+    return wm_perf_copy_frame_times(after_frame, count, out, capacity);
 }
 u32 app_host_free_bytes(void) { return pmm_get_free_memory(); }
 void *app_host_alloc(u32 bytes) {
@@ -1206,25 +1226,50 @@ static u8 *desktop_decode_theme_wallpaper(int dark, int *width, int *height) {
     while (prefix[length]) { path[length] = prefix[length]; ++length; }
     u32 n = 0;
     while (name[n] && length + n + 1 < sizeof(path)) { path[length+n] = name[n]; ++n; }
-    if (!name[n] || length + n >= sizeof(path)) return 0;
+    if (name[n] || length + n >= sizeof(path)) return 0;
     path[length+n] = 0;
+    serial("[WALLPAPER] path="); serial(path);
+    serial(vfs_is_ready() ? " mount=ready\n" : " mount=unavailable\n");
+    int share = vfs_open("/usr/share", O_RDONLY);
+    serial("[WALLPAPER] /usr/share:");
+    if (share < 0) serial(" unavailable");
+    else {
+        vfs_dirent_t entry;
+        while (vfs_readdir(share, &entry) > 0) { serial(" "); serial(entry.name); }
+        vfs_close(share);
+    }
+    serial("\n");
     vfs_stat_t st;
-    if (!vfs_is_ready() || vfs_stat(path, &st) != VFS_OK || st.type != VFS_FILE ||
-        !st.size || st.size > 8u * 1024u * 1024u) return 0;
+    int status = vfs_is_ready() ? vfs_stat(path, &st) : VFS_IO;
+    if (status != VFS_OK) {
+        int reason = vfs_is_ready() ? pollikfs_error() : VFS_NOT_MOUNTED;
+        char value[16]; number(value, (u32)reason);
+        serial("[WALLPAPER] stat failed error="); serial(value);
+        serial(reason == VFS_NOT_FOUND ? " missing decoder=not-run\n" : " decoder=not-run\n");
+        return 0;
+    }
+    if (st.type != VFS_FILE || !st.size || st.size > 8u * 1024u * 1024u) {
+        serial("[WALLPAPER] invalid file type/size decoder=not-run\n"); return 0;
+    }
     int fd = vfs_open(path, O_RDONLY);
-    if (fd < 0) return 0;
+    if (fd < 0) { serial("[WALLPAPER] open failed decoder=not-run\n"); return 0; }
     u8 *encoded = (u8 *)kmalloc(st.size);
-    if (!encoded) { vfs_close(fd); return 0; }
+    if (!encoded) { vfs_close(fd); serial("[WALLPAPER] allocation failed decoder=not-run\n"); return 0; }
     int got = vfs_read(fd, encoded, st.size);
     vfs_close(fd);
-    if (got != (int)st.size) { kfree(encoded); return 0; }
+    if (got != (int)st.size) { kfree(encoded); serial("[WALLPAPER] short read decoder=not-run\n"); return 0; }
     u8 *decoded = media_decode(encoded, st.size, width, height);
     kfree(encoded);
     if (!decoded || *width <= 0 || *height <= 0 ||
         (u64)(u32)*width * (u32)*height > 16u * 1024u * 1024u) {
         if (decoded) media_free(decoded);
+        serial("[WALLPAPER] decoder=invalid\n");
         return 0;
     }
+    char value[16];
+    serial("[WALLPAPER] decoder=ok dimensions=");
+    number(value, (u32)*width); serial(value); serial("x");
+    number(value, (u32)*height); serial(value); serial("\n");
     return decoded;
 }
 
@@ -1329,6 +1374,7 @@ static void desktop_paint_wallpaper_for_mode(u32 *wallpaper, int dark) {
     if (image) {
         desktop_paint_theme_wallpaper(wallpaper, image, image_width, image_height, 256, dark);
         media_free(image);
+        serial("[WALLPAPER] cache=ready\n");
         return;
     }
     if (!g_wallpaper_failure_logged) {
@@ -1389,7 +1435,9 @@ int desktop_poll(int network_changed) {
         Window *w = wm_get_window(id);
         if (w->open && w->visible && !w->minimized) active_mask |= 1u << id;
     }
+    u64 phase_start = wm_time_us();
     u32 changed_apps = gui_apps_poll_mask(active_mask);
+    u32 app_update_us = (u32)(wm_time_us() - phase_start);
     for (int id = 0; id < APP_COUNT; id++) {
         Window *w = wm_get_window(id);
         if ((changed_apps & (1u << id)) && w->open && w->visible && !w->minimized) {
@@ -1401,13 +1449,18 @@ int desktop_poll(int network_changed) {
         }
     }
     if (network_changed) shell.dirty = 1;
+    phase_start = wm_time_us();
     input_dispatch_poll();
+    wm_perf_record_phase_times(app_update_us,
+                               (u32)(wm_time_us() - phase_start),
+                               g_perf_stats.layout_us);
     return desktop_present();
 }
 /* Shared frame scheduling only; never call desktop_poll from a wait callback. */
 static int desktop_present(void) {
     static int was_animating;
     static u32 auth_blink;
+    u64 layout_start = wm_time_us();
     u32 now_ms = wm_time_ms();
     /* Animate the login caret without repainting on every frame. */
     if (auth_is_active()) {
@@ -1447,6 +1500,15 @@ static int desktop_present(void) {
      * repainting the icon shelf on every mouse packet. */
     int hover_target = auth_is_active() || g_active_menu.active || g_active_dialog.active
         ? shell.hover : dock_hit();
+#ifndef POLLIK_INSTALL_MEDIA
+    if (wm_perf_overlay_is_enabled() && !auth_is_active() &&
+        (u32)(now_ms - g_perf_overlay_last_ms) >= 100u) {
+        g_perf_overlay_last_ms = now_ms;
+        request_partial_redraw(8, 35, 660, 58);
+    }
+#endif
+    wm_perf_record_phase_times(g_perf_stats.app_update_us, g_perf_stats.input_us,
+                               (u32)(wm_time_us() - layout_start));
     int dock_motion_running = 0;
     if ((frame_due || g_bar_only_dirty) &&
         (is_busy || shell.dirty || hover_target != shell.hover ||

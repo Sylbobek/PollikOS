@@ -15,6 +15,7 @@ import struct
 import subprocess
 import threading
 import time
+import tempfile
 
 from PIL import Image
 
@@ -70,10 +71,11 @@ def main():
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     log = BUILD / f"{prefix}.log"
-    data = BUILD / f"{prefix}-data.img"
+    data_folder=tempfile.TemporaryDirectory(prefix='pollikos-responsive-')
+    data = pathlib.Path(data_folder.name) / 'data.img'
     log.write_text("")
-    from format_pollikfs2 import format_disk
-    format_disk(data, total_size_mb=64)
+    from gui_fixture import create_gui_disk
+    create_gui_disk(data, total_size_mb=64)
     with socket.socket() as reserve:
         reserve.bind(("127.0.0.1", 0))
         port = reserve.getsockname()[1]
@@ -126,7 +128,7 @@ def main():
             if name in ("g_windows", "g_surfaces"):
                 size //= app_count
             raw = memory(address + index * size, size)
-            return struct.unpack("<" + "I" * (size // 4), raw)
+            return struct.unpack("<" + "I" * (size // 4), raw) if size % 4 == 0 else tuple(raw)
 
         def pointer():
             return words("mx")[0], words("my")[0]
@@ -134,7 +136,7 @@ def main():
         def move(x, y):
             while pointer() != (x, y):
                 mx, my = pointer()
-                dx, dy = max(-80, min(80, x - mx)), max(-80, min(80, y - my))
+                dx, dy = max(-5, min(5, x - mx)), max(-5, min(5, y - my))
                 hmp(f"mouse_move {dx} {dy}")
                 wait(lambda: pointer() == (mx + dx, my + dy), "Guest did not consume PS/2 motion")
 
@@ -169,6 +171,13 @@ def main():
         print(f"GUI validated: {screen_width}x{screen_height} (serial + QMP screenshot)", flush=True)
         key("f6")
         wait(lambda: words("g_windows", 5)[7] == 1, "Browser did not open")
+        from browser_support import browser_offsets
+        offsets = browser_offsets()
+        def browser_field(name):
+            return int.from_bytes(memory(symbols['g_browser'][0]+offsets[name],4),'little')
+        wait(lambda: not words('load_active')[0] and
+             not browser_field('has_pending_navigation') and not browser_field('is_loading') and
+             browser_field('document'), 'Browser home did not finish')
         # Let home/open animation settle before isolating the delayed request.
         wait(lambda: not any(words("g_animations")[i] for i in range(0, app_count * 17, 17)), "Open animation stuck")
         time.sleep(.4)
@@ -280,6 +289,7 @@ def main():
                 process.wait(timeout=5)
         server.shutdown()
         server.server_close()
+        data_folder.cleanup()
 
 
 if __name__ == "__main__":

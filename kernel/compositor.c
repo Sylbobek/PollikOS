@@ -165,6 +165,32 @@ static GraphicsClip clip_intersection(GraphicsClip a, GraphicsClip b) {
                           a.x2 < b.x2 ? a.x2 : b.x2, a.y2 < b.y2 ? a.y2 : b.y2};
 }
 
+#ifndef POLLIK_COMPOSITOR_LEGACY_DAMAGE
+/* The drag union is prepended to queued damage, so the two sources can
+ * overlap even though each source is internally coalesced. Repainting an
+ * overlap twice compounds translucent glass/overlays and breaks equivalence
+ * with a full repaint. Merge after blur expansion, when the true paint bounds
+ * are known. */
+static int merge_damage_regions(GraphicsClip *regions, int count) {
+    int changed = 1;
+    while (changed) {
+        changed = 0;
+        for (int i = 0; i < count && !changed; i++) {
+            for (int j = i + 1; j < count; j++) {
+                GraphicsClip a = regions[i], b = regions[j];
+                if (a.x1 < b.x2 && b.x1 < a.x2 && a.y1 < b.y2 && b.y1 < a.y2) {
+                    regions[i] = clip_union(a, b);
+                    regions[j] = regions[--count];
+                    changed = 1;
+                    break;
+                }
+            }
+        }
+    }
+    return count;
+}
+#endif
+
 void compositor_invalidate(int id) {
     if (id >= 0 && id < NUM_APPS) {
         dirty_client[id] = 1;
@@ -731,9 +757,17 @@ static void __attribute__((unused)) draw_arrow_cursor(int mx, int my) {
         if (face) *p = blend(*p, 0xffffff, face * 64);
     }
 }
+#ifdef POLLIK_INSTALL_MEDIA
 #define CURSOR_SIDE 32
+#else
+#define CURSOR_SIDE CURSOR_MAX_SIDE
+#endif
+static int g_cursor_scale_index, cursor_previous_scale_index;
+static u32 cursor_active_pixels[CURSOR_SIDE * CURSOR_SIDE];
+static int cursor_active_sprite = -1, cursor_active_scale = -1;
 static u32 cursor_saved[CURSOR_SIDE * CURSOR_SIDE];
 static int cursor_saved_x, cursor_saved_y, cursor_saved_w, cursor_saved_h;
+static int cursor_saved_left, cursor_saved_top;
 static int cursor_saved_valid;
 static u32 cursor_old_frame[CURSOR_SIDE * CURSOR_SIDE];
 static u32 cursor_new_frame[CURSOR_SIDE * CURSOR_SIDE];
@@ -753,10 +787,12 @@ static void cursor_geometry(int x, int y, int kind, int *sprite_out,
                             int *left_out, int *top_out, int *flip_x_out, int *flip_y_out) {
     int sprite = cursor_sprite_for_kind(kind);
     int flip_x = 0, flip_y = 0;
-    int hot_x = cursor_hotspots[sprite][0], hot_y = cursor_hotspots[sprite][1];
+    int side = cursor_sides[g_cursor_scale_index];
+    int hot_x = cursor_scaled_hotspots[g_cursor_scale_index][sprite][0];
+    int hot_y = cursor_scaled_hotspots[g_cursor_scale_index][sprite][1];
     if (kind == CURSOR_DEFAULT) {
-        if (x - hot_x + CURSOR_SIDE > shell.width) { flip_x = 1; hot_x = CURSOR_SIDE - 1; }
-        if (y - hot_y + CURSOR_SIDE > shell.height) { flip_y = 1; hot_y = CURSOR_SIDE - 1; }
+        if (x - hot_x + side > shell.width) { flip_x = 1; hot_x = side - 1; }
+        if (y - hot_y + side > shell.height) { flip_y = 1; hot_y = side - 1; }
     }
     *sprite_out = sprite; *left_out = x - hot_x; *top_out = y - hot_y;
     *flip_x_out = flip_x; *flip_y_out = flip_y;
@@ -765,7 +801,8 @@ static GraphicsClip cursor_bounds(int x, int y, int kind) {
     int sprite, left, top, flip_x, flip_y;
     cursor_geometry(x, y, kind, &sprite, &left, &top, &flip_x, &flip_y);
     (void)sprite; (void)flip_x; (void)flip_y;
-    return clip_intersection((GraphicsClip){left, top, left + CURSOR_SIDE, top + CURSOR_SIDE},
+    return clip_intersection((GraphicsClip){left, top, left + cursor_sides[g_cursor_scale_index],
+                                             top + cursor_sides[g_cursor_scale_index]},
                              (GraphicsClip){0, 0, shell.width, shell.height});
 }
 static void cursor_copy_background(u32 *out, GraphicsClip rect, int x, int y,
@@ -783,13 +820,26 @@ static void cursor_copy_background(u32 *out, GraphicsClip rect, int x, int y,
 static void cursor_compose_sprite(u32 *out, GraphicsClip rect, int x, int y, int kind) {
     int sprite, left, top, flip_x, flip_y;
     cursor_geometry(x, y, kind, &sprite, &left, &top, &flip_x, &flip_y);
+    int side = cursor_sides[g_cursor_scale_index];
+    if (cursor_active_sprite != sprite || cursor_active_scale != g_cursor_scale_index) {
+        memset(cursor_active_pixels, 0, sizeof(cursor_active_pixels));
+        const u8 *run = cursor_stream + cursor_stream_offsets[g_cursor_scale_index][sprite];
+        while (*run != 255) {
+            int y = *run++, x = *run++, count = *run++;
+            for (int i = 0; i < count; ++i) {
+                u32 alpha = *run++, gray = *run++;
+                cursor_active_pixels[y * side + x + i] = (alpha << 24) | (gray * 0x00010101u);
+            }
+        }
+        cursor_active_sprite = sprite; cursor_active_scale = g_cursor_scale_index;
+    }
     int w = rect.x2 - rect.x1, h = rect.y2 - rect.y1;
     for (int py = rect.y1; py < rect.y2; ++py) {
         for (int px = rect.x1; px < rect.x2; ++px) {
             int sx = px - left, sy = py - top;
-            if (flip_x) sx = CURSOR_SIDE - 1 - sx;
-            if (flip_y) sy = CURSOR_SIDE - 1 - sy;
-            u32 argb = cursor_pixels[sprite][sy * CURSOR_SIDE + sx];
+            if (flip_x) sx = side - 1 - sx;
+            if (flip_y) sy = side - 1 - sy;
+            u32 argb = cursor_active_pixels[sy * side + sx];
             u32 alpha = argb >> 24;
             if (alpha) {
                 u32 color = argb & 0x00ffffffu;
@@ -812,7 +862,7 @@ static u32 present_with_cursor(const GraphicsClip *scene, int scene_count, int f
     int mx = input_pointer_x(), my = input_pointer_y(), kind = input_cursor_kind();
     GraphicsClip current = cursor_bounds(mx, my, kind);
     int moved = !cursor_previous_valid || mx != cursor_previous_x || my != cursor_previous_y ||
-                kind != cursor_previous_kind;
+                kind != cursor_previous_kind || g_cursor_scale_index != cursor_previous_scale_index;
     u32 presented = 0;
     for (int i = 0; i < scene_count; ++i) {
         GraphicsClip clip = clip_intersection(scene[i], (GraphicsClip){0, 0, shell.width, shell.height});
@@ -828,7 +878,8 @@ static u32 present_with_cursor(const GraphicsClip *scene, int scene_count, int f
     }
     if (!repaint_current) return presented;
     GraphicsClip old = cursor_previous_valid
-        ? cursor_bounds(cursor_previous_x, cursor_previous_y, cursor_previous_kind)
+        ? (GraphicsClip){cursor_saved_left, cursor_saved_top,
+                         cursor_saved_left + cursor_saved_w, cursor_saved_top + cursor_saved_h}
         : (GraphicsClip){0,0,0,0};
     int old_w = old.x2 - old.x1, old_h = old.y2 - old.y1;
     int new_w = current.x2 - current.x1, new_h = current.y2 - current.y1;
@@ -844,6 +895,7 @@ static u32 present_with_cursor(const GraphicsClip *scene, int scene_count, int f
         cursor_copy_background(cursor_saved, current, mx, my, 0);
         memcpy(cursor_new_frame, cursor_saved, (u32)new_w * (u32)new_h * sizeof(u32));
         cursor_compose_sprite(cursor_new_frame, current, mx, my, kind);
+        cursor_saved_left = current.x1; cursor_saved_top = current.y1;
         cursor_saved_x = mx; cursor_saved_y = my;
         cursor_saved_w = new_w; cursor_saved_h = new_h; cursor_saved_valid = 1;
     }
@@ -854,18 +906,56 @@ static u32 present_with_cursor(const GraphicsClip *scene, int scene_count, int f
     g_perf_stats.composed_pixels += (u32)new_w * (u32)new_h;
     g_perf_stats.effective_rects++;
     cursor_previous_x = mx; cursor_previous_y = my; cursor_previous_kind = kind;
+    cursor_previous_scale_index = g_cursor_scale_index;
     cursor_previous_valid = 1;
     return presented;
 }
 void compositor_draw_cursor(int full) {
     if (!pixels || !wallpaper) return;
     if (!full && cursor_previous_valid && cursor_previous_x == input_pointer_x() &&
-        cursor_previous_y == input_pointer_y() && cursor_previous_kind == input_cursor_kind()) return;
+        cursor_previous_y == input_pointer_y() && cursor_previous_kind == input_cursor_kind() &&
+        cursor_previous_scale_index == g_cursor_scale_index) return;
     perf_begin();
     u32 count = present_with_cursor(0, 0, full);
     if (count) g_perf_stats.cursor_frames++;
     wm_perf_frame_end(0, perf_paint_us, perf_present_us, 0, count);
 }
+
+int compositor_cursor_size(void) { return cursor_percents[g_cursor_scale_index]; }
+void compositor_set_cursor_size(int percent) {
+    for (int i = 0; i < 4; ++i) {
+        if (cursor_sides[i] > CURSOR_SIDE) continue;
+        if (cursor_percents[i] == percent && i != g_cursor_scale_index) {
+            g_cursor_scale_index = i;
+            compositor_draw_cursor(1);
+            return;
+        }
+    }
+}
+
+#ifndef POLLIK_INSTALL_MEDIA
+#define PERF_OVERLAY_X 8
+#define PERF_OVERLAY_Y 35
+#define PERF_OVERLAY_W 660
+#define PERF_OVERLAY_H 58
+static void draw_perf_overlay(void) {
+    char summary[256];
+    wm_perf_summary(summary, sizeof(summary));
+    rect(PERF_OVERLAY_X, PERF_OVERLAY_Y, PERF_OVERLAY_W, PERF_OVERLAY_H, 0x161420);
+    int line = 0;
+    char *start = summary;
+    for (char *p = summary; ; ++p) {
+        if (*p != '\n' && *p != 0) continue;
+        char end = *p;
+        *p = 0;
+        text(PERF_OVERLAY_X + 6, PERF_OVERLAY_Y + 3 + line * 14,
+             start, line ? 0xd8d4e5 : 0xffffff, 1);
+        if (!end || ++line == 4) break;
+        start = p + 1;
+    }
+}
+#endif
+
 void compositor_invalidate_dock(void) {
     dock_background_valid = 0;
     request_scene_redraw();
@@ -965,13 +1055,26 @@ void compositor_paint(int full) {
         if (!region_count) full = 1;
     }
     if (full == 2) {
+        /* Blur outputs within radius R depend on backdrop pixels that may
+         * themselves be outside the damage. Rebuild the backdrop dependency
+         * halo too, so those samples are raw scene pixels instead of the
+         * previously glass-composited frame. */
+#ifdef POLLIK_COMPOSITOR_LEGACY_DAMAGE
+        int blur_halo = DOCK_GLASS_BLUR_RADIUS;
+#else
+        int blur_halo = DOCK_GLASS_BLUR_RADIUS * 2;
+#endif
         for (int i = 0; i < region_count; i++) {
-            regions[i].x1 -= DOCK_GLASS_BLUR_RADIUS;
-            regions[i].y1 -= DOCK_GLASS_BLUR_RADIUS;
-            regions[i].x2 += DOCK_GLASS_BLUR_RADIUS;
-            regions[i].y2 += DOCK_GLASS_BLUR_RADIUS;
+            regions[i].x1 -= blur_halo;
+            regions[i].y1 -= blur_halo;
+            regions[i].x2 += blur_halo;
+            regions[i].y2 += blur_halo;
         }
+#ifndef POLLIK_COMPOSITOR_LEGACY_DAMAGE
+        region_count = merge_damage_regions(regions, region_count);
+#endif
     }
+    if (full == 2 && !dock_background_valid) full = 1;
     if (full == 1) {
         regions[0] = (GraphicsClip){0, 0, width, height};
         region_count = 1;
@@ -1012,17 +1115,44 @@ void compositor_paint(int full) {
         }
         draw_snap_preview();
         if (dock_is_visible() && (full == 1 || clip.y2 > height - 145)) {
+#ifndef POLLIK_COMPOSITOR_LEGACY_DAMAGE
+            GraphicsClip glass_clip = clip;
+            if (full == 2) {
+                glass_clip = (GraphicsClip){regions[r].x1 + DOCK_GLASS_BLUR_RADIUS,
+                    regions[r].y1 + DOCK_GLASS_BLUR_RADIUS,
+                    regions[r].x2 - DOCK_GLASS_BLUR_RADIUS,
+                    regions[r].y2 - DOCK_GLASS_BLUR_RADIUS};
+                glass_clip = clip_intersection(glass_clip, (GraphicsClip){0, 0, width, height});
+            }
+            graphics_set_clip(glass_clip);
+#endif
             dock_glass_blur_backdrop(width, height);
             dock_draw_pill();
+#ifndef POLLIK_COMPOSITOR_LEGACY_DAMAGE
+            if (full == 2) {
+                GraphicsClip cache_bounds = {dock_x, dock_y, dock_x + dock_w, dock_y + dock_h};
+                GraphicsClip old_ring = clip_intersection(clip, cache_bounds);
+                for (int y = old_ring.y1; y < old_ring.y2; y++)
+                    for (int x = old_ring.x1; x < old_ring.x2; x++)
+                        if (x < glass_clip.x1 || x >= glass_clip.x2 ||
+                            y < glass_clip.y1 || y >= glass_clip.y2)
+                            pixels[y * width + x] = dock_background[(y - dock_y) * DOCK_CACHE_WIDTH + x - dock_x];
+            }
+#endif
             /* Preserve the underlying Dock background separately for the next
              * hover frame; this clip may cover only a small section of it. */
             GraphicsClip cache_clip = clip_intersection(graphics_get_clip(),
                 (GraphicsClip){dock_x, dock_y, dock_x + dock_w, dock_y + dock_h});
-            for (int y = cache_clip.y1; y < cache_clip.y2; y++)
-                memcpy(dock_background + (y - dock_y) * DOCK_CACHE_WIDTH + cache_clip.x1 - dock_x,
-                       pixels + y * width + cache_clip.x1,
-                       (u32)(cache_clip.x2 - cache_clip.x1) * 4);
+            if (cache_clip.x1 < cache_clip.x2 && cache_clip.y1 < cache_clip.y2) {
+                for (int y = cache_clip.y1; y < cache_clip.y2; y++)
+                    memcpy(dock_background + (y - dock_y) * DOCK_CACHE_WIDTH + cache_clip.x1 - dock_x,
+                           pixels + y * width + cache_clip.x1,
+                           (u32)(cache_clip.x2 - cache_clip.x1) * 4);
+            }
             if (full == 1) dock_background_valid = 1;
+#ifndef POLLIK_COMPOSITOR_LEGACY_DAMAGE
+            graphics_set_clip(clip);
+#endif
             dock_draw_content();
         }
         if (g_active_dialog.active) ui_draw_dialog();
@@ -1031,7 +1161,13 @@ void compositor_paint(int full) {
         desktop_draw_overlays();
         auth_render(width, height);
         composed_pixels += (clip.x2 - clip.x1) * (clip.y2 - clip.y1);
+        g_perf_stats.composed_pixels = (u32)composed_pixels;
         g_perf_stats.effective_rects++;
+#ifndef POLLIK_INSTALL_MEDIA
+        if (wm_perf_overlay_is_enabled() && clip.x1 < PERF_OVERLAY_X + PERF_OVERLAY_W &&
+            clip.x2 > PERF_OVERLAY_X && clip.y1 < PERF_OVERLAY_Y + PERF_OVERLAY_H &&
+            clip.y2 > PERF_OVERLAY_Y) draw_perf_overlay();
+#endif
     }
     g_perf_stats.composed_pixels = (u32)composed_pixels;
     u32 pix_pres = present_with_cursor(regions, region_count, 0);

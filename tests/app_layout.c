@@ -99,6 +99,14 @@ int app_host_sound_muted(void) { return 0; }
 void app_host_set_sound_muted(int n) { (void)n; }
 u32 app_host_sound_freq(void) { return 880; }
 void app_host_set_sound_freq(u32 n) { (void)n; }
+int app_host_wallpaper_count(void) { return 0; }
+const char *app_host_wallpaper_name(int index) { (void)index; return ""; }
+const char *app_host_selected_wallpaper(void) { return ""; }
+int app_host_set_wallpaper(int index) { (void)index; return 0; }
+int app_host_pointer_acceleration(void) { return 1; }
+void app_host_set_pointer_acceleration(int enabled) { (void)enabled; }
+int app_host_cursor_size(void) { return 100; }
+void app_host_set_cursor_size(int percent) { (void)percent; }
 int audio_is_available(void) { return 0; }
 u8 audio_get_volume(void) { return 50; }
 void audio_set_volume(u8 v) { (void)v; }

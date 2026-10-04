@@ -10,7 +10,8 @@ with socket.socket() as reserve:
 log = build / 'display-test.log'
 log.write_text('')
 data = build / 'display-test-data.img'
-data.write_bytes(bytes(4 * 1024 * 1024))
+from gui_fixture import create_gui_disk, finish_setup
+create_gui_disk(data)
 process = subprocess.Popen([
     'qemu-system-x86_64', '-machine', 'pc', '-cpu', 'max', '-m', '2G',
     '-device', 'VGA,vgamem_mb=32', '-display', 'none',
@@ -48,6 +49,7 @@ try:
     while 'desktop ready' not in log.read_text():
         assert time.monotonic()<deadline, log.read_text()
         time.sleep(.1)
+    finish_setup(qmp, log)
     desktop = shot('display-desktop')
     assert resolution.replace('x',' ').encode() in desktop[:50]
     assert 'GFX resolution: '+resolution in log.read_text()

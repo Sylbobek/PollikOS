@@ -23,6 +23,18 @@ void js_dispatch_event(DomNode *n, const char *s) {(void)n;(void)s;CHECK(!in_ser
 void js_set_event_pos(int x, int y) {(void)x;(void)y;}
 void js_set_event_key(int k) {(void)k;}
 void js_service_tasks(void) {}
+/* This transaction harness deliberately mocks raster/media services. Text
+ * selection and animated media are covered by the QEMU browser harness. */
+int browser_text_offset_at(DomNode *node,int x,int y) {
+    (void)x;(void)y;CHECK(!node);return 0;
+}
+int browser_advance_media(DomNode *node) {
+    for (;node;node=node->next_sibling) {
+        CHECK(!node->gif);
+        browser_advance_media(node->first_child);
+    }
+    return 0; /* HTTP fixture has no images; do not invent media progress. */
+}
 int js_has_pending_tasks(void) {return 0;}
 void browser_load_images(DomNode *n,const char *s) {(void)n;(void)s;browser_work_checkpoint();}
 void render_dom(DomNode *n,int x,int y,int w,int h,int scroll) {
@@ -100,6 +112,9 @@ int http_get(const char *url,HttpResponse *r) {
     if(fail_http){r->error=3;return 0;}
     const char page[]="<html><head><title>Native PASS</title><style>p {color:red;}</style></head><body><p>Safe cooperative load</p></body></html>";
     r->body_len=sizeof(page)-1;r->status_code=200;r->body=kmalloc(sizeof(page));memcpy(r->body,page,sizeof(page));return 1;
+}
+int http_get_timeout(const char *url,HttpResponse *r,u32 timeout) {
+    CHECK(timeout>0);return http_get(url,r);
 }
 static void check_loaded(void) {
     CHECK(!g_browser.is_loading && !g_browser.has_pending_navigation);

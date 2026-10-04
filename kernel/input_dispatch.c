@@ -300,6 +300,13 @@ static void key(u8 code) {
         return;
     }
     if (code & 128) return;
+#ifndef POLLIK_INSTALL_MEDIA
+    if (code == 88) { /* F12 toggles the compositor timing overlay. */
+        wm_perf_overlay_toggle();
+        request_partial_redraw(8, 35, 660, 58);
+        return;
+    }
+#endif
     if (shell.alttab_open && code == 1) { shell.alttab_open = 0; request_scene_redraw(); return; }
     if (alt_held && code == 62) {
         shell.alttab_open = 0;

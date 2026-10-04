@@ -14,8 +14,8 @@ with socket.socket() as reserve:
 log = BUILD / "browser-e2e.log"
 log.write_text("")
 data_disk = BUILD / "browser-e2e-data.img"
-from format_pollikfs2 import format_disk
-format_disk(data_disk, total_size_mb=40)
+from gui_fixture import create_gui_disk
+create_gui_disk(data_disk)
 process = subprocess.Popen([
     "qemu-system-x86_64", "-machine", "pc", "-cpu", "max", "-rtc", "base=utc", "-m", "2G", "-vga", "std",
     "-drive", f"format=raw,file={BUILD / os.environ.get('POLLIK_TEST_IMAGE', 'PollikOS-Alpha.img')},if=ide,index=0,snapshot=on",

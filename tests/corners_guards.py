@@ -22,11 +22,15 @@ with socket.socket() as reserve:
     port = reserve.getsockname()[1]
 log = BUILD / f'corners-guards-{args.resolution}.log'
 log.write_text('')
+from gui_fixture import create_gui_disk, finish_setup
+data = BUILD / 'corners-guards-data.img'
+create_gui_disk(data)
 proc = subprocess.Popen([
     'qemu-system-x86_64', '-machine', 'pc', '-cpu', 'max', '-m', '256M',
     '-device', 'VGA,vgamem_mb=32', '-display', 'none', '-no-reboot',
     '-fw_cfg', f'name=opt/pollikos/display,string={args.resolution}',
     '-drive', f'format=raw,file={BUILD / "PollikOS-Surface.img"},if=ide,index=0,snapshot=on',
+    '-drive', f'format=raw,file={data},if=ide,index=1',
     '-nic', 'none', '-serial', f'file:{log}',
     '-qmp', f'tcp:127.0.0.1:{port},server=on,wait=off',
 ], creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
@@ -62,6 +66,7 @@ try:
     while not log.exists() or 'desktop ready' not in log.read_text():
         assert proc.poll() is None and time.monotonic() < deadline
         time.sleep(.1)
+    finish_setup(qmp, log)
 
     def check(stage):
         qmp('stop')
@@ -77,7 +82,7 @@ try:
 
     assert f'GFX resolution: {args.resolution}' in log.read_text()
     check('boot')
-    for stage, target in [('maximized', (width - 16, height - 142)), ('restored', (680, 410))]:
+    for stage, target in [('maximized', (width, height - 128)), ('restored', (680, 410))]:
         qmp('human-monitor-command', {'command-line': 'sendkey f11'})
         deadline = time.monotonic() + 30
         while True:

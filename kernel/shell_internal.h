@@ -73,6 +73,8 @@ void compositor_prepare_wallpapers(void);
 void compositor_wallpaper_changed(void);
 void compositor_paint(int full);
 void compositor_draw_cursor(int full);
+int compositor_cursor_size(void);
+void compositor_set_cursor_size(int percent);
 void compositor_invalidate(int id);
 void compositor_invalidate_all_surfaces(void);
 /* Repaint only the given window region (used for in-window animation so the

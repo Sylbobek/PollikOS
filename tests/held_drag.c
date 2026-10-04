@@ -12,8 +12,10 @@ extern int printf(const char *, ...);
 #pragma clang diagnostic ignored "-Wint-to-pointer-cast"
 #pragma clang diagnostic ignored "-Wpointer-to-int-cast"
 #define framebuffer_present native_framebuffer_present
+#define framebuffer_present_cursor_pair native_framebuffer_present_cursor_pair
 #include "../kernel/framebuffer.c"
 #undef framebuffer_present
+#undef framebuffer_present_cursor_pair
 #include "../kernel/compositor.c"
 #pragma clang diagnostic pop
 
@@ -48,10 +50,37 @@ u32 wm_time_ms(void) { return 1000; }
 u64 wm_time_us(void) { return 1000000; }
 void wm_perf_frame_begin(void) {}
 void wm_perf_record_client_paint(void) { paints++; }
+int wm_perf_overlay_is_enabled(void) { return 0; }
+void wm_perf_summary(char *out, int capacity) { if (capacity > 0) out[0] = 0; }
 void wm_perf_frame_end(u32 a, u32 b, u32 c, int full, u32 count) {
     (void)a; (void)b; (void)c; last_full = full; last_pixels = count;
 }
 void wm_check_canaries(void) {}
+void hal_port_write16(unsigned short port, unsigned short value) { (void)port; (void)value; }
+unsigned short hal_port_read16(unsigned short port) { (void)port; return 0; }
+unsigned char hal_port_read8(unsigned short port) { (void)port; return 0; }
+void hal_cpu_halt_forever(void) { __builtin_trap(); }
+int auth_is_active(void) { return 0; }
+void auth_render(int width, int height) { (void)width; (void)height; }
+int dock_get_visible_apps(int *out_apps, int max_apps) {
+    int count = APP_COUNT < max_apps ? APP_COUNT : max_apps;
+    for (int i = 0; i < count; i++) out_apps[i] = i;
+    return count;
+}
+void desktop_items_draw(void) {}
+ThemeColors *ui_theme(void) {
+    static ThemeColors colors = {0x202020,0x303030,0x383838,0x404040,0x505050,
+        0x484848,0xffffff,0xcccccc,0xaaaaaa,0x8060ff,0x9070ff,0x8060ff,
+        0xffffff,0xff0000,0xcc0000,0x00ff00,0xffff00};
+    return &colors;
+}
+int dock_is_visible(void) { return 1; }
+int ui_is_dark(void) { return 0; }
+void ui_anim_cancel(int id) { (void)id; }
+const WindowAnim *ui_anim_get(int id) { (void)id; return 0; }
+int ui_anim_dock_is_launching(int id) { (void)id; return 0; }
+void ui_anim_update(u32 now) { (void)now; }
+int ui_anim_has_active(void) { return 0; }
 void wm_get_snap_bounds(SnapTarget target, Rect *r) { (void)target; *r = (Rect){0, 0, 512, 600}; }
 void request_scene_redraw(void) { shell.scene_dirty = 1; }
 int input_pointer_x(void) { return px; }
@@ -100,6 +129,15 @@ void framebuffer_present(const u32 *src, int x, int y, int w, int h) {
     address = (volatile u8 *)(reference_pass ? reference_lfb : hardware);
     screen_w = W; screen_h = H; stride = W * 4; bytes = 4;
     native_framebuffer_present(src, x, y, w, h);
+}
+void framebuffer_present_cursor_pair(const u32 *old_pixels, int old_x, int old_y,
+                                     int old_w, int old_h, const u32 *new_pixels,
+                                     int new_x, int new_y, int new_w, int new_h) {
+    if (!calls) calls++;
+    address = (volatile u8 *)(reference_pass ? reference_lfb : hardware);
+    screen_w = W; screen_h = H; stride = W * 4; bytes = 4;
+    native_framebuffer_present_cursor_pair(old_pixels, old_x, old_y, old_w, old_h,
+                                           new_pixels, new_x, new_y, new_w, new_h);
 }
 static int equal_pixels(const u32 *a, const u32 *b, const char *label) {
     for (int i = 0; i < N; i++) if (a[i] != b[i]) {
@@ -161,6 +199,7 @@ static int held_drag(void) {
         REQUIRE(resize_calls == old_resizes && !resize_order_errors);
         REQUIRE(compare_full());
     }
+    printf("PASS held-drag frame pixels identical to full-repaint oracle (29 positions)\n");
     /* Check the pre-icon dock cache after partial updates, without repairing it. */
     calls = 0;
     compositor_paint(0);
@@ -172,9 +211,10 @@ static int held_drag(void) {
     compositor_paint(2);
     REQUIRE(resize_calls == old_resizes + 1 && !resize_order_errors);
     REQUIRE(compare_full());
-    REQUIRE(clients[0][17 * 360 + 18] == 0xa83e3c);
-    REQUIRE(clients[0][17 * 360 + 36] == 0xad620a);
-    REQUIRE(clients[0][17 * 360 + 54] == 0x327537);
+    /* Inactive neutral controls match the pre-followup2 chrome artwork. */
+    REQUIRE(clients[0][17 * 360 + 18] == 0xb8adb5);
+    REQUIRE(clients[0][17 * 360 + 36] == 0xb8b2ad);
+    REQUIRE(clients[0][17 * 360 + 54] == 0xadb8b2);
     printf("PASS accumulated held-drag frames, shadow-only cull, dock cache, resize, dim controls\n");
     return 1;
 }

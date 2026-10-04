@@ -19,7 +19,7 @@ def main():
     command += ['tests/browser_cooperative.c', 'kernel/browser/browser_app.c',
                 'kernel/browser/html_parser.c', 'kernel/browser/css_engine.c',
                 'kernel/browser/layout.c', 'kernel/gui/browser_client.c',
-                'kernel/net/net_util.c', '-o', str(executable)]
+                'kernel/net/net_util.c', 'kernel/gui/app_edit.c', '-o', str(executable)]
     print('Compile: ' + subprocess.list2cmdline(command), flush=True)
     subprocess.run(command, cwd=ROOT, check=True)
     subprocess.run([str(executable)], cwd=ROOT, check=True)

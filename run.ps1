@@ -1,4 +1,12 @@
-param([string]$ImageName = "PollikOS-Alpha.img", [string]$Resolution = 'auto', [switch]$Fullscreen)
+param(
+    [string]$ImageName = "PollikOS-Alpha.img",
+    [string]$Resolution = 'auto',
+    [switch]$Fullscreen,
+    [ValidateSet('auto','tcg','whpx')][string]$Accel = 'auto',
+    [ValidateSet('sdl','gtk')][string]$Display = 'gtk',
+    [ValidateSet('max','qemu64')][string]$Cpu = 'max',
+    [switch]$NoLaunch
+)
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 $pendingImage = "$PSScriptRoot/build/$ImageName.pending"
@@ -14,6 +22,48 @@ if (!(Get-Command qemu-system-x86_64 -ErrorAction SilentlyContinue)) {
     if (Test-Path (Join-Path $bundledQemu 'qemu-system-x86_64.exe')) { $env:PATH = "$bundledQemu;$env:PATH" }
     else { throw 'Nie znaleziono QEMU. Dodaj qemu-system-x86_64.exe do PATH.' }
 }
+function Select-PollikAccel {
+    if ($Accel -ne 'auto') { return @($Accel, 'explicit -Accel request') }
+    try {
+        if (-not ('PollikHypervisor' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class PollikHypervisor {
+    [DllImport("WinHvPlatform.dll")]
+    public static extern int WHvGetCapability(uint code, out uint value, uint size, out uint written);
+}
+'@
+        }
+        [uint32]$present = 0; [uint32]$written = 0
+        $hr = [PollikHypervisor]::WHvGetCapability(0, [ref]$present, 4, [ref]$written)
+        if ($hr -ne 0 -or $written -ne 4 -or $present -eq 0) {
+            return @('tcg', "Windows Hypervisor Platform unavailable (HRESULT=$hr, present=$present)")
+        }
+    } catch { return @('tcg', 'Windows Hypervisor Platform unavailable: ' + $_.Exception.Message) }
+    $probeDir = Join-Path $env:TEMP ('pollikos-accel-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory $probeDir | Out-Null
+    $probeErr = Join-Path $probeDir 'stderr.txt'
+    $probeOut = Join-Path $probeDir 'stdout.txt'
+    $probeCpu = if ($script:PSBoundParameters.ContainsKey('Cpu')) { $Cpu } else { 'qemu64' }
+    $probe = Start-Process qemu-system-x86_64 -WindowStyle Hidden -PassThru -ArgumentList @(
+        '-S','-display','none','-machine','pc','-accel','whpx','-cpu',$probeCpu,'-smp','1',
+        '-m','64M','-nodefaults','-monitor','none','-serial','none') `
+        -RedirectStandardError $probeErr -RedirectStandardOutput $probeOut
+    if ($probe.WaitForExit(1200)) {
+        $detail = (Get-Content $probeErr -Raw -ErrorAction SilentlyContinue).Trim()
+        return @('tcg', "QEMU rejected WHPX (exit=$($probe.ExitCode)): $detail")
+    }
+    Stop-Process -Id $probe.Id -Force
+    return @('whpx', 'Windows Hypervisor Platform present; QEMU WHPX initialization accepted')
+}
+$accelSelection = Select-PollikAccel
+$Accel = $accelSelection[0]
+if ($Accel -eq 'whpx' -and -not $PSBoundParameters.ContainsKey('Cpu')) {
+    $Cpu = 'qemu64'
+    $accelSelection[1] += '; default CPU qemu64 (WHPX-compatible); explicit -Cpu is preserved'
+}
+Write-Host "Acceleration selected: $Accel; reason: $($accelSelection[1])"
 if (!(Test-Path "build/$ImageName") -or !(Test-Path build/PollikData.img)) { & ./build.ps1 -ImageName $ImageName }
 if ($Resolution -eq 'auto') {
     Add-Type -AssemblyName System.Windows.Forms
@@ -36,7 +86,8 @@ $screenWidth = [int]$Matches[1]; $screenHeight = [int]$Matches[2]
 if ($screenWidth -lt 1024 -or $screenWidth -gt 3440 -or $screenWidth % 8 -ne 0 -or $screenHeight -lt 720 -or $screenHeight -gt 1440) { throw 'Obslugiwany zakres: 1024x720 do 3440x1440; szerokosc podzielna przez 8.' }
 # zoom-to-fit=off makes the QEMU window track the guest mode exactly, so a warm
 # reboot (Restart) never leaves a stale, wrongly-scaled window behind.
-$displayOptions = @('-display', 'gtk,zoom-to-fit=off', '-fw_cfg', "name=opt/pollikos/display,string=$Resolution")
+$displayBackend = if ($Display -eq 'gtk') { 'gtk,zoom-to-fit=off' } else { 'sdl' }
+$displayOptions = @('-display', $displayBackend, '-fw_cfg', "name=opt/pollikos/display,string=$Resolution")
 if ($Fullscreen) { $displayOptions += '-full-screen' }
 # QEMU's dsound backend cannot always create the AC'97 capture voices
 # (ac97.pi/ac97.mc) on Windows hosts, which floods the console with
@@ -50,7 +101,7 @@ function Test-PollikAudioBackend([string]$Backend) {
     $probe = @('-S', '-display', 'none', '-machine', 'pc',
                '-audiodev', "$Backend,id=probe", '-device', 'AC97,audiodev=probe',
                '-monitor', 'none', '-serial', 'none')
-    $proc = Start-Process qemu-system-x86_64 -ArgumentList $probe -PassThru `
+    $proc = Start-Process qemu-system-x86_64 -WindowStyle Hidden -ArgumentList $probe -PassThru `
         -RedirectStandardError $errFile -RedirectStandardOutput $outFile
     Start-Sleep -Milliseconds 900
     if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
@@ -62,7 +113,17 @@ $audioBackend = 'none'
 foreach ($candidate in @('sdl', 'dsound', 'none')) {
     if (Test-PollikAudioBackend $candidate) { $audioBackend = $candidate; break }
 }
-Write-Host "PollikOS: $Resolution (120 Hz / 120 FPS), 2 GiB RAM"
+Write-Host "PollikOS: $Resolution (120 Hz / 120 FPS), 2 GiB RAM; accel=$Accel; display=$Display; cpu=$Cpu; smp=1"
 Write-Host "Audio backend: $audioBackend"
-& qemu-system-x86_64 -name 'Pollik OS v0.1 Alpha' -machine pc -cpu max -rtc base=utc -m 2G -device VGA,vgamem_mb=32,refresh_rate=120 @displayOptions -drive "format=raw,file=build/$ImageName,if=ide,index=0" -drive 'format=raw,file=build/PollikData.img,if=ide,index=1' -netdev 'user,id=net0' -device 'rtl8139,netdev=net0' -audiodev "$audioBackend,id=snd0" -device 'AC97,audiodev=snd0' -serial 'file:build/serial.log'
+$qemuArgs = @('-name','Pollik OS v0.1 Alpha','-machine','pc','-accel',$Accel,'-cpu',$Cpu,'-smp','1',
+    '-rtc','base=utc','-m','2G','-device','VGA,vgamem_mb=32,refresh_rate=120') + $displayOptions + @(
+    '-drive',"format=raw,file=build/$ImageName,if=ide,index=0",
+    '-drive','format=raw,file=build/PollikData.img,if=ide,index=1',
+    '-netdev','user,id=net0','-device','rtl8139,netdev=net0',
+    '-audiodev',"$audioBackend,id=snd0",'-device','AC97,audiodev=snd0',
+    '-serial','file:build/serial.log')
+$quotedArgs = $qemuArgs | ForEach-Object { if ($_ -match '[\s,]') { '"' + $_ + '"' } else { $_ } }
+Write-Host ('QEMU command: qemu-system-x86_64 ' + ($quotedArgs -join ' '))
+if ($NoLaunch) { exit 0 }
+& qemu-system-x86_64 @qemuArgs
 if ($LASTEXITCODE -ne 0) { throw "QEMU zakonczyl prace z bledem $LASTEXITCODE. Zamknij inne okno PollikOS, jezeli dysk jest zajety." }

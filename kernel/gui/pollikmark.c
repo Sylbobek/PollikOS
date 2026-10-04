@@ -46,18 +46,27 @@ static const u32 mib[5]={1,4,8,16,32};
 static const u8 levels[8]={1,4,1,3,5,3,1,30};
 /* Publicly named read-only probe symbols, not a guest control interface.
  * status: 0 absent,1 completed,2 cancelled/deadline/sample cap,3 no memory.
- * layout is all u32 for stable native/QEMU inspection. */
-typedef struct {
-    u32 status,n,mean_us,min_us,max_us,low_fps,fps,rate,work_us,units;
+ * Internal read-only probe: packed 68 bytes, with 64-bit rate and units.
+ * This is not a syscall or on-disk structure. */
+typedef struct __attribute__((packed)) {
+    u32 status,n,mean_us,min_us,max_us,low_fps,fps;
+    u64 rate;
+    u32 work_us;
+    u64 units;
     u32 paint_us,compose_us,present_us,total_us,alloc_us;
 } MarkResult;
 MarkResult pollikmark_results[8][30];
+/* Test-only distribution from completed compositor frames in workload 6:
+ * [sample count, mean us, p95 us, max us]. */
+u32 pollikmark_compositor_frame_stats[4];
+#define PM_COMPOSITOR_FRAME_SAMPLE_CAP 512
+static u32 compositor_frame_samples[PM_COMPOSITOR_FRAME_SAMPLE_CAP];
 /* Separate probe ABI: successful raster writes and writes/s, not clear pixels. */
 struct { u32 pixels, rate; } pollikmark_raster[8][30];
 static u32 frame_pixels, raster_pixels;
 u32 pollikmark_intervals[PM_INTERVAL_CAP];
 /* Parallel percentile probe: [test][level][0]=p95, [1]=p99 microseconds.
- * Kept outside MarkResult so the existing 15-word probe ABI is unchanged. */
+ * Separate from the internal MarkResult throughput probe. */
 u32 pollikmark_percentiles[8][30][2];
 static MarkResult live_result;
 u32 pollikmark_running,pollikmark_test,pollikmark_level,pollikmark_completed;
@@ -69,7 +78,8 @@ static u32 *front;
 static u32 surface_bytes, front_valid;
 static u8 *mem_a,*mem_b;
 static u32 memory_bytes, memory_offset;
-static u32 phase, item, row, clear_offset, frame_units;
+static u32 phase, item, row, clear_offset;
+static u64 frame_units;
 static u32 n, minimum, maximum, slow[PM_SLOW_MAX], work_us;
 static u64 level_start, iteration_start, sum_us, units, measured_us, last_ui;
 static AppPerfView baseline;
@@ -183,12 +193,12 @@ static int pm_put64(char *b,int k,u64 v) {
     while(i)b[k++]=t[--i];
     return k;
 }
-static void pm_short(char *b,u32 v) {
+static void pm_short(char *b,u64 v) {
     int k=0;
-    if(v>=1000000000u){k=pm_put(b,k,v/1000000000u);b[k++]='.';k=pm_put(b,k,(v/100000000u)%10u);b[k++]='G';}
-    else if(v>=1000000u){k=pm_put(b,k,v/1000000u);b[k++]='.';k=pm_put(b,k,(v/100000u)%10u);b[k++]='M';}
-    else if(v>=1000u){k=pm_put(b,k,v/1000u);b[k++]='.';k=pm_put(b,k,(v/100u)%10u);b[k++]='K';}
-    else k=pm_put(b,k,v);
+    if(v>=1000000000u){u64 whole=gfx_ratio64(v,1000000000u);k=pm_put64(b,k,whole);b[k++]='.';k=pm_put(b,k,(u32)(gfx_ratio64(v,100000000u)-whole*10u));b[k++]='G';}
+    else if(v>=1000000u){k=pm_put64(b,k,gfx_ratio64(v,1000000u));b[k++]='.';k=pm_put(b,k,(u32)gfx_ratio64(v,100000u)%10u);b[k++]='M';}
+    else if(v>=1000u){k=pm_put64(b,k,gfx_ratio64(v,1000u));b[k++]='.';k=pm_put(b,k,(u32)gfx_ratio64(v,100u)%10u);b[k++]='K';}
+    else k=pm_put64(b,k,v);
     b[k]=0;
 }
 static void pm_card(PmRect r,u32 bg,u32 border) {
@@ -218,14 +228,14 @@ static u32 pm_test_points(int t) {
     return count?gfx_ratio(total,count):0;
 }
 /* Mean raw throughput of completed levels of one test (for the summary table). */
-static u32 pm_test_rate(int t) {
+static u64 pm_test_rate(int t) {
     u64 total=0;u32 count=0;
     for(u32 l=0;l<levels[t];l++) {
         MarkResult *r=&pollikmark_results[t][l];
         if(r->status!=1||(t==7&&l%6==5))continue;
         total+=r->rate;count++;
     }
-    return count?(u32)gfx_ratio(total,(u64)count):0;
+    return count?gfx_ratio64(total,count):0;
 }
 static u32 pm_test_levels_done(int t) {
     u32 done=0;
@@ -471,6 +481,9 @@ static void reset_samples(void) {
     phase=item=row=clear_offset=memory_offset=frame_units=progress_ms=0;
     level_start=iteration_start=app_host_time_us();
     app_host_metrics(&baseline);
+    if(pollikmark_test==6) {
+        memset(pollikmark_compositor_frame_stats,0,sizeof(pollikmark_compositor_frame_stats));
+    }
 }
 static void sample(u32 interval) {
     if(!interval)interval=1;
@@ -482,6 +495,27 @@ static void sample(u32 interval) {
         u32 swap=slow[i];slow[i]=interval;interval=swap;
     }
 }
+static void compositor_commit_frame_stats(u32 after_frame,u32 count) {
+    u32 nframes=app_host_copy_frame_times(after_frame,count,compositor_frame_samples,
+                                          PM_COMPOSITOR_FRAME_SAMPLE_CAP);
+    if(!nframes)return;
+    u64 sum=0;
+    for(u32 i=0;i<nframes;i++) {
+        u32 value=compositor_frame_samples[i],j=i;
+        while(j&&compositor_frame_samples[j-1]>value) {
+            compositor_frame_samples[j]=compositor_frame_samples[j-1];j--;
+        }
+        compositor_frame_samples[j]=value;
+        sum+=value;
+    }
+    u32 rank=(95u*nframes+99u)/100u;
+    if(rank<1)rank=1;
+    if(rank>nframes)rank=nframes;
+    pollikmark_compositor_frame_stats[0]=nframes;
+    pollikmark_compositor_frame_stats[1]=gfx_ratio(sum,nframes);
+    pollikmark_compositor_frame_stats[2]=compositor_frame_samples[rank-1];
+    pollikmark_compositor_frame_stats[3]=compositor_frame_samples[nframes-1];
+}
 static void snapshot(MarkResult *r,u32 status) {
     r->status=status;r->n=n;r->min_us=n?minimum:0;r->max_us=maximum;
     r->mean_us=gfx_ratio(sum_us,n);r->fps=gfx_ratio((u64)n*1000000,(u32)sum_us);
@@ -491,7 +525,7 @@ static void snapshot(MarkResult *r,u32 status) {
     r->low_fps=gfx_ratio((u64)k*1000000,total);
     /* Real order statistics: slow[] is the descending top slice, so the
      * ascending p95/p99 ranks map to slow[n - rank]. Exposed separately to
-     * keep the 15-word MarkResult ABI intact. */
+     * keep the percentile samples separate from throughput results. */
     u32 p95=0,p99=0;
     if(n) {
         u32 r95=(95u*n+99u)/100u; if(r95<1)r95=1; if(r95>n)r95=n;
@@ -503,18 +537,20 @@ static void snapshot(MarkResult *r,u32 status) {
     }
     pollikmark_percentiles[pollikmark_test][pollikmark_level][0]=p95;
     pollikmark_percentiles[pollikmark_test][pollikmark_level][1]=p99;
-    r->work_us=(u32)measured_us;r->units=(u32)units;
-    r->rate=gfx_ratio(units*1000000,(u32)measured_us);
+    r->work_us=(u32)measured_us;r->units=units;
+    r->rate=gfx_ratio64(units*1000000,(u32)measured_us);
     pollikmark_raster[pollikmark_test][pollikmark_level].pixels=raster_pixels;
     pollikmark_raster[pollikmark_test][pollikmark_level].rate=gfx_ratio((u64)raster_pixels*1000000,(u32)measured_us);
     if(pollikmark_test==6) {
+        u32 frames=0;
         AppPerfView end;app_host_metrics(&end);
-        u32 frames=end.frames-baseline.frames;
-        r->n=frames;r->fps=gfx_ratio((u64)frames*1000000,(u32)(app_host_time_us()-level_start));
+        frames=end.frames-baseline.frames;
         r->paint_us=gfx_ratio(end.paint_us-baseline.paint_us,frames);
         r->compose_us=gfx_ratio(end.compose_us-baseline.compose_us,frames);
         r->present_us=gfx_ratio(end.present_us-baseline.present_us,frames);
         r->total_us=gfx_ratio(end.total_us-baseline.total_us,frames);
+        if(status) compositor_commit_frame_stats(baseline.frames,frames);
+        r->n=frames;r->fps=gfx_ratio((u64)frames*1000000,(u32)(app_host_time_us()-level_start));
         r->rate=r->fps;r->low_fps=0;r->mean_us=r->min_us=r->max_us=0;
         pollikmark_percentiles[6][pollikmark_level][0]=0;
         pollikmark_percentiles[6][pollikmark_level][1]=0;
@@ -717,8 +753,8 @@ static void pm_draw_graph(PmTheme th,PmRect r) {
         pm_text(gx+4+pm_tw("max ",1),gy+2,b,th.text,1);
     } else pm_center(gx,gy+gh/2-8,gw,"no samples yet",th.muted,1);
 }
-static void pm_stat_line(PmTheme th,int x,int y,int w,const char *label,u32 v) {
-    char b[16];number(b,v);
+static void pm_stat_line(PmTheme th,int x,int y,int w,const char *label,u64 v) {
+    char b[24];int length=pm_put64(b,0,v);b[length]=0;
     int label_width=w-pm_tw(b,1)-8;
     if(label_width<0)return;
     pm_text_clip(x,y,label_width,label,th.muted,1);

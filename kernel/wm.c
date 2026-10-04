@@ -44,6 +44,9 @@ static int g_full_redraw = 1;
 
 Animation g_animations[NUM_APPS];
 GuiPerfStats g_perf_stats;
+#ifndef POLLIK_INSTALL_MEDIA
+static int g_perf_overlay_enabled;
+#endif
 
 /* Minimize is visibility-only: keep its snapshot separate from normal restore. */
 static Rect g_minimized_rect[NUM_APPS];
@@ -964,6 +967,20 @@ void wm_perf_record_input(int is_coalesced) {
     (void)is_coalesced;
 }
 
+void wm_perf_record_phase_times(u32 app_update_us, u32 input_us, u32 layout_us) {
+    g_perf_stats.app_update_us = app_update_us;
+    g_perf_stats.input_us = input_us;
+    g_perf_stats.layout_us = layout_us;
+}
+
+#ifdef POLLIK_INSTALL_MEDIA
+int wm_perf_overlay_is_enabled(void) { return 0; }
+int wm_perf_overlay_toggle(void) { return 0; }
+#else
+int wm_perf_overlay_is_enabled(void) { return g_perf_overlay_enabled; }
+int wm_perf_overlay_toggle(void) { return g_perf_overlay_enabled = !g_perf_overlay_enabled; }
+#endif
+
 void wm_perf_record_client_paint(void) {
     g_sec_client_paints++;
     g_perf_stats.client_paint_count++;
@@ -996,6 +1013,27 @@ static u32 perf_history(const u32 *history, u32 count, u32 *sorted) {
         sum += v;
     }
     return count ? (u32)perf_div(sum, count) : 0;
+}
+
+u32 wm_perf_copy_frame_times(u32 after_frame, u32 count, u32 *out, u32 capacity) {
+    if (!out || !capacity || !count) return 0;
+    u32 end = after_frame + count;
+    if (end > g_perf_stats.frame_count) end = g_perf_stats.frame_count;
+    u32 first = after_frame + 1;
+    u32 oldest = g_perf_stats.frame_count > PERF_HISTORY_SIZE
+        ? g_perf_stats.frame_count - PERF_HISTORY_SIZE + 1 : 1;
+    if (first < oldest) first = oldest;
+    if (end < first) return 0;
+    u32 available = end - first + 1;
+    if (available > capacity) {
+        first = end - capacity + 1;
+        available = capacity;
+    }
+    for (u32 i = 0; i < available; ++i) {
+        u32 frame = first + i;
+        out[i] = g_frame_time_history[(frame - 1) % PERF_HISTORY_SIZE];
+    }
+    return available;
 }
 
 void wm_perf_snapshot(GuiPerfStats *out) {
@@ -1037,10 +1075,10 @@ void wm_perf_frame_end(u32 layout_us, u32 paint_us, u32 present_us, int is_full,
     g_sec_pixels_composed += g_perf_stats.composed_pixels;
     g_perf_stats.elapsed_us = now;
     g_perf_stats.total_us = frame_us;
-    g_perf_stats.layout_us = layout_us;
+    if (layout_us) g_perf_stats.layout_us = layout_us;
     g_perf_stats.paint_us = paint_us;
     g_perf_stats.present_us = present_us;
-    g_perf_stats.compose_us = frame_us - paint_us - present_us - layout_us;
+    g_perf_stats.compose_us = frame_us - paint_us - present_us;
     g_perf_stats.presented_pixels = pixels_presented;
     g_perf_stats.total_time_us += frame_us;
     g_perf_stats.paint_time_us += paint_us;
@@ -1069,14 +1107,16 @@ void wm_perf_summary(char *out, int max_len) {
     if (!out || max_len <= 0) return;
     GuiPerfStats s;
     wm_perf_snapshot(&s);
-    /* Fixed labels, unsigned decimal, bounded including NUL even for size 1.
-     * At most 216 bytes for UINT32_MAX values; terminal host owns its buffer. */
-    const char *labels[] = {"FPS: ", " render/s: ", "\nAvg us: ", " p95: ", " p99: ",
-                            "\nPaint: ", " compose: ", " present: ", " total: ", "\n1% low: "};
-    u32 values[] = {s.fps, s.render_fps, s.avg_frame_us, s.p95_frame_us, s.p99_frame_us,
-                    s.paint_us, s.compose_us, s.present_us, s.total_us, s.low_1pct_fps};
+    /* Fixed labels and unsigned decimal; bounded including NUL for size 1.
+     * Latest stage phase values are wall time, not exclusive CPU time. */
+    const char *labels[] = {"FPS: ", " render/s: ", "\nFrame ms: ", " avg: ", " p95: ",
+        " p99: ", " dirty px: ", "\nInput us: ", " app: ", " layout: ",
+        " draw: ", " compose: ", " LFB: "};
+    u32 values[] = {s.fps, s.render_fps, s.total_us / 1000u, s.avg_frame_us / 1000u,
+        s.p95_frame_us / 1000u, s.p99_frame_us / 1000u, s.composed_pixels,
+        s.input_us, s.app_update_us, s.layout_us, s.paint_us, s.compose_us, s.present_us};
     int pos = 0;
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < 13; i++) {
         for (const char *p = labels[i]; *p && pos < max_len - 1; p++) out[pos++] = *p;
         char digits[10];
         int n = 0;

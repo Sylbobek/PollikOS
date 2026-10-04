@@ -185,6 +185,22 @@ unsigned long long hal_read_tsc(void) {
 
 unsigned long long hal_read_tsc_serialized(void) {
     unsigned int low, high;
+#ifndef POLLIK_TSC_FORCE_CPUID
+    /* CPUID serializes the timestamp, but forces a VM exit on several hosts.
+     * LFENCE;RDTSC has the ordering needed by this timer and is much cheaper.
+     * Keep CPUID as the runtime fallback for CPUs without SSE2 and as a
+     * compile-time selectable reference path for performance comparisons. */
+    static unsigned char tsc_lfence_state;
+    if (!tsc_lfence_state) {
+        unsigned int a, b, c, d;
+        hal_cpuid(1, 0, &a, &b, &c, &d);
+        tsc_lfence_state = (d & (1u << 26)) ? 1 : 2;
+    }
+    if (tsc_lfence_state == 1) {
+        __asm__ volatile("lfence; rdtsc" : "=a"(low), "=d"(high) :: "memory");
+        return ((unsigned long long)high << 32) | low;
+    }
+#endif
 #if defined(__x86_64__)
     __asm__ volatile("cpuid; rdtsc" : "=a"(low), "=d"(high) : "a"(0)
                      : "rbx", "rcx", "memory");

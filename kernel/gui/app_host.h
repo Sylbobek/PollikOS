@@ -56,6 +56,8 @@ const char *app_host_selected_wallpaper(void);
 int app_host_set_wallpaper(int index);
 int app_host_pointer_acceleration(void);
 void app_host_set_pointer_acceleration(int enabled);
+int app_host_cursor_size(void);
+void app_host_set_cursor_size(int percent);
 void app_host_stop_minimize(void);
 void app_host_power(int reboot);
 void app_host_perf_summary(char *out, int capacity);
@@ -67,6 +69,7 @@ typedef struct {
 } AppPerfView;
 u64 app_host_time_us(void);
 void app_host_metrics(AppPerfView *out);
+u32 app_host_copy_frame_times(u32 after_frame, u32 count, u32 *out, u32 capacity);
 u32 app_host_free_bytes(void);
 void *app_host_alloc(u32 bytes);
 void app_host_free(void *p, u32 bytes);

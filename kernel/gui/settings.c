@@ -248,6 +248,18 @@ void settings_render(int width, int height, int active) {
         roundrect(cx + 14, 384, 146, 24, 7, accel ? acc : (dark ? 0x161a26 : 0xe9e1f3));
         centered(cx + 14, 390, 146, accel ? "Modest: Enabled" : "Disabled", accel ? 0xffffff : l.text_body, 1);
 
+        AppRect cursor_card = {cx, 426, cw, 64};
+        draw_card(cursor_card, l.bg_card, l.border_card, 12);
+        text(cx + 14, 434, "Cursor size", l.text_head, 1);
+        const int cursor_sizes[4] = {100, 125, 150, 200};
+        const char *cursor_labels[4] = {"100%", "125%", "150%", "200%"};
+        for (int i = 0; i < 4; ++i) {
+            int selected = app_host_cursor_size() == cursor_sizes[i];
+            int bx = cx + 14 + i * 72;
+            roundrect(bx, 456, 64, 26, 7, selected ? acc : (dark ? 0x161a26 : 0xe9e1f3));
+            centered(bx, 462, 64, cursor_labels[i], selected ? 0xffffff : l.text_body, 1);
+        }
+
     } else if (g_settings_tab == TAB_DISPLAY) {
         text(cx, 68, "View display resolution, color profile and graphics pipeline stats.", l.text_muted, 1);
 
@@ -491,6 +503,16 @@ void settings_click(int x, int y) {
         if (x >= cx + 14 && x <= cx + 160 && y >= 384 && y <= 408) {
             app_host_set_pointer_acceleration(!app_host_pointer_acceleration());
             app_host_invalidate(APP_SETTINGS);
+        }
+        if (y >= 456 && y < 482) {
+            const int cursor_sizes[4] = {100, 125, 150, 200};
+            for (int i = 0; i < 4; ++i) {
+                int bx = cx + 14 + i * 72;
+                if (x >= bx && x < bx + 64) {
+                    app_host_set_cursor_size(cursor_sizes[i]);
+                    app_host_invalidate(APP_SETTINGS);
+                }
+            }
         }
     } else if (g_settings_tab == TAB_DISPLAY) {
         /* 120 Hz: cx + 14, 252, 135, 26 */

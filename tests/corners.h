@@ -24,9 +24,10 @@ static int corner_pixels(void) {
     static const GraphicsClip clips[] = {{0,0,W,H},{43,52,134,144}};
     int partial = 0, opaque_black = 0, transparent = 0;
     Window *w = &g_windows[1];
-    w->width = 100; w->height = 100; w->state = WINDOW_STATE_MAXIMIZED;
-    minimizing_app = -1;
-    REQUIRE(render_window_to_surface(1, 1));
+    /* Rounded, without the normal-window shadow contaminating the AA oracle.
+     * Maximized square geometry is tested separately below. */
+    w->width = 100; w->height = 100; w->state = WINDOW_STATE_SNAPPED;
+    REQUIRE(render_window_to_surface(1, 1, 0));
     /* Real cache, not preblended black or guard colors, in ALL four corners. */
     for (int y = 0; y < 12; y++) for (int x = 0; x < 12; x++) {
         REQUIRE(clients[1][y*100+x] == 0xf2eff6);
@@ -63,11 +64,18 @@ static int corner_pixels(void) {
         }
     }
     REQUIRE(partial > 0 && transparent > 0 && opaque_black > 0);
+    w->state = WINDOW_STATE_MAXIMIZED;
+    w->x = 40; w->y = 50;
+    for (int i = 0; i < N; i++) scene[i] = bg;
+    set_draw_target(scene, W, H, W);
+    compose_window_surface(1, 1);
+    for (int y = 0; y < 100; y++) for (int x = 0; x < 100; x++)
+        REQUIRE(scene[(y+50)*W+x+40] == (y < 50 ? 0xf2eff6 : 0));
     /* Focus/content-only repaints must not notify geometry again. */
     int old_resizes = resize_calls;
-    REQUIRE(render_window_to_surface(1, 0));
+    REQUIRE(render_window_to_surface(1, 0, 0));
     compositor_invalidate(1);
-    REQUIRE(render_window_to_surface(1, 0));
+    REQUIRE(render_window_to_surface(1, 0, 0));
     REQUIRE(resize_calls == old_resizes && !resize_order_errors);
     printf("PASS independent four-corner RGB/AA, no canary RGB, opaque black, all screen edges/scissors, resize-before-render\n");
     return 1;

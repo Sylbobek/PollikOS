@@ -242,10 +242,12 @@ typedef struct {
     u32 low_1pct_fps, slow_1pct_interval_us, render_fps;
     u32 clock_source, clock_resolution_us, tsc_khz; /* 0=PIT, 1=calibrated TSC */
     /* Effective scene/cursor clip count and area; includes clip overdraw, not
-     * per-layer blend operations. Legacy input_us/layout_us remain unmeasured
-     * (zero); coalesced_mouse_sec is zero: caller only reports motion packets. */
+     * per-layer blend operations. app_update_us, input_us and layout_us are
+     * latest phase wall times measured by desktop_poll. Coalesced mouse/sec
+     * remains zero: caller only reports motion packets. */
     u32 effective_rects, composed_pixels, presented_pixels;
     u32 cursor_frames, dock_frames, client_paint_count;
+    u32 app_update_us;
     /* u64 tail; i386 alignment 4. Cumulative counters enable stage deltas. */
     u64 elapsed_us, total_time_us, paint_time_us, compose_time_us, present_time_us;
     u64 composed_pixels_total, presented_pixels_total;
@@ -254,10 +256,14 @@ typedef struct {
 /* Single GUI-owner thread; copies stats, never exposes mutable storage to apps.
  * Snapshot computes history/rates, including zero FPS after idle. */
 void wm_perf_snapshot(GuiPerfStats *out);
+u32 wm_perf_copy_frame_times(u32 after_frame, u32 count, u32 *out, u32 capacity);
 extern GuiPerfStats g_perf_stats;
 void wm_perf_frame_begin(void);
 void wm_perf_frame_end(u32 layout_us, u32 paint_us, u32 present_us, int is_full, u32 pixels_presented);
 void wm_perf_record_input(int is_coalesced);
+void wm_perf_record_phase_times(u32 app_update_us, u32 input_us, u32 layout_us);
+int wm_perf_overlay_is_enabled(void);
+int wm_perf_overlay_toggle(void);
 void wm_perf_record_client_paint(void);
 void wm_perf_summary(char *out, int max_len);
 

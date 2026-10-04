@@ -1,5 +1,6 @@
 """Boot the real disk in QEMU and exercise PS/2 input through QMP."""
 import json
+import struct
 import pathlib
 import os
 import socket
@@ -11,7 +12,12 @@ from format_pollikfs2 import format_disk
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--notes-only', action='store_true', help='Run cursor, Terminal and Notes checks only')
+parser.add_argument('--no-wallpapers', action='store_true', help='Exercise the no-wallpaper fallback path')
+parser.add_argument('--corrupt-wallpaper', action='store_true', help='Exercise corrupt PNG fallback')
+parser.add_argument('--no-data-disk', action='store_true', help='Boot without a PollikFS data disk')
 options = parser.parse_args()
+if options.no_wallpapers and options.corrupt_wallpaper:
+    parser.error('--no-wallpapers and --corrupt-wallpaper are mutually exclusive')
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BUILD = ROOT / "build"
@@ -27,14 +33,25 @@ from pollikfs_install import PollikFsImage
 fixture_fs = PollikFsImage.load(data_disk)
 fixture_fs.install_file("/home/test.pol", (BUILD / "hello.elf").read_bytes())
 fixture_fs.save(data_disk)
-process = subprocess.Popen([
+sys.path.insert(0, str(ROOT / "tools"))
+from sync_system_files import sync as install_wallpapers
+if not options.no_wallpapers:
+    install_wallpapers(data_disk)
+if options.corrupt_wallpaper:
+    fixture_fs = PollikFsImage.load(data_disk)
+    fixture_fs.install_file('/usr/share/wallpapers/corrupt.png', b'not a valid PNG')
+    fixture_fs.save(data_disk)
+qemu_args = [
     "qemu-system-x86_64", "-machine", "pc", "-m", "64M", "-vga", "std",
     "-drive", f"format=raw,file={BUILD / os.environ.get('POLLIK_TEST_IMAGE', 'PollikOS-Alpha.img')},if=ide,index=0,snapshot=on",
-    "-drive", f"format=raw,file={data_disk},if=ide,index=1",
     "-netdev", "user,id=net0", "-device", "rtl8139,netdev=net0",
     "-display", "none", "-serial", f"file:{log}",
     "-qmp", f"tcp:127.0.0.1:{port},server=on,wait=off",
-], cwd=ROOT, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+]
+if not options.no_data_disk:
+    qemu_args[9:9] = ["-drive", f"format=raw,file={data_disk},if=ide,index=1"]
+process = subprocess.Popen(qemu_args, cwd=ROOT,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 try:
     deadline = time.monotonic() + 15
     while True:
@@ -70,13 +87,59 @@ try:
             time.sleep(.005)
 
     def move_mouse_precise(dx, dy):
-        while dx or dy:
-            sx = max(-5, min(5, dx))
-            sy = max(-5, min(5, dy))
-            hmp(f"mouse_move {sx} {sy}")
-            dx -= sx
-            dy -= sy
-            time.sleep(.005)
+        x, y = pointer_position()
+        move_mouse_to(max(0,min(1023,x+dx)),max(0,min(767,y+dy)))
+
+    pointer_symbols = {}
+    for line in subprocess.check_output(['llvm-nm','-S',str(BUILD/'kernel.elf')],text=True).splitlines():
+        fields=line.split()
+        if len(fields)==4 and fields[3] in ('mx','my','g_windows'):
+            assert fields[3] not in pointer_symbols,'ambiguous pointer symbol'
+            pointer_symbols[fields[3]]=int(fields[0],16)
+    assert len(pointer_symbols)==3,'missing pointer/window symbols'
+
+    def notes_window_state():
+        path=BUILD/'smoke-window-state.bin'
+        qmp('pmemsave',{'val':pointer_symbols['g_windows']+3*84+6*4,'size':4,'filename':str(path)})
+        return int.from_bytes(path.read_bytes(),'little')
+
+    def wait_notes_state(expected):
+        deadline=time.monotonic()+15
+        while notes_window_state()!=expected:
+            assert time.monotonic()<deadline,('Notes F11 state',expected,notes_window_state())
+            time.sleep(.01)
+
+    def notes_f11(expected):
+        # Queue the break before waiting for a potentially slow frame. Holding
+        # F11 while polling can trigger typematic and toggle a second time.
+        hmp('sendkey f11 100')
+        wait_notes_state(expected)
+        time.sleep(.12)
+        assert notes_window_state()==expected, 'F11 repeated after the requested state'
+        path=BUILD/'smoke-notes-window.bin'
+        qmp('pmemsave',{'val':pointer_symbols['g_windows']+3*84,'size':84,'filename':str(path)})
+        print('RAW Notes F11 window',struct.unpack('<21I',path.read_bytes())[2:7],flush=True)
+
+    def pointer_position():
+        result=[]
+        for name in ('mx','my'):
+            path=BUILD/'smoke-pointer.bin'
+            qmp('pmemsave',{'val':pointer_symbols[name],'size':4,'filename':str(path)})
+            result.append(int.from_bytes(path.read_bytes(),'little'))
+        return tuple(result)
+
+    def move_mouse_to(x,y):
+        deadline=time.monotonic()+20
+        while pointer_position()!=(x,y):
+            assert time.monotonic()<deadline,('pointer target',x,y,pointer_position())
+            mx,my=pointer_position()
+            sx,sy=max(-5,min(5,x-mx)),max(-5,min(5,y-my))
+            hmp(f'mouse_move {sx} {sy}')
+            # A host sleep alone did not guarantee guest consumption: reports
+            # could merge or overflow while a slow TCG frame was in progress.
+            while pointer_position()!=(mx+sx,my+sy):
+                assert time.monotonic()<deadline,'PS/2 packet was not consumed exactly'
+                time.sleep(.005)
 
     def changed_patch(a, b, x, y, width, height):
         a, b = a[-1024*768*3:], b[-1024*768*3:]
@@ -99,6 +162,15 @@ try:
         if time.monotonic() > deadline:
             raise AssertionError("Kernel did not reach the desktop")
         time.sleep(.1)
+    if options.no_data_disk:
+        fallback = "GFX wallpaper unavailable; procedural background active\n"
+        assert "SETUP: PollikFS unavailable; explicit format required" in log.read_text(), \
+            "Missing data disk did not leave the system in its recoverable setup screen"
+        assert log.read_text().count(fallback) == 1, "Missing data disk did not log exactly one fallback"
+        qmp("quit")
+        process.wait(timeout=5)
+        print('PASS: missing data disk reaches setup and uses one procedural fallback log')
+        raise SystemExit(0)
     # The disposable disk starts with a valid empty filesystem, so first boot
     # must finish account setup before desktop shortcuts are usable.
     if "SETUP: first-run installer ready" not in log.read_text():
@@ -164,6 +236,17 @@ try:
     stationary_after = shot("cursor-stationary-after-window")
     assert changed_patch(stationary_before,stationary_after,484,284,32,32)>0, \
         "Opening a window beneath a stationary cursor did not repaint the scene"
+    # Maximize and restore Notes from the keyboard; the window changes position
+    # and size while the PS/2 pointer stays fixed over its client area.
+    stationary_before = shot("cursor-stationary-before-window-move")
+    assert notes_window_state()==0,'Notes must start in its normal viewport'
+    notes_f11(2)
+    stationary_after = shot("cursor-stationary-after-window-move")
+    assert changed_patch(stationary_before,stationary_after,484,284,32,32)>0, \
+        "Moving a window beneath a stationary cursor did not repaint the scene"
+    notes_f11(0)
+    shot("cursor-stationary-after-window-restore")
+    print('Notes F11 state: normal=0 maximized=2 restored=0',flush=True)
     print("PASS: cursor visible at four corners; stationary-cursor scene repaint")
     hmp("mouse_move 100 100")
     key("f3")
@@ -180,7 +263,17 @@ try:
     assert shot("notes-typed") != before, "Note did not accept text"
     key("backspace")
     key("ctrl-s")
-    assert shot("notes-restored") == before, "Note backspace did not restore document"
+    restored = shot("notes-restored")
+    # The RTC date/time may tick between captures. Mask only its rendered
+    # text; compare every other framebuffer pixel exactly.
+    before_body = bytearray(before.split(b"255\n", 1)[1])
+    restored_body = bytearray(restored.split(b"255\n", 1)[1])
+    for y in range(7, 19):
+        start = (y * 1024 + 886) * 3
+        end = (y * 1024 + 989) * 3
+        before_body[start:end] = b"\0" * (end - start)
+        restored_body[start:end] = b"\0" * (end - start)
+    assert restored_body == before_body, "Note backspace did not restore document"
     # The welcome document fits the responsive viewport; it cannot scroll.
     # Measure the active Notes body from the actual framebuffer (full window
     # includes 34px chrome), then use notes.c's 150px reserve / 20px row pitch.
@@ -221,23 +314,81 @@ try:
     qmp("input-send-event", {"events":[{"type":"btn","data":{"down":False,"button":"wheel-up"}}]})
     assert shot("notes-wheel-restored") == before, "Reverse scroll did not restore notes"
     if options.notes_only:
+        key("f5")
+        if options.no_wallpapers:
+            shot("settings-no-wallpapers")
+            fallback = "GFX wallpaper unavailable; procedural background active\n"
+            assert log.read_text().count(fallback) == 1, "Missing wallpapers did not log exactly one fallback"
+            qmp("quit")
+            process.wait(timeout=5)
+            print('PASS: missing wallpaper files use one procedural fallback log')
+            raise SystemExit(0)
+        wallpaper_before = shot("settings-wallpaper-before")
+        cache_count = log.read_text().count("[WALLPAPER] cache=ready")
+        move_mouse_precise(-220, 105 if not options.corrupt_wallpaper else 131)
+        hmp("mouse_button 1")
+        time.sleep(.1)
+        hmp("mouse_button 0")
+        # The first 1.6M-pixel scale is synchronous and TCG is much slower
+        # than the target machine; wait for its single cache fill to finish.
+        deadline = time.monotonic() + 45
+        while (log.read_text().count("[WALLPAPER] cache=ready") <= cache_count and
+               "GFX wallpaper unavailable" not in log.read_text()):
+            assert process.poll() is None and time.monotonic() < deadline, "Wallpaper cache did not finish"
+            time.sleep(.1)
+        before_pixels = wallpaper_before.split(b"255\n", 1)[1]
+        while True:
+            wallpaper_after = shot("settings-wallpaper-selected")
+            after_pixels = wallpaper_after.split(b"255\n", 1)[1]
+            changed = sum(before_pixels[(y*1024+x)*3:(y*1024+x+1)*3] !=
+                          after_pixels[(y*1024+x)*3:(y*1024+x+1)*3]
+                          for y in range(380, 650) for x in range(900, 1024))
+            if changed > 1000: break
+            assert time.monotonic()<deadline, f'Wallpaper cache ready but LFB not repainted ({changed} pixels)'
+        print('RAW wallpaper LFB changed pixels',changed,flush=True)
+        assert changed > 1000, f"Selecting a wallpaper did not repaint the desktop ({changed} pixels)"
+        move_mouse_precise(-160, -267 if not options.corrupt_wallpaper else -293)  # Desktop & Dock tab
+        hmp("mouse_button 1")
+        time.sleep(.1)
+        hmp("mouse_button 0")
+        move_mouse_precise(210, 262)  # Pointer Acceleration toggle
+        hmp("mouse_button 1")
+        time.sleep(.1)
+        hmp("mouse_button 0")
+        fallback = "GFX wallpaper unavailable; procedural background active\n"
+        if options.corrupt_wallpaper:
+            assert log.read_text().count(fallback) == 1, "Corrupt PNG did not log exactly one fallback"
+        else:
+            assert fallback not in log.read_text(), "Valid wallpaper unexpectedly fell back"
+        qmp("quit")
+        process.wait(timeout=5)
+        from pollikfs_install import PollikFsImage
+        settings_fs = PollikFsImage.load(data_disk)
+        appearance = settings_fs.read_file("/home/.config/appearance.conf").decode("ascii")
+        selected = "corrupt.png" if options.corrupt_wallpaper else "light.png"
+        assert f"wallpaper={selected}\n" in appearance, "Wallpaper choice was not persisted"
+        assert "pointer_accel=0\n" in appearance, "Pointer acceleration off state was not persisted"
         print('PASS: focused GUI cursor, Terminal, Notes editing and wheel round trip')
-        qmp('quit')
+        print('PASS: Settings lists PollikFS wallpapers and persists the selected name')
+        print('PASS: pointer acceleration can be disabled and persists')
         raise SystemExit(0)
     key("f5")
     settings = shot("settings")
-    # Settings opens at (170,125); accent swatch 1 is centered at local
-    # (257,261), so move there from the current pointer at (760,500).
-    hmp("mouse_move -333 -114")
+    # Pointer is at (620,420). Move to the second accent swatch at (427,386)
+    # with separated sub-threshold PS/2 reports so acceleration stays neutral.
+    move_mouse_to(427,386)
     time.sleep(.2)
     hmp("mouse_button 1")
     time.sleep(.15)
     hmp("mouse_button 0")
+    move_mouse_to(900,400)  # move away before checking the swatch pixels
     accent = shot("settings-accent")
     assert accent != settings, "PS/2 click did not change the selected accent"
+    assert changed_patch(settings,accent,414,373,26,26)>0, \
+        "Accent click did not update the selected swatch"
     key("esc")
-    # Move from the accent swatch to the Terminal dock icon at (443,710).
-    hmp("mouse_move 16 324")
+    move_mouse_to(456,710)  # Terminal dock icon center
+    print(f'Dock pointer actual={pointer_position()} expected=(456, 710)',flush=True)
     time.sleep(.2)
     hover_image=shot("dock-hover")
     assert hover_image != accent, "Dock hover did not redraw"
@@ -289,7 +440,7 @@ try:
     time.sleep(.3)
     second = shell("ps")
     def work(table, pid):
-        return int(re.search(rf"{pid}   WORKER     \w+ +(\d+)", table)[1])
+        return int(re.search(rf"{pid}   WORKER     \w+ +\d+% +(\d+) / \d+", table)[1])
     assert work(second, 1) > work(first, 1), "Worker 1 is not executing"
     assert work(second, 2) > work(first, 2), "Worker 2 is not executing"
     paused = shell("pause 1")

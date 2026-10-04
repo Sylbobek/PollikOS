@@ -16,4 +16,5 @@ u32 gfx_rect(GfxTarget *t, int x, int y, int w, int h, u32 color);
 u32 gfx_shape(GfxTarget *t, int x, int y, int w, int h, u32 color, u32 kind);
 /* Saturating quotient, including n < d and zero divisor; no libgcc runtime. */
 u32 gfx_ratio(u64 n, u32 d);
+u64 gfx_ratio64(u64 n, u32 d);
 #endif

@@ -10,13 +10,16 @@ static u32 ui[680*410];
 static int capture_text, text_count;
 static struct { int x,y,w; } text_boxes[64];
 #define CHECK(x) do {if(!(x)){printf("FAIL %d: %s\n",__LINE__,#x);failed++;}}while(0)
-_Static_assert(sizeof(MarkResult)==15*4,"existing probe ABI");
+_Static_assert(sizeof(MarkResult)==68,"internal probe with 64-bit rate and units");
 int framebuffer_width(void){return 1024;}
 int framebuffer_height(void){return 768;}
 int framebuffer_bpp(void){return 32;}
 int ui_is_dark(void){return 1;}
 u64 app_host_time_us(void){clock_us+=10;return clock_us;}
 void app_host_metrics(AppPerfView *v){*v=(AppPerfView){0};}
+u32 app_host_copy_frame_times(u32 after_frame,u32 count,u32 *out,u32 capacity){
+    (void)after_frame;(void)count;(void)out;(void)capacity;return 0;
+}
 u32 app_host_free_bytes(void){return 64*1048576;}
 void app_host_invalidate(int id){CHECK(id==APP_POLLIKMARK);}
 void *app_host_alloc(u32 bytes){
@@ -157,8 +160,27 @@ static void detailed_info_layout(void){
                   text_boxes[j].x+text_boxes[j].w<=text_boxes[i].x);
     }
 }
+static void memory_rate64(void){
+    CHECK(sizeof(frame_units)==8);
+    pollikmark_test=7;pollikmark_level=0;n=3;
+    units=1ull<<34;measured_us=1000000;sum_us=1000000;
+    u64 expected_rate=units;
+    snapshot(&live_result,1);
+    CHECK(live_result.units==expected_rate);
+    CHECK(live_result.rate==expected_rate);
+    for(int l=0;l<30;l++)pollikmark_results[7][l].status=0;
+    pollikmark_results[7][0]=live_result;
+    CHECK(pm_test_rate(7)==expected_rate);
+    char formatted[32];pm_short(formatted,live_result.rate);
+    CHECK(same_text(formatted,"17.1G"));
+    printf("RAW memory units=%llu rate=%llu formatted=%s\n",
+        (unsigned long long)live_result.units,(unsigned long long)live_result.rate,formatted);
+    pm_short(formatted,0xffffffffffffffffull);
+    CHECK(same_text(formatted,"18446744073.7G"));
+}
 int main(void){
     shapes();pollikmark_init();pollikmark_open();rotation_and_counters();resize_and_layout();detailed_info_layout();
+    memory_rate64();
     printf("pollikmark native: %s (rotation, raster counters/ABI, mixed shapes, clipping, alpha, resize/failure/leaks, detailed info text bounds)\n",failed?"FAIL":"PASS");
     return !!failed;
 }

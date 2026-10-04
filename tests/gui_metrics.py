@@ -6,6 +6,7 @@ not hidden. Timing numbers are emulator wall-time, not physical GPU throughput.
 """
 import hashlib
 import json
+import os
 import pathlib
 import platform
 import socket
@@ -14,6 +15,7 @@ import subprocess
 import tempfile
 import time
 from format_pollikfs2 import format_disk
+from gui_fixture import create_gui_disk
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BUILD = ROOT / 'build'
@@ -24,7 +26,7 @@ PREFIX = ('frame_count fps avg_frame_us p95_frame_us p99_frame_us worst_frame_us
 EXTRA = ('total_us min_frame_us max_frame_us history_count interval_count avg_interval_us '
          'p95_interval_us p99_interval_us low_1pct_fps slow_1pct_interval_us render_fps '
          'clock_source clock_resolution_us tsc_khz effective_rects composed_pixels '
-         'presented_pixels cursor_frames dock_frames client_paint_count').split()
+         'presented_pixels cursor_frames dock_frames client_paint_count app_update_us').split()
 TAIL = ('elapsed_us total_time_us paint_time_us compose_time_us present_time_us '
         'composed_pixels_total presented_pixels_total').split()
 COUNTERS = ('frame_count full_redraw_count damage_rects_count cursor_frames dock_frames '
@@ -43,7 +45,10 @@ def distribution(values):
 
 
 class Guest:
-    def __init__(self, resolution, label='benchmark'):
+    def __init__(self, resolution, label='benchmark', data_image=None, boot_only=False, boot_timeout=40):
+        self.data_image = pathlib.Path(data_image).resolve() if data_image else None
+        self.boot_only = boot_only
+        self.boot_timeout = boot_timeout
         self.resolution = resolution
         self.width, self.height = map(int, resolution.split('x'))
         self.log = BUILD / f'{label}-{resolution}.log'
@@ -51,7 +56,13 @@ class Guest:
         self.temp = tempfile.TemporaryDirectory(prefix='pollikos-gui-')
         self.folder = pathlib.Path(self.temp.name)
         self.symbols = {}
-        image, elf = BUILD / 'PollikOS-Surface.img', BUILD / 'kernel.elf'
+        image_name = os.environ.get('POLLIK_GUI_IMAGE', 'PollikOS-Surface.img')
+        accel = os.environ.get('POLLIK_GUI_ACCEL', 'tcg').lower()
+        cpu = os.environ.get('POLLIK_GUI_CPU', 'max')
+        if accel not in ('tcg', 'whpx'):
+            raise ValueError(f'unsupported POLLIK_GUI_ACCEL: {accel}')
+        image, elf = BUILD / image_name, BUILD / 'kernel.elf'
+        self.image = image
         # Compare the exact ELF load bytes to the boot image, not timestamps.
         binary = self.folder / 'kernel.bin'
         subprocess.run(['llvm-objcopy', '-O', 'binary', str(elf), str(binary)], check=True)
@@ -68,29 +79,35 @@ class Guest:
         assert self.symbol('g_surfaces')[1] == self.apps * 36
         assert self.symbol('g_perf_stats')[1] == 4 * (len(PREFIX) + len(EXTRA)) + 8 * len(TAIL)
         for name in ('mx', 'my', 'pointer_packet.held', 'g_dragged_window', 'g_resized_window',
-                     'g_frame_time_history', 'g_frame_interval_history', 'shell', 'address', 'stride', 'bytes'):
+                     'g_frame_time_history', 'g_frame_interval_history', 'g_frame_time_idx',
+                     'g_interval_idx', 'g_perf_overlay_enabled', 'g_window_anims',
+                     'shell', 'address', 'stride', 'bytes'):
             self.symbol(name)
-        self.environment = dict(resolution=resolution, memory_mib=256, cpu='max', nic='none',
-                                accelerator='tcg', host=platform.platform(), python=platform.python_version(),
+        self.accel = accel
+        self.cpu = cpu
+        self.environment = dict(resolution=resolution, memory_mib=256, cpu=cpu, nic='none',
+                                accelerator=accel, host=platform.platform(), python=platform.python_version(),
                                 qemu=subprocess.check_output(['qemu-system-x86_64', '--version'], text=True).splitlines()[0],
                                 kernel_sha256=hashlib.sha256(blob).hexdigest(), kernel_bytes=len(blob),
                                 elf_sha256=hashlib.sha256(elf.read_bytes()).hexdigest(),
-                                image='PollikOS-Surface.img (snapshot=on; ELF load bytes verified)',
+                                image=f'{image.name} (snapshot=on; ELF load bytes verified)',
                                 sampling='QMP memory probes; stage-boundary vCPU stops; includes observer overhead')
 
     def __enter__(self):
-        data = self.folder / 'data.img'
-        format_disk(data, total_size_mb=40)
+        data = self.data_image or self.folder / 'data.img'
+        if not self.data_image:
+            create_gui_disk(data)
+        data_snapshot = ',snapshot=on' if self.data_image else ''
         with socket.socket() as reserve:
             reserve.bind(('127.0.0.1', 0))
             port = reserve.getsockname()[1]
         self.log.write_text('')
         self.process = subprocess.Popen([
-            'qemu-system-x86_64', '-machine', 'pc', '-accel', 'tcg', '-cpu', 'max', '-m', '256M',
+            'qemu-system-x86_64', '-machine', 'pc', '-accel', self.accel, '-cpu', self.cpu, '-m', '256M',
             '-device', 'VGA,vgamem_mb=32', '-display', 'none', '-no-reboot',
             '-fw_cfg', f'name=opt/pollikos/display,string={self.resolution}',
-            '-drive', f'format=raw,file={BUILD / "PollikOS-Surface.img"},if=ide,index=0,snapshot=on',
-            '-drive', f'format=raw,file={data},if=ide,index=1', '-nic', 'none',
+            '-drive', f'format=raw,file={self.image},if=ide,index=0,snapshot=on',
+            '-drive', f'format=raw,file={data},if=ide,index=1{data_snapshot}', '-nic', 'none',
             '-serial', f'file:{self.log}', '-qmp', f'tcp:127.0.0.1:{port},server=on,wait=off',
         ], cwd=ROOT, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         try:
@@ -99,13 +116,15 @@ class Guest:
                 try:
                     self.connection = socket.create_connection(('127.0.0.1', port), timeout=10)
                 except OSError:
-                    assert self.process.poll() is None and time.monotonic() < end, 'QMP unavailable'
+                    assert self.process.poll() is None and time.monotonic() < end, f'QMP unavailable; QEMU exit={self.process.poll()}'
                     time.sleep(.03)
             self.stream = self.connection.makefile('rwb', buffering=0)
             self.stream.readline()
             self.qmp('qmp_capabilities')
-            self.wait(lambda: 'desktop ready' in self.log.read_text(), 'desktop boot', 40)
+            self.wait(lambda: 'desktop ready' in self.log.read_text(), 'desktop boot', self.boot_timeout)
             assert f'GFX resolution: {self.resolution}' in self.log.read_text()
+            if self.boot_only:
+                return self
             if 'SETUP: first-run installer ready' in self.log.read_text():
                 def send_key(key):
                     self.hmp('sendkey ' + key)
@@ -184,6 +203,10 @@ class Guest:
     def pointer(self):
         return self.words('mx')[0], self.words('my')[0]
 
+    def backbuffer_pixel(self, x, y):
+        address = self.words('pixels')[0] + (y * self.width + x) * 4
+        return struct.unpack('<I', self.memory(address, 4))[0]
+
     def stats(self):
         address, size = self.symbol('g_perf_stats')
         values = struct.unpack('<' + 'I' * (len(PREFIX) + len(EXTRA)) + 'Q' * len(TAIL), self.memory(address, size))
@@ -192,12 +215,22 @@ class Guest:
     def move(self, x, y):
         assert 0 <= x < self.width and 0 <= y < self.height
         end = time.monotonic() + 15
+        accelerated = self.words('pointer_acceleration')[0]
         while self.pointer() != (x, y):
             assert time.monotonic() < end, f'pointer stuck targeting {(x, y)}'
             mx, my = self.pointer()
-            dx, dy = max(-80, min(80, x - mx)), max(-80, min(80, y - my))
+            # Same measured packet model as cursor_screenshots.py: bounded
+            # signed-byte packets, exact consumption, including acceleration.
+            def delta(distance):
+                raw=int(distance*5/6) if accelerated and abs(distance)>=7 else distance
+                return max(-100,min(100,raw))
+            dx,dy=delta(x-mx),delta(y-my)
+            sx,sy=dx,dy
+            if accelerated and max(abs(dx),abs(dy))>=6:
+                sx+=int(dx/5);sy+=int(dy/5)
+            expected=(max(0,min(self.width-1,mx+sx)),max(0,min(self.height-1,my+sy)))
             self.hmp(f'mouse_move {dx} {dy}')
-            self.wait(lambda: self.pointer() == (mx + dx, my + dy), 'PS/2 delta not consumed')
+            self.wait(lambda: self.pointer() == expected, 'PS/2 delta not consumed')
 
     def button(self, down):
         self.hmp(f'mouse_button {1 if down else 0}')
@@ -229,8 +262,10 @@ class Guest:
         self.qmp('stop')
         try:
             s = self.stats()
-            s['duration_history'] = list(self.words('g_frame_time_history')[:s['history_count']])
-            s['interval_history'] = list(self.words('g_frame_interval_history')[:s['interval_count']])
+            s['frame_write_index'] = self.words('g_frame_time_idx')[0]
+            s['interval_write_index'] = self.words('g_interval_idx')[0]
+            s['duration_history'] = list(self.words('g_frame_time_history'))
+            s['interval_history'] = list(self.words('g_frame_interval_history'))
             return s
         finally:
             self.qmp('cont')
@@ -246,7 +281,7 @@ class Guest:
         self.hmp('sendkey ret 1')
         self.wait(lambda: 'SHELL END' in self.log.read_text()[start:], 'perf did not complete')
         text = self.log.read_text()[start:]
-        assert 'FPS:' in text and 'compose:' in text and 'present:' in text, text
+        assert 'FPS:' in text and 'compose:' in text and 'LFB:' in text, text
         return text
 
 
@@ -257,6 +292,13 @@ def stage_result(name, before, after, started, operations):
     assert elapsed > 0 and all(v >= 0 for v in counts.values()), (name, counts)
     assert counts['total_time_us'] >= counts['paint_time_us'] + counts['present_time_us']
     assert counts['total_time_us'] == counts['paint_time_us'] + counts['compose_time_us'] + counts['present_time_us']
+    frame_samples = [after['duration_history'][(before['frame_write_index'] + i) % len(after['duration_history'])]
+                     for i in range(min(counts['frame_count'], len(after['duration_history'])))]
+    # interval_count is a capped occupancy value, not a cumulative counter.
+    # Each completed frame after boot also records one presentation interval.
+    sample_count = min(counts['frame_count'], len(after['interval_history']))
+    interval_samples = [after['interval_history'][(before['interval_write_index'] + i) % len(after['interval_history'])]
+                        for i in range(sample_count)]
     return dict(name=name, duration_host_s=time.monotonic() - started,
                 duration_guest_s=elapsed / 1e6, operations=operations, counts=counts,
                 actual_fps=counts['frame_count'] * 1e6 / elapsed,
@@ -264,7 +306,11 @@ def stage_result(name, before, after, started, operations):
                 mean_paint_us=counts['paint_time_us'] / counts['frame_count'],
                 mean_compose_us=counts['compose_time_us'] / counts['frame_count'],
                 mean_present_us=counts['present_time_us'] / counts['frame_count'],
-                frame_history=distribution(after['duration_history']),
-                interval_history=distribution(after['interval_history']),
-                history_scope='last up to 128 completed frames, may include preceding stage',
+                mean_composed_pixels_per_frame=counts['composed_pixels_total'] / counts['frame_count'],
+                phase_us=dict(input=after['input_us'], app_update=after['app_update_us'],
+                              layout=after['layout_us'], draw=after['paint_us'],
+                              composition=after['compose_us'], present=after['present_us']),
+                frame_history=distribution(frame_samples),
+                interval_history=distribution(interval_samples),
+                history_scope='only samples written between the two stage snapshots, capped at 128',
                 stats=after)

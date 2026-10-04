@@ -176,7 +176,7 @@ static int metadata(void) {
         CHECK(app->body_inactive == (id == APP_POLLIKMARK ? 0x202b40u : id == APP_TERMINAL ? 0x1a1c27u : 0xf4f2f7u));
         CHECK(app->bottom_inset == (id == APP_BROWSER ? 18 : 0));
         CHECK(app->min_width == (id == APP_SETTINGS ? 640 : 480) &&
-              app->min_height == (id == APP_SETTINGS ? 410 : 280));
+              app->min_height == (id == APP_SETTINGS ? 520 : 280));
         CHECK(GUI_CHROME_HEIGHT == 34);
         unsigned present = (!!app->init << INIT) | (!!app->render << RENDER) |
             (!!app->key << KEY) | (!!app->click << CLICK) | (!!app->drag << DRAG) | (!!app->open << OPEN) |

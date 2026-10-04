@@ -40,9 +40,12 @@ def run(resolution):
                 idle()
                 g.wait(lambda: g.presented(app), 'app presented', 30)
                 if app == 5:
-                    # BrowserApp prefix: 24-byte geometry, URL/input512,
-                    # cursor/focus16, title/status128, pending URL256.
-                    g.wait(lambda: not scalar('load_active') and not any(g.words('g_browser')[234:236]), 'browser home loaded', 30)
+                    from browser_support import browser_offsets
+                    offsets = browser_offsets()
+                    def field(name):
+                        return int.from_bytes(g.memory(g.symbol('g_browser')[0]+offsets[name],4),'little')
+                    g.wait(lambda: not scalar('load_active') and not field('has_pending_navigation') and
+                           not field('is_loading') and field('document'), 'browser home loaded', 30)
 
             def drag(x, y, tx, ty):
                 g.move(x, y)
@@ -55,8 +58,8 @@ def run(resolution):
             def place(app):
                 w = g.window(app)
                 # Titlebar point remains clear of top/left snap activation zones.
-                drag(w[2]+120, w[3]+17, 128, 53)
-                g.wait(lambda: g.window(app)[2:4] == (8, 36), 'top-left placement')
+                drag(w[2]+120, w[3]+17, 128, 56)
+                g.wait(lambda: g.window(app)[2:4] == (8, 39), 'top-left placement')
                 g.wait(lambda: g.presented(app), 'placed client presented')
 
             def resize(app, targets, rapid=False):
@@ -66,7 +69,7 @@ def run(resolution):
                 g.button(True)
                 for width, height in targets:
                     g.move(x+width-1, y+height-1)
-                    expected = (max(width, 640), max(height, 410)) if app == 4 else (width, height)
+                    expected = (max(width, 640), max(height, 520)) if app == 4 else (width, height)
                     g.wait(lambda: g.window(app)[4:6] == expected, 'PS/2 resize geometry')
                     if not rapid:
                         g.wait(lambda: g.presented(app), 'held resize painted', 30)
@@ -98,10 +101,15 @@ def run(resolution):
                         return sum(pixels[y*width+x] == color for y in range(y1, y2) for x in range(x1, x2))
                     if app == 0:
                         cw = (width-80)//3
-                        cy = height-(110 if height<410 else 142)
-                        ch = 72 if height<410 else 76
-                        for k in range(3):
-                            exact(32+k*(cw+8)+cw//2, cy+ch-5, 0xf0ecf6, 'resized Welcome card')
+                        cy = height-(128 if height<410 else 146)
+                        ch = 62 if height<410 else 72
+                        if height >= 340:
+                            for k in range(3):
+                                exact(32+k*(cw+8)+cw//2, cy+ch-5, 0xf0ecf6, 'resized Welcome card')
+                        else:
+                            exact(64,height-24,0xfaf9fc,'compact Welcome body')
+                            exact(width//2,height-24,0x2563eb,'compact Welcome start button')
+                            exact(width-64,height-24,0xfaf9fc,'compact Welcome body right')
                     elif app == 1:
                         left = 146 if width<600 else 196
                         exact(width-42, 130, 0xeae2f4, 'Files selected row right edge')
@@ -182,13 +190,22 @@ def run(resolution):
                 old = scalar('note_len')
                 key('ret'); key('w')
                 g.wait(lambda: scalar('note_len') == old+2, 'Notes fixture line')
-            key('ctrl-c'); key('ctrl-v')
+            original_note_len=scalar('note_len')
+            key('ctrl-a')
+            g.wait(lambda: scalar('note_selection_anchor')==0,'Notes select-all fixture')
+            key('ctrl-c'); key('right')
+            g.wait(lambda: scalar('note_selection_anchor')==0xffffffff,'Notes clear selection before append')
+            key('ctrl-v')
+            g.wait(lambda: scalar('note_len')==original_note_len*2,'Notes fixture duplication')
+            print('RAW Notes fixture bytes',original_note_len,'->',scalar('note_len'),flush=True)
             for app in range(count):
                 focus(app)
                 if app == 1:
                     key('down')  # The Files probe below checks the selected-row fill.
                 place(app)
-                for size in ((480,280), (640,480), (800,600), (g.width-16,g.height-142)):
+                # Drag places y=39; normal resize ends at work-area bottom
+                # height-106, so the available height is height-145.
+                for size in ((480,280), (640,480), (800,600), (g.width-16,g.height-145)):
                     resize(app, [size])
                     content(app, f'{size[0]}x{size[1]}')
                 resize(app, [(640,480), (800,600), (480,280), (800,600), (640,480)], rapid=True)

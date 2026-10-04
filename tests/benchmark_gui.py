@@ -26,6 +26,15 @@ def benchmark(resolution):
                 print(f'{resolution} {name}: {operations} verified operations; '
                       f'{result["actual_fps"]:.2f} actual fps; '
                       f'{result["render_throughput_fps"]:.2f} render/s', flush=True)
+                phases = result['phase_us']
+                print(f'{resolution} {name} detail: dirty={result["mean_composed_pixels_per_frame"]:.0f} px/frame; '
+                      f'phase_us input/app/layout/draw/compose/LFB='
+                      f'{phases["input"]}/{phases["app_update"]}/{phases["layout"]}/'
+                      f'{phases["draw"]}/{phases["composition"]}/{phases["present"]}; '
+                      f'frame mean/p95/max={result["frame_history"]["mean_us"]:.0f}/'
+                      f'{result["frame_history"]["p95_us"]}/{result["frame_history"]["max_us"]} us; '
+                      f'interval mean/p95/max={result["interval_history"]["mean_us"]:.0f}/'
+                      f'{result["interval_history"]["p95_us"]}/{result["interval_history"]["max_us"]} us', flush=True)
                 return result
 
             before, t0 = g.capture(), time.monotonic()
@@ -52,7 +61,7 @@ def benchmark(resolution):
                 g.button(True)
                 capture = 'g_dragged_window' if mode == 'drag' else 'g_resized_window'
                 if mode == 'drag':
-                    g.wait(lambda: g.words('shell')[6:8] == (2, 1), 'pending drag did not engage')
+                    g.wait(lambda: g.words('shell')[8:10] == (2, 1), 'pending drag did not engage')
                     g.move(x + 6, y)
                 g.wait(lambda: g.words(capture)[0] == 2, f'{mode} capture did not engage')
                 before, t0 = g.capture(), time.monotonic()
@@ -84,7 +93,7 @@ def benchmark(resolution):
                     g.wait(lambda: g.window()[6] == state, f'cycle {cycle}: state {state} not reached')
                     g.button(False)
                     g.wait(lambda: g.presented(), f'cycle {cycle}: frame not presented')
-                    expected = (8, 36, g.width - 16, g.height - 142) if state == 2 else restored
+                    expected = (0, 32, g.width, g.height - 128) if state == 2 else restored
                     assert g.window()[2:6] == expected, (cycle, state, g.window())
             finish('maximize_restore_20_cycles', before, t0, 20)
 
@@ -116,7 +125,28 @@ def benchmark(resolution):
                                             hits=list(hits.values()))
             assert result['counts']['dock_frames'] > 0, 'dock path not accounted'
             assert result['duration_host_s'] >= 3 and steps >= 3
+
+            # PollikMark is still closed, so its F7 launch exercises the real
+            # window-open animation without entering the benchmark workload.
+            before, t0 = g.capture(), time.monotonic()
+            g.key('f7', lambda: g.window(6)[7] == 1 and g.words('g_window_anims', 6)[0] == 1,
+                  'PollikMark open animation did not start')
+            g.wait(lambda: g.words('g_window_anims', 6)[0] == 0,
+                   'PollikMark open animation did not finish', 3)
+            g.wait(lambda: g.presented(6), 'PollikMark open animation final surface not presented')
+            finish('window_open_animation', before, t0, 1)
             report['perf_summary'] = g.perf_command()
+            old_panel = g.backbuffer_pixel(9, 36)
+            assert old_panel != 0x161420, f'overlay test point already has panel color: {old_panel:#x}'
+            g.key('f12', lambda: g.words('g_perf_overlay_enabled')[0] == 1,
+                  'F12 did not enable performance overlay')
+            g.wait(lambda: g.backbuffer_pixel(9, 36) == 0x161420,
+                   'enabled performance overlay did not paint its panel')
+            g.key('f12', lambda: g.words('g_perf_overlay_enabled')[0] == 0,
+                  'F12 did not disable performance overlay')
+            g.wait(lambda: g.backbuffer_pixel(9, 36) != 0x161420,
+                   'disabled performance overlay did not restore the scene')
+            print(f'{resolution} [PERF OVERLAY PASS] F12 on/off; backbuffer panel pixel restored', flush=True)
             assert not any(x in g.log.read_text() for x in ('GUI MEMORY CORRUPTION', 'KERNEL PANIC'))
             report['status'] = 'PASS'
     except BaseException as error:
