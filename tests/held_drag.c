@@ -49,6 +49,7 @@ int wm_active_app(void) { return 1; }
 u32 wm_time_ms(void) { return 1000; }
 u64 wm_time_us(void) { return 1000000; }
 void wm_perf_frame_begin(void) {}
+void wm_perf_set_frame_kind(int kind) { (void)kind; }
 void wm_perf_record_client_paint(void) { paints++; }
 int wm_perf_overlay_is_enabled(void) { return 0; }
 void wm_perf_summary(char *out, int capacity) { if (capacity > 0) out[0] = 0; }

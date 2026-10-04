@@ -113,13 +113,21 @@ static int benchmark(void) {
         for (unsigned i = 0; i < BENCH_ROUNDS; ++i) gfx_blend_premul_span(a, b, PIXELS);
         double blend_ms = monotonic_ms() - t0;
         bench_sink = a[PIXELS / 2];
-    printf("BENCH gfx mode=%s pixels=%u rounds=%u fill_ms=%.3f copy_ms=%.3f blend_ms=%.3f sink=%08x\n",
+    double operations_mpx = (double)PIXELS * BENCH_ROUNDS / 1000.0;
+    double fill_mb = operations_mpx * 4.0;
+    double copy_mb = operations_mpx * 8.0;
+    double blend_mb = operations_mpx * 12.0;
+    printf("BENCH gfx mode=%s pixels=%u rounds=%u fill_ms=%.3f fill_Mpx_s=%.1f fill_MB_s=%.1f copy_ms=%.3f copy_Mpx_s=%.1f copy_MB_s=%.1f blend_ms=%.3f blend_Mpx_s=%.1f blend_MB_s=%.1f sink=%08x\n",
 #if defined(GFX_REFERENCE)
            "reference",
 #else
            "fast",
 #endif
-           PIXELS, BENCH_ROUNDS, fill_ms, copy_ms, blend_ms, (unsigned)bench_sink);
+           PIXELS, BENCH_ROUNDS,
+           fill_ms, operations_mpx / fill_ms, fill_mb / fill_ms,
+           copy_ms, operations_mpx / copy_ms, copy_mb / copy_ms,
+           blend_ms, operations_mpx / blend_ms, blend_mb / blend_ms,
+           (unsigned)bench_sink);
     }
     free(a); free(b); free(c);
     return 0;

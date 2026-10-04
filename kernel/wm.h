@@ -251,6 +251,8 @@ typedef struct {
     /* u64 tail; i386 alignment 4. Cumulative counters enable stage deltas. */
     u64 elapsed_us, total_time_us, paint_time_us, compose_time_us, present_time_us;
     u64 composed_pixels_total, presented_pixels_total;
+    /* Appended to preserve every existing field offset. */
+    u32 partial_frames;
 } GuiPerfStats;
 
 /* Single GUI-owner thread; copies stats, never exposes mutable storage to apps.
@@ -259,6 +261,9 @@ void wm_perf_snapshot(GuiPerfStats *out);
 u32 wm_perf_copy_frame_times(u32 after_frame, u32 count, u32 *out, u32 capacity);
 extern GuiPerfStats g_perf_stats;
 void wm_perf_frame_begin(void);
+void wm_perf_set_frame_kind(int frame_kind);
+enum { GUI_PERF_FRAME_FULL = 1, GUI_PERF_FRAME_PARTIAL = 2,
+       GUI_PERF_FRAME_CURSOR = 3, GUI_PERF_FRAME_DOCK = 4 };
 void wm_perf_frame_end(u32 layout_us, u32 paint_us, u32 present_us, int is_full, u32 pixels_presented);
 void wm_perf_record_input(int is_coalesced);
 void wm_perf_record_phase_times(u32 app_update_us, u32 input_us, u32 layout_us);

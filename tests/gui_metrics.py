@@ -29,7 +29,8 @@ EXTRA = ('total_us min_frame_us max_frame_us history_count interval_count avg_in
          'presented_pixels cursor_frames dock_frames client_paint_count app_update_us').split()
 TAIL = ('elapsed_us total_time_us paint_time_us compose_time_us present_time_us '
         'composed_pixels_total presented_pixels_total').split()
-COUNTERS = ('frame_count full_redraw_count damage_rects_count cursor_frames dock_frames '
+APPEND = ('partial_frames').split()
+COUNTERS = ('frame_count full_redraw_count damage_rects_count cursor_frames dock_frames partial_frames '
             'client_paint_count').split() + TAIL[1:]
 
 
@@ -56,7 +57,7 @@ class Guest:
         self.temp = tempfile.TemporaryDirectory(prefix='pollikos-gui-')
         self.folder = pathlib.Path(self.temp.name)
         self.symbols = {}
-        image_name = os.environ.get('POLLIK_GUI_IMAGE', 'PollikOS-Surface.img')
+        image_name = os.environ.get('POLLIK_GUI_IMAGE', 'PollikOS-Alpha.img')
         accel = os.environ.get('POLLIK_GUI_ACCEL', 'tcg').lower()
         cpu = os.environ.get('POLLIK_GUI_CPU', 'max')
         if accel not in ('tcg', 'whpx'):
@@ -77,7 +78,7 @@ class Guest:
         self.apps = self.symbol('g_windows')[1] // 84
         assert self.symbol('g_windows')[1] == self.apps * 84 and self.apps >= 6
         assert self.symbol('g_surfaces')[1] == self.apps * 36
-        assert self.symbol('g_perf_stats')[1] == 4 * (len(PREFIX) + len(EXTRA)) + 8 * len(TAIL)
+        assert self.symbol('g_perf_stats')[1] == 4 * (len(PREFIX) + len(EXTRA) + len(APPEND)) + 8 * len(TAIL)
         for name in ('mx', 'my', 'pointer_packet.held', 'g_dragged_window', 'g_resized_window',
                      'g_frame_time_history', 'g_frame_interval_history', 'g_frame_time_idx',
                      'g_interval_idx', 'g_perf_overlay_enabled', 'g_window_anims',
@@ -209,8 +210,8 @@ class Guest:
 
     def stats(self):
         address, size = self.symbol('g_perf_stats')
-        values = struct.unpack('<' + 'I' * (len(PREFIX) + len(EXTRA)) + 'Q' * len(TAIL), self.memory(address, size))
-        return dict(zip(PREFIX + EXTRA + TAIL, values))
+        values = struct.unpack('<' + 'I' * (len(PREFIX) + len(EXTRA)) + 'Q' * len(TAIL) + 'I' * len(APPEND), self.memory(address, size))
+        return dict(zip(PREFIX + EXTRA + TAIL + APPEND, values))
 
     def move(self, x, y):
         assert 0 <= x < self.width and 0 <= y < self.height

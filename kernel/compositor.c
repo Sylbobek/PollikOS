@@ -899,9 +899,11 @@ static u32 present_with_cursor(const GraphicsClip *scene, int scene_count, int f
         cursor_saved_x = mx; cursor_saved_y = my;
         cursor_saved_w = new_w; cursor_saved_h = new_h; cursor_saved_valid = 1;
     }
+    u64 cursor_present_start = wm_time_us();
     framebuffer_present_cursor_pair(repaint_old ? cursor_old_frame : 0,
         old.x1, old.y1, old_w, old_h, new_w > 0 && new_h > 0 ? cursor_new_frame : 0,
         current.x1, current.y1, new_w, new_h);
+    perf_present_us += (u32)(wm_time_us() - cursor_present_start);
     presented += (u32)(old_w * old_h) * (u32)(repaint_old != 0) + (u32)new_w * (u32)new_h;
     g_perf_stats.composed_pixels += (u32)new_w * (u32)new_h;
     g_perf_stats.effective_rects++;
@@ -917,7 +919,7 @@ void compositor_draw_cursor(int full) {
         cursor_previous_scale_index == g_cursor_scale_index) return;
     perf_begin();
     u32 count = present_with_cursor(0, 0, full);
-    if (count) g_perf_stats.cursor_frames++;
+    wm_perf_set_frame_kind(GUI_PERF_FRAME_CURSOR);
     wm_perf_frame_end(0, perf_paint_us, perf_present_us, 0, count);
 }
 
@@ -1023,7 +1025,7 @@ void compositor_paint(int full) {
         g_perf_stats.effective_rects = 1;
         u32 count = present_with_cursor(&dock_clip, 1, 0);
         graphics_set_clip((GraphicsClip){0, 0, width, height});
-        if (count) g_perf_stats.dock_frames++;
+        wm_perf_set_frame_kind(GUI_PERF_FRAME_DOCK);
         wm_perf_frame_end(0, perf_paint_us, perf_present_us, 0, count);
         return;
     }

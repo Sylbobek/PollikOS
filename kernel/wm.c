@@ -44,6 +44,7 @@ static int g_full_redraw = 1;
 
 Animation g_animations[NUM_APPS];
 GuiPerfStats g_perf_stats;
+static int g_perf_pending_frame_kind = GUI_PERF_FRAME_PARTIAL;
 #ifndef POLLIK_INSTALL_MEDIA
 static int g_perf_overlay_enabled;
 #endif
@@ -960,6 +961,8 @@ void wm_frame_scheduled(u32 now_ms) {
 
 void wm_perf_frame_begin(void) { g_frame_start = wm_time_us(); }
 
+void wm_perf_set_frame_kind(int frame_kind) { g_perf_pending_frame_kind = frame_kind; }
+
 void wm_perf_record_input(int is_coalesced) {
     g_sec_input_events++;
     /* Current caller passes "packet moved", NOT a coalesced-event count.
@@ -1064,7 +1067,10 @@ void wm_perf_snapshot(GuiPerfStats *out) {
 }
 
 void wm_perf_frame_end(u32 layout_us, u32 paint_us, u32 present_us, int is_full, u32 pixels_presented) {
-    if (!pixels_presented) return;
+    if (!pixels_presented) {
+        g_perf_pending_frame_kind = GUI_PERF_FRAME_PARTIAL;
+        return;
+    }
     u64 now = wm_time_us();
     u32 frame_us = (u32)(now - g_frame_start);
     perf_rates(now);
@@ -1088,6 +1094,10 @@ void wm_perf_frame_end(u32 layout_us, u32 paint_us, u32 present_us, int is_full,
     g_perf_stats.presented_pixels_total += pixels_presented;
     g_perf_stats.damage_rects_count += g_perf_stats.effective_rects;
     if (is_full) g_perf_stats.full_redraw_count++;
+    else if (g_perf_pending_frame_kind == GUI_PERF_FRAME_CURSOR) g_perf_stats.cursor_frames++;
+    else if (g_perf_pending_frame_kind == GUI_PERF_FRAME_DOCK) g_perf_stats.dock_frames++;
+    else g_perf_stats.partial_frames++;
+    g_perf_pending_frame_kind = GUI_PERF_FRAME_PARTIAL;
     if (frame_us > g_perf_stats.worst_frame_us) g_perf_stats.worst_frame_us = frame_us;
     g_frame_time_history[g_frame_time_idx] = frame_us;
     g_frame_time_idx = (g_frame_time_idx + 1) % PERF_HISTORY_SIZE;

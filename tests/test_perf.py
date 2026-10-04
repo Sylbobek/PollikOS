@@ -20,6 +20,8 @@ def native_stats():
 extern int printf(const char *, ...);
 #define PERF_HISTORY_SIZE 128
 GuiPerfStats g_perf_stats;
+static int g_perf_overlay_enabled;
+static int g_perf_pending_frame_kind;
 static u64 now, g_frame_start, g_previous_present, g_rate_start;
 static u32 g_sec_input_events, g_sec_coalesced_mouse, g_sec_client_paints;
 static u32 g_sec_compositor_frames, g_sec_presents;
@@ -51,6 +53,7 @@ int main(void) {
     }
     wm_perf_snapshot(&s);
     CHECK(s.history_count == 128 && s.interval_count == 127);
+    CHECK(s.partial_frames == 128 && s.full_redraw_count == 0);
     CHECK(s.avg_frame_us == 64 && s.min_frame_us == 1 && s.max_frame_us == 128);
     CHECK(s.p95_frame_us == 122 && s.p99_frame_us == 127);
     CHECK(s.slow_1pct_interval_us == 2540001 && s.low_1pct_fps == 0);
@@ -64,6 +67,7 @@ int main(void) {
     now += 1; wm_perf_frame_begin(); now += 1000;
     wm_perf_frame_end(0, 300, 200, 1, 3000);
     wm_perf_snapshot(&s);
+    CHECK(s.partial_frames == 128 && s.full_redraw_count == 1);
     CHECK(s.total_us == 1000 && s.paint_us == 300 && s.present_us == 200 && s.compose_us == 500);
     CHECK(s.history_count == 128 && s.p99_frame_us == 128 && s.max_frame_us == 1000);
     printf("PASS native: exact percentiles/interval-low/history wrap/idle FPS/bounded summary\n");
@@ -110,7 +114,8 @@ def run(resolution):
         g.perf_command()  # Refresh the read-only history snapshot through existing host.
         s = g.capture()
         assert s['history_count'] > 0 and s['interval_count'] > 0
-        assert s['frame_count'] == s['full_redraw_count'] + s['cursor_frames'] + s['dock_frames'], s
+        assert s['frame_count'] == (s['full_redraw_count'] + s['cursor_frames'] +
+                                    s['dock_frames'] + s['partial_frames']), s
         assert s['total_time_us'] == s['paint_time_us'] + s['compose_time_us'] + s['present_time_us'], s
         assert s['paint_time_us'] > 0 and s['compose_time_us'] > 0 and s['present_time_us'] > 0
         assert s['total_us'] == s['paint_us'] + s['compose_us'] + s['present_us']

@@ -260,3 +260,213 @@ rounds were 10.951,10.987,11.120 ms reference vs 15.183,14.492,15.176 ms
 experimental). No rasterizer optimization is integrated. The current native
 golden harness locks reference output exactly; the randomized and boundary
 coverage in `soft3d_native.py` still passes.
+
+## Phase 5b final primitive measurements and integration (2026-10-04)
+
+The framebuffer code stores numeric `0x00RRGGBB` scene pixels; 32-bpp VBE LFB
+copies their bytes directly (little-endian B,G,R,X). `gfx_primitives.h` now
+states the premultiplied source-over formula and `+127` round-to-nearest rule.
+The new library still intentionally exports only span fill, non-overlapping row
+blit, and premultiplied-alpha span blend; rectangle, overlap-safe blit,
+constant-alpha fill, and rounded-mask generation are not implemented here.
+The existing rounded-corner LUT, shadow cache, and dock cache remain unchanged.
+
+Four standalone target compiles (each command exited 0 with empty stdout):
+
+```text
+clang -target i686-elf -ffreestanding -fno-builtin -fno-stack-protector -std=c11 -Wall -Wextra -Werror -Ikernel -c kernel/gfx/gfx_primitives.c -o build/gfx-i386.o
+clang -target x86_64-elf -mgeneral-regs-only -ffreestanding -fno-builtin -fno-stack-protector -std=c11 -Wall -Wextra -Werror -Ikernel -c kernel/gfx/gfx_primitives.c -o build/gfx-x64.o
+clang -target x86_64-elf -mgeneral-regs-only -ffreestanding -fno-builtin -fno-stack-protector -std=c11 -Wall -Wextra -Werror -Isdk/include -Ikernel -c kernel/gfx/gfx_primitives.c -o build/gfx-sdk.o
+clang -std=c11 -O2 -ffreestanding -fno-builtin -Wall -Wextra -Werror -Ikernel -c kernel/gfx/gfx_primitives.c -o build/gfx-native.o
+```
+
+The i386 build explicitly passes `-mno-sse -mno-mmx`; the fast paths use
+`rep stosl` / `rep movsl`, not SIMD. The x86_64 compile uses
+`-mgeneral-regs-only`. Native microbenchmark output (1920x1080, 128 full-span
+operations per timed sample; MB/s counts nominal bytes touched: fill 4 B/px,
+copy 8 B/px, blend 12 B/px):
+
+```text
+$ python tests/gfx_primitives_native.py
+PASS gfx correctness: fill/blit lengths 0..257; blend multipliers 65536; seeded pixels 100000 seed=0x6d2b79f5
+BENCH gfx mode=reference pixels=2073600 rounds=128 fill_ms=29.956 fill_Mpx_s=8860.4 fill_MB_s=35441.5 copy_ms=53.485 copy_Mpx_s=4962.5 copy_MB_s=39700.4 blend_ms=238.393 blend_Mpx_s=1113.4 blend_MB_s=13360.5 sink=009f803f
+BENCH gfx mode=reference pixels=2073600 rounds=128 fill_ms=28.578 fill_Mpx_s=9287.5 fill_MB_s=37150.0 copy_ms=52.404 copy_Mpx_s=5064.9 copy_MB_s=40519.5 blend_ms=236.273 blend_Mpx_s=1123.4 blend_MB_s=13480.4 sink=009f803f
+BENCH gfx mode=reference pixels=2073600 rounds=128 fill_ms=27.393 fill_Mpx_s=9689.4 fill_MB_s=38757.5 copy_ms=52.099 copy_Mpx_s=5094.5 copy_MB_s=40756.3 blend_ms=240.679 blend_Mpx_s=1102.8 blend_MB_s=13233.6 sink=009f803f
+PASS gfx correctness: fill/blit lengths 0..257; blend multipliers 65536; seeded pixels 100000 seed=0x6d2b79f5
+BENCH gfx mode=fast pixels=2073600 rounds=128 fill_ms=27.512 fill_Mpx_s=9647.5 fill_MB_s=38589.8 copy_ms=54.651 copy_Mpx_s=4856.7 copy_MB_s=38853.3 blend_ms=178.429 blend_Mpx_s=1487.5 blend_MB_s=17850.5 sink=009f803f
+BENCH gfx mode=fast pixels=2073600 rounds=128 fill_ms=26.937 fill_Mpx_s=9853.4 fill_MB_s=39413.4 copy_ms=50.565 copy_Mpx_s=5249.1 copy_MB_s=41993.1 blend_ms=181.395 blend_Mpx_s=1463.2 blend_MB_s=17558.6 sink=009f803f
+BENCH gfx mode=fast pixels=2073600 rounds=128 fill_ms=26.360 fill_Mpx_s=10069.0 fill_MB_s=40276.0 copy_ms=49.695 copy_Mpx_s=5341.0 copy_MB_s=42728.3 blend_ms=176.183 blend_Mpx_s=1506.5 blend_MB_s=18078.1 sink=009f803f
+```
+
+Median reference -> fast rates were fill 9,287.5 -> 9,853.4 Mpx/s, copy
+5,064.9 -> 5,249.1 Mpx/s, blend 1,123.4 -> 1,487.5 Mpx/s. This is host-only;
+it does not establish guest throughput. The only production integration is the
+`app_host_blit` row copy. The full-repaint oracle output remains exact:
+
+```text
+$ python tests/held_drag.py
+PASS held-drag frame pixels identical to full-repaint oracle (29 positions)
+PASS accumulated held-drag frames, shadow-only cull, dock cache, resize, dim controls
+PASS cursor union presents, kind changes, corners, cursor-free scene
+PASS all primitive scissors and padded target stride
+PASS 24/32-bpp framebuffer channel order, padded pitch, partial rows
+PASS independent four-corner RGB/AA, no canary RGB, opaque black, all screen edges/scissors, resize-before-render
+PASS independent LUT radii 1..29, rounded shadow/dock colors (18/29), clipping and padded stride
+```
+
+Isolated disposable-image i386 build after the integration:
+
+```text
+$ .\build.ps1 -NoSync
+Graphics primitives: optimized x86 path
+System sync: skipped (-NoSync); data image unchanged.
+PollikOS built: build/PollikOS-Alpha.img (818296 kernel bytes, 1599 sectors loaded at 1 MiB)
+```
+
+The source kernel.bin was 818004 bytes at the `perf-start` checkpoint; the
+isolated build's actual `build/kernel.bin` is 818296 bytes (increase 292 B).
+No guest Fill Rate, 2D Shapes, or compositor before/after comparison was
+available because the SDL QEMU process exits during startup and the full TCG
+PollikMark run hits its 300-second deadline (see preflight above).
+
+## Phase 5d guest timing and corrected PollikMark compositor probe (2026-10-04)
+
+Guest-side frame/interval histories were read using the existing read-only
+QMP symbol probe. The six stage measurements below ran on TCG/qemu64 with
+`-display none`, 256 MiB, so they are not SDL/physical-display results. They
+were collected before adding the appended partial-frame accounting field;
+that field only completes frame-kind accounting, not the draw path.
+
+```text
+$ POLLIK_GUI_ACCEL=tcg POLLIK_GUI_CPU=qemu64 python tests/benchmark_gui.py --resolution 1024x768
+drag_held_10s: 62 verified operations; 46.02 actual fps; 54.10 render/s
+detail: dirty=157646 px/frame; phase_us input/app/layout/draw/compose/LFB=131/1/5/0/33/13; frame mean/p95/max=19040/50957/54915 us; interval mean/p95/max=22422/50964/54920 us
+window_open_animation: 1 operation; 11.04 actual fps; 11.55 render/s
+detail dirty=537946; phases=3/2/10/0/88182/535; frame=86552/106747/106747; interval=90568/122669/122669
+[PERF OVERLAY PASS] F12 on/off; backbuffer panel pixel restored
+$ POLLIK_GUI_ACCEL=tcg POLLIK_GUI_CPU=qemu64 python tests/benchmark_gui.py --resolution 1920x1080
+drag_held_10s: 123 verified operations; 91.85 actual fps; 120.36 render/s
+detail dirty=157659; phases=124/2/4/0/32/13; frame=8112/24079/39398 us; interval=10739/24162/39406 us
+window_open_animation: 1 operation; 18.62 actual fps; 19.41 render/s
+detail dirty=835272; phases=3/1/11/0/38335/714; frame=51526/69326/69326 us; interval=53699/82186/82186
+[PERF OVERLAY PASS] F12 on/off; backbuffer panel pixel restored
+```
+
+The guest histories show the 1024x768 drag p95/max interval of 50.964/54.920
+ms and open-animation 122.669 ms max. At 1920x1080 drag p95/max was
+24.162/39.406 ms and open-animation max 82.186 ms. Idle interval histogram was
+NOT RUN. QMP observer overhead and the `-display none` backend are included.
+The open animation remains expensive: 537,946 composed pixels/frame at
+1024x768 and 835,272 at 1920x1080. It was not optimized or visually compared.
+Fixed 60-Hz frame deadlines and animation scheduling changes were NOT RUN.
+
+PollikMark's single Compositor workload was probed directly with the existing
+workload key 7, same guest workload definition, TCG/qemu64, disposable data
+image, `-display none`:
+
+```text
+$ POLLIK_GUI_ACCEL=tcg POLLIK_GUI_CPU=qemu64 python build/pollikmark_compositor_probe.py 1024x768
+POLLIMARK_COMPOSITOR res=1024x768 raw_result=(1, 77, 0, 0, 0, 0, 38, 38, 0, 0, 5114, 8354, 1257, 14726, 0)
+POLLIMARK_COMPOSITOR_FRAME res=1024x768 samples=77 mean/p95/max_us=14726/28106/50132 fps=38 frames=78 dirty_px_per_frame=322905 phase_avg_paint/compose/LFB_us=5048/8626/1355
+POLLIMARK_COMPOSITOR_DISTRIBUTION res=1024x768 {'count': 78, 'mean_us': 15029.884615384615, 'min_us': 3804, 'max_us': 50132, 'p95_us': 28486, 'p99_us': 50132, 'low_1pct_fps': 19.947339024974067}
+$ POLLIK_GUI_ACCEL=tcg POLLIK_GUI_CPU=qemu64 python build/pollikmark_compositor_probe.py 1920x1080
+POLLIMARK_COMPOSITOR res=1920x1080 raw_result=(1, 86, 0, 0, 0, 0, 42, 42, 0, 0, 3197, 5879, 2314, 11391, 0)
+POLLIMARK_COMPOSITOR_FRAME res=1920x1080 samples=86 mean/p95/max_us=11391/16739/37600 fps=42 frames=87 dirty_px_per_frame=342466 phase_avg_paint/compose/LFB_us=3161/6067/2295
+POLLIMARK_COMPOSITOR_DISTRIBUTION res=1920x1080 {'count': 87, 'mean_us': 11523.643678160919, 'min_us': 3326, 'max_us': 37600, 'p95_us': 22853, 'p99_us': 37600, 'low_1pct_fps': 26.595744680851062}
+```
+
+The PollikMark `fps` denominator is elapsed wall time from workload start to
+completion (`frames * 1,000,000 / elapsed_us`), while frame mean is time spent
+inside completed compositor frames. A ~939-us mean with 39 fps is therefore
+not an arithmetic contradiction: the frame metric excludes the gaps between
+poll/present calls. Current probes also show mean frame times 11.4-14.7 ms and
+wall throughput 38-42 fps. The corrected denominator is unchanged and the new
+figures are not comparable with historical SDL/WHPX numbers. WHPX whole-guest
+boot failed before desktop ready; PollikMark WHPX measurements are NOT RUN.
+
+The instrumentation test had first exposed that cursor framebuffer copies
+were missing from `present_time_us`; the timed cursor-pair copy is now included.
+It also exposed a non-exhaustive frame classification (`frame_count=89`,
+`full_redraw_count=44`, `cursor_frames=28`, `dock_frames=0`, 17 partial frames).
+The stats now append `partial_frames` after existing fields, preserving all
+previous offsets, and classify all four frame kinds without weakening the
+accounting assertion. Current-build guest runs:
+
+```text
+$ POLLIK_GUI_ACCEL=tcg POLLIK_GUI_CPU=qemu64 python tests/test_perf.py --resolution 1024x768
+PASS native: exact percentiles/interval-low/history wrap/idle FPS/bounded summary
+PASS 1024x768: 84 frames, clock=4685340 kHz; C:\Users\syltu\AppData\Local\Temp\PollikOS-perfbuild-ogiluhwn\build\perf-1024x768.json
+$ POLLIK_GUI_ACCEL=tcg POLLIK_GUI_CPU=qemu64 python tests/test_perf.py --resolution 1920x1080
+PASS native: exact percentiles/interval-low/history wrap/idle FPS/bounded summary
+PASS 1920x1080: 86 frames, clock=4703210 kHz; C:\Users\syltu\AppData\Local\Temp\PollikOS-perfbuild-ogiluhwn\build\perf-1920x1080.json
+```
+
+Both current test_perf guests used disposable PollikFS images and QMP display-
+none mode. The full WHPX + SDL scenario histograms, idle histogram, zero-idle-
+copy assertion, frame pacing changes, open-animation cache-transform, and
+pixel-identical animation end-state comparison are NOT RUN.
+
+## Final requested regression checkpoint
+
+Post-change isolated build regression output:
+
+```text
+$ python tests/gui_registry.py
+PASS: gui registry (64827 checks)
+$ python tests/surface_bounds.py
+PASS: 3440x1440, all 7 surfaces maximize/restore, runtime LFB and external guards
+$ python tests/corners_guards.py
+PASS boot: ABI36, 7 prefix/suffix guards, pixels=base+4 bytes, capacity=786432, window=680x410
+PASS maximized: ABI36, 7 prefix/suffix guards, pixels=base+4 bytes, capacity=786432, window=1024x640
+PASS restored: ABI36, 7 prefix/suffix guards, pixels=base+4 bytes, capacity=786432, window=680x410
+PASS registry FULL WINDOW resize dimensions track maximize/restore; no guard corruption
+$ python tests/resize_layout.py
+PASS 1024x768: all seven apps, 49 viewport-content stages, external guards
+PASS 1920x1080: all seven apps, 49 viewport-content stages, external guards
+$ python tests/app_layout.py
+PASS: real app geometry, hit bounds, file scrolling, Notes wrapping/cursor, Terminal prompt wrapping (37182 checks)
+$ python tests/cursor_framebuffer.py
+PASS cursor union presents, kind changes, corners, cursor-free scene
+PASS cursor framebuffer: all 10 kinds, four scales, four corners, dock, stationary cursor/window motion, scale erasure; pixel-identical full-repaint oracle
+$ python tests/held_drag.py
+PASS held-drag frame pixels identical to full-repaint oracle (29 positions)
+PASS accumulated held-drag frames, shadow-only cull, dock cache, resize, dim controls
+PASS cursor union presents, kind changes, corners, cursor-free scene
+PASS all primitive scissors and padded target stride
+PASS 24/32-bpp framebuffer channel order, padded pitch, partial rows
+PASS independent four-corner RGB/AA, no canary RGB, opaque black, all screen edges/scissors, resize-before-render
+PASS independent LUT radii 1..29, rounded shadow/dock colors (18/29), clipping and padded stride
+$ python tests/soft3d_native.py
+soft3d native: PASS (matrices, depth, culling, clipping, bounds, texture)
+$ python tests/pollikmark_native.py
+RAW memory units=17179869184 rate=17179869184 formatted=17.1G
+pollikmark native: PASS (rotation, raster counters/ABI, mixed shapes, clipping, alpha, resize/failure/leaks, detailed info text bounds)
+$ python tests/process_stress.py --ram 64 256
+PASS: 64 MiB process stress; 100 Ring 3 runs, 100 exits; [PROC] [TEST] PMM free pages before: 7344 / [PROC] [TEST] PMM free pages after:  7344
+PASS: 256 MiB process stress; 100 Ring 3 runs, 100 exits; [PROC] [TEST] PMM free pages before: 56448 / [PROC] [TEST] PMM free pages after:  56448
+$ python tests/browser_cooperative.py
+PASS: 972 cooperative services; home/success/error/close, no nested load or mutable DOM painting/layout/input
+```
+
+`resize_layout.py` also printed both per-resolution success lines above.
+`app_layout.py` was run separately and again inside `resize_layout.py`.
+The first smoke invocation had one transient PS/2 consumption timeout:
+
+```text
+$ python tests/smoke.py --notes-only
+  File "C:\Users\syltu\AppData\Local\Temp\PollikOS-perfbuild-ogiluhwn\tests\smoke.py", line 141, in move_mouse_to
+    assert time.monotonic()<deadline,'PS/2 packet was not consumed exactly'
+AssertionError: PS/2 packet was not consumed exactly
+```
+
+An immediate independent rerun completed with:
+
+```text
+PASS: cursor visible at four corners; stationary-cursor scene repaint
+PASS: focused GUI cursor, Terminal, Notes editing and wheel round trip
+PASS: Settings lists PollikFS wallpapers and persists the selected name
+PASS: pointer acceleration can be disabled and persists
+```
+
+No smoke assertion or expected value was changed. The intermittent QMP/TCG
+input timeout remains a test flake; no cause was proven.
