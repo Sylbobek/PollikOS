@@ -31,3 +31,22 @@ ConnectionResetError: [WinError 10054] An existing connection was forcibly close
 Decision after three attempts: SDL-backed guest measurement is blocked by QEMU process termination during startup on this host. The temporary display/timeout changes to `tests/gui_metrics.py` were reverted exactly to `HEAD`; `git status --short` was empty after the revert. Continue independent native graphics work. PollikMark values collected with `-display none` must be labeled separately and cannot be compared with historical SDL results. SDL baseline and after numbers are NOT RUN.
 
 Raw logs: `build/perf-base-pollikmark-tcg-1024x768.log`, `build/perf-base-pollikmark-whpx-1024x768.log`.
+
+## PollikMark fallback TCG baseline timeout (2026-10-04)
+
+After SDL guest startup failed, one separate TCG/qemu64 run used the harness's
+default `-display none` as a diagnostic only. It is not comparable with the
+historical SDL result.
+
+```text
+$ POLLIK_GUI_CPU=qemu64 POLLIK_GUI_ACCEL=tcg python tests/pollikmark.py --full-run --resolution 1024x768
+GUI fixture: appearance installed before QEMU launch
+PASS startup PMM check completed before full PollikMark
+PollikMark timer: source=1 resolution_us=1 tsc_khz=4626310
+AssertionError: all eight PollikMark workloads complete
+```
+
+The run reached the harness's 300-second full-suite deadline before producing
+the eight workload results. TCG full-run numbers and all eight baseline scores
+are NOT RUN. QEMU was no longer running when checked afterward. This is one
+diagnostic attempt; the SDL failure decision above remains unchanged.
