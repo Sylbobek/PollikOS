@@ -156,3 +156,58 @@ RAW_KERNEL_BINARY=C:\Users\syltu\AppData\Local\Temp\PollikOS-perfbuild-ogiluhwn\
 The branch baseline was 818004 bytes (`docs/PERF_BASELINE.txt`), so the fast
 linked kernel is +184 bytes. The reference build is +256 bytes over baseline.
 The actual current worktree's `build` folder was not used for this build.
+
+## Phase 5c: software rasterizer baseline, before edits
+
+The existing `soft3d.c` rasterizer already clips to a bounding box and steps
+floating-point edge/barycentric values across each row. Perspective-correct
+texturing still divides twice per covered pixel. Baseline native benchmark:
+
+```text
+$ python tests/soft3d_bench.py
+SOFT3D res=1024x768 rounds=8 tri_writes=335826 tri_checksum=2de83b3c51c72a09 tri_ms=12.056,11.436,11.469 tex_writes=335826 tex_checksum=54d314bd1befcbbd tex_ms=11.163,13.097,12.653
+SOFT3D res=1920x1080 rounds=8 tri_writes=886465 tri_checksum=3e523fca62730c89 tri_ms=32.320,30.638,31.664 tex_writes=886465 tex_checksum=f5b46f16cdeb1641 tex_ms=31.832,36.718,28.969
+```
+
+Current i386 `soft3d.o` code-generation inspection:
+
+```text
+$ llvm-nm -u build/soft3d.o
+         U gfx_target_valid
+$ llvm-objdump -d build/soft3d.o | Select-String -Pattern "fdiv|divss|__div|call" | Select-Object -First 30
+     1bf: dc f1                         fdiv %st, %st(1)
+     1d2: dc f9                         fdivr %st, %st(1)
+     1e3: de f1                         fdivp %st, %st(1)
+     226: e8 fc ff ff ff                calll 0x227 <soft3d_triangle+0xb>
+     267: e8 0c 00 00 00                calll 0x278 <clip_and_raster>
+     504: de fc                         fdivrp %st, %st(4)
+     977: dc f1                         fdiv %st, %st(1)
+     b70: de f2                         fdivp %st, %st(2)
+    1125: dc f9                         fdivr %st, %st(1)
+    1131: de f1                         fdivp %st, %st(1)
+    17d9: e8 fc ff ff ff                calll 0x17da <soft3d_triangle_textured+0xe>
+    1896: e8 dd e9 ff ff                calll 0x278 <clip_and_raster>
+```
+
+No `__divdi3`, `__muldi3`, or `__udivdi3` references appear in the unresolved
+symbol list. The object still contains x87 floating-point divide instructions;
+the native benchmark's host timings do not establish their QEMU cost.
+
+Two PollikMark guest runs were attempted using the newly built isolated image.
+The first used the harness default `PollikOS-Surface.img`, which that build
+does not produce. Retrying with its explicit supported `POLLIK_GUI_IMAGE`
+override reached the fixture but stopped at an unrelated dock-focus assertion
+before running the triangle or compositor workloads:
+
+```text
+$ python tests/pollikmark.py --resolution 1024x768
+FileNotFoundError: [Errno 2] No such file or directory: 'C:\\Users\\syltu\\AppData\\Local\\Temp\\PollikOS-perfbuild-ogiluhwn\\build\\PollikOS-Surface.img'
+$env:POLLIK_GUI_IMAGE='PollikOS-Alpha.img'; $env:POLLIK_GUI_ACCEL='tcg'; $env:POLLIK_GUI_CPU='qemu64'; python tests/pollikmark.py --resolution 1024x768
+GUI fixture: appearance installed before QEMU launch
+dock probe state: {'slot': 6, 'expected_app': 6, 'pointer': (716, 712), 'focused': 5, 'hover': 6, 'window': (6, 0, 170, 125, 680, 410, 0, 1, 0, 0, 1, 0, 480, 280, 1024, 768, 170, 125, 680, 410, 1490712)}
+AssertionError: dock slot 6 -> app 6
+```
+
+The target window is already visible and hovered at failure, but the harness
+does not observe focus moving from app 5. No rasterizer change has been made,
+and guest PollikMark triangle/compositor data are NOT RUN.
