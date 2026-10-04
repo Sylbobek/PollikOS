@@ -338,13 +338,13 @@ were collected before adding the appended partial-frame accounting field;
 that field only completes frame-kind accounting, not the draw path.
 
 ```text
-$ POLLIK_GUI_ACCEL=tcg POLLIK_GUI_CPU=qemu64 python tests/benchmark_gui.py --resolution 1024x768
+$env:POLLIK_GUI_ACCEL='tcg'; $env:POLLIK_GUI_CPU='qemu64'; python tests/benchmark_gui.py --resolution 1024x768
 drag_held_10s: 62 verified operations; 46.02 actual fps; 54.10 render/s
 detail: dirty=157646 px/frame; phase_us input/app/layout/draw/compose/LFB=131/1/5/0/33/13; frame mean/p95/max=19040/50957/54915 us; interval mean/p95/max=22422/50964/54920 us
 window_open_animation: 1 operation; 11.04 actual fps; 11.55 render/s
 detail dirty=537946; phases=3/2/10/0/88182/535; frame=86552/106747/106747; interval=90568/122669/122669
 [PERF OVERLAY PASS] F12 on/off; backbuffer panel pixel restored
-$ POLLIK_GUI_ACCEL=tcg POLLIK_GUI_CPU=qemu64 python tests/benchmark_gui.py --resolution 1920x1080
+$env:POLLIK_GUI_ACCEL='tcg'; $env:POLLIK_GUI_CPU='qemu64'; python tests/benchmark_gui.py --resolution 1920x1080
 drag_held_10s: 123 verified operations; 91.85 actual fps; 120.36 render/s
 detail dirty=157659; phases=124/2/4/0/32/13; frame=8112/24079/39398 us; interval=10739/24162/39406 us
 window_open_animation: 1 operation; 18.62 actual fps; 19.41 render/s
@@ -365,11 +365,11 @@ workload key 7, same guest workload definition, TCG/qemu64, disposable data
 image, `-display none`:
 
 ```text
-$ POLLIK_GUI_ACCEL=tcg POLLIK_GUI_CPU=qemu64 python build/pollikmark_compositor_probe.py 1024x768
+$env:POLLIK_GUI_ACCEL='tcg'; $env:POLLIK_GUI_CPU='qemu64'; python build/pollikmark_compositor_probe.py 1024x768
 POLLIMARK_COMPOSITOR res=1024x768 raw_result=(1, 77, 0, 0, 0, 0, 38, 38, 0, 0, 5114, 8354, 1257, 14726, 0)
 POLLIMARK_COMPOSITOR_FRAME res=1024x768 samples=77 mean/p95/max_us=14726/28106/50132 fps=38 frames=78 dirty_px_per_frame=322905 phase_avg_paint/compose/LFB_us=5048/8626/1355
 POLLIMARK_COMPOSITOR_DISTRIBUTION res=1024x768 {'count': 78, 'mean_us': 15029.884615384615, 'min_us': 3804, 'max_us': 50132, 'p95_us': 28486, 'p99_us': 50132, 'low_1pct_fps': 19.947339024974067}
-$ POLLIK_GUI_ACCEL=tcg POLLIK_GUI_CPU=qemu64 python build/pollikmark_compositor_probe.py 1920x1080
+$env:POLLIK_GUI_ACCEL='tcg'; $env:POLLIK_GUI_CPU='qemu64'; python build/pollikmark_compositor_probe.py 1920x1080
 POLLIMARK_COMPOSITOR res=1920x1080 raw_result=(1, 86, 0, 0, 0, 0, 42, 42, 0, 0, 3197, 5879, 2314, 11391, 0)
 POLLIMARK_COMPOSITOR_FRAME res=1920x1080 samples=86 mean/p95/max_us=11391/16739/37600 fps=42 frames=87 dirty_px_per_frame=342466 phase_avg_paint/compose/LFB_us=3161/6067/2295
 POLLIMARK_COMPOSITOR_DISTRIBUTION res=1920x1080 {'count': 87, 'mean_us': 11523.643678160919, 'min_us': 3326, 'max_us': 37600, 'p95_us': 22853, 'p99_us': 37600, 'low_1pct_fps': 26.595744680851062}
@@ -393,10 +393,10 @@ previous offsets, and classify all four frame kinds without weakening the
 accounting assertion. Current-build guest runs:
 
 ```text
-$ POLLIK_GUI_ACCEL=tcg POLLIK_GUI_CPU=qemu64 python tests/test_perf.py --resolution 1024x768
+$env:POLLIK_GUI_ACCEL='tcg'; $env:POLLIK_GUI_CPU='qemu64'; python tests/test_perf.py --resolution 1024x768
 PASS native: exact percentiles/interval-low/history wrap/idle FPS/bounded summary
 PASS 1024x768: 84 frames, clock=4685340 kHz; C:\Users\syltu\AppData\Local\Temp\PollikOS-perfbuild-ogiluhwn\build\perf-1024x768.json
-$ POLLIK_GUI_ACCEL=tcg POLLIK_GUI_CPU=qemu64 python tests/test_perf.py --resolution 1920x1080
+$env:POLLIK_GUI_ACCEL='tcg'; $env:POLLIK_GUI_CPU='qemu64'; python tests/test_perf.py --resolution 1920x1080
 PASS native: exact percentiles/interval-low/history wrap/idle FPS/bounded summary
 PASS 1920x1080: 86 frames, clock=4703210 kHz; C:\Users\syltu\AppData\Local\Temp\PollikOS-perfbuild-ogiluhwn\build\perf-1920x1080.json
 ```
