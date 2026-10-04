@@ -1,0 +1,68 @@
+$ git status --short
+[no output]
+
+$ git branch --show-current
+perf-overnight
+
+$ git tag --list perf-start
+perf-start
+
+Host CPU: 12th Gen Intel(R) Core(TM) i5-12400F
+QEMU: QEMU emulator version 11.0.0 (v11.0.0-12122-ga4bb4b10c9)
+Baseline VM acceleration: TCG. These correctness harnesses omit -accel whpx and use QEMU's TCG default.
+Baseline images: existing build/PollikOS-Alpha.img and build/PollikOS-Surface.img. Tests create disposable data disks. No PollikData.img opened.
+
+Exact baseline command/result list (all exit code 0):
+
+$ python tests/gui_registry.py
+PASS: gui registry (64827 checks)
+
+$ python tests/held_drag.py
+PASS held-drag frame pixels identical to full-repaint oracle (29 positions)
+PASS accumulated held-drag frames, shadow-only cull, dock cache, resize, dim controls
+PASS cursor union presents, kind changes, corners, cursor-free scene
+PASS all primitive scissors and padded target stride
+PASS 24/32-bpp framebuffer channel order, padded pitch, partial rows
+PASS independent four-corner RGB/AA, no canary RGB, opaque black, all screen edges/scissors, resize-before-render
+PASS independent LUT radii 1..29, rounded shadow/dock colors (18/29), clipping and padded stride
+
+$ python tests/surface_bounds.py
+PASS: 3440x1440, all 7 surfaces maximize/restore, runtime LFB and external guards
+
+$ python tests/corners_guards.py
+PASS boot: ABI36, 7 prefix/suffix guards, pixels=base+4 bytes, capacity=786432, window=680x410
+PASS maximized: ABI36, 7 prefix/suffix guards, pixels=base+4 bytes, capacity=786432, window=1024x640
+PASS restored: ABI36, 7 prefix/suffix guards, pixels=base+4 bytes, capacity=786432, window=680x410
+PASS registry FULL WINDOW resize dimensions track maximize/restore; no guard corruption
+
+$ python tests/resize_layout.py
+PASS: real app geometry, hit bounds, file scrolling, Notes wrapping/cursor, Terminal prompt wrapping (37182 checks)
+PASS 1024x768: all seven apps, 49 viewport-content stages, external guards
+PASS 1920x1080: all seven apps, 49 viewport-content stages, external guards
+
+$ python tests/app_layout.py
+PASS: real app geometry, hit bounds, file scrolling, Notes wrapping/cursor, Terminal prompt wrapping (37182 checks)
+
+$ python tests/soft3d_native.py
+soft3d native: PASS (matrices, depth, culling, clipping, bounds, texture)
+
+$ python tests/pollikmark_native.py
+RAW memory units=17179869184 rate=17179869184 formatted=17.1G
+pollikmark native: PASS (rotation, raster counters/ABI, mixed shapes, clipping, alpha, resize/failure/leaks, detailed info text bounds)
+
+$ python tests/process_stress.py --ram 64 256
+PASS: 64 MiB process stress; 100 Ring 3 runs, 100 exits; [PROC] [TEST] PMM free pages before: 7344 / [PROC] [TEST] PMM free pages after:  7344
+PASS: 256 MiB process stress; 100 Ring 3 runs, 100 exits; [PROC] [TEST] PMM free pages before: 56448 / [PROC] [TEST] PMM free pages after:  56448
+
+$ python tests/smoke.py --notes-only
+RAW wallpaper LFB changed pixels 33480
+PASS: focused GUI cursor, Terminal, Notes editing and wheel round trip
+PASS: Settings lists PollikFS wallpapers and persists the selected name
+PASS: pointer acceleration can be disabled and persists
+
+$ python tests/browser_cooperative.py
+PASS: 972 cooperative services; home/success/error/close, no nested load or mutable DOM painting/layout/input
+
+
+No test failures in this requested baseline list. Full raw logs are retained as build/perf-base-*.log.
+Kernel binary at the current commit before performance steps: build/kernel.bin 818004 bytes.
