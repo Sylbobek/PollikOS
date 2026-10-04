@@ -1,4 +1,5 @@
 #include "graphics.h"
+#include "gfx/gfx_primitives.h"
 #include "gui/app_host.h"
 #include "font_data.h"
 
@@ -68,7 +69,8 @@ void app_host_blit(int x, int y, const u32 *src, int w, int h, int stride, u32 c
     if (h > draw_clip.y2 - y) h = draw_clip.y2 - y;
     if (w <= 0 || h <= 0) return;
     for (int j = 0; j < h; j++)
-        memcpy(draw_target + (y+j)*draw_target_stride+x, src+(sy+j)*stride+sx, (u32)w*4);
+        gfx_blit_row(draw_target + (y+j)*draw_target_stride+x,
+                     src+(sy+j)*stride+sx, (u32)w);
 }
 void rect(int x, int y, int w, int h, u32 c) {
     if (x < draw_clip.x1) { w -= draw_clip.x1 - x; x = draw_clip.x1; }

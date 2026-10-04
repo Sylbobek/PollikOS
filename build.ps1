@@ -3,6 +3,7 @@ param(
     [switch]$FormatData = $false,
     [switch]$LegacyTsc = $false,
     [switch]$LegacyDamage = $false,
+    [switch]$GfxReference = $false,
     [switch]$NoSync = $false
 )
 $ErrorActionPreference = 'Stop'
@@ -38,8 +39,12 @@ foreach ($module in @('kernel','desktop','compositor','graphics','gfx_device','s
     $optimization = if ($module -eq 'wm') { '-Oz' } else { '-Os' }
     $moduleFlags = @()
     if ($module -eq 'compositor' -and $LegacyDamage) { $moduleFlags += '-DPOLLIK_COMPOSITOR_LEGACY_DAMAGE=1' }
-    Invoke-Checked clang (@('--target=i386-none-elf','-m32','-march=i386','-ffreestanding','-fno-pic','-fno-pie','-fno-stack-protector','-mno-sse','-mno-mmx',$optimization,'-Wall','-Wextra','-Werror') + $tscCompileFlags + $moduleFlags + @('-Ikernel/include','-c',"kernel/$module.c",'-o',"build/$module.o"))
+    Invoke-Checked clang (@('--target=i386-none-elf','-m32','-march=i386','-ffreestanding','-fno-pic','-fno-pie','-fno-stack-protector','-mno-sse','-mno-mmx',$optimization,'-Wall','-Wextra','-Werror') + $tscCompileFlags + $moduleFlags + @('-Ikernel/include','-Ikernel/gfx','-c',"kernel/$module.c",'-o',"build/$module.o"))
 }
+$gfxFlags = @()
+if ($GfxReference) { $gfxFlags += '-DGFX_REFERENCE=1'; Write-Host 'Graphics primitives: reference scalar path' }
+else { Write-Host 'Graphics primitives: optimized x86 path' }
+Invoke-Checked clang (@('--target=i386-none-elf','-m32','-march=i386','-ffreestanding','-fno-pic','-fno-pie','-fno-stack-protector','-mno-sse','-mno-mmx','-Os','-Wall','-Wextra','-Werror') + $gfxFlags + @('-Ikernel/include','-Ikernel/gfx','-c','kernel/gfx/gfx_primitives.c','-o','build/gfx_primitives.o'))
 foreach ($m in $netModules) {
     Invoke-Checked clang @('--target=i386-none-elf','-m32','-march=i386','-ffreestanding','-fno-pic','-fno-pie','-fno-stack-protector','-mno-sse','-mno-mmx','-Os','-Wall','-Wextra','-Werror','-Ikernel/include','-c',"kernel/net/$m.c",'-o',"build/$m.o")
 }
@@ -65,7 +70,7 @@ foreach ($app in $userApps) {
 }
 $browserObjs = @($browserModules | ForEach-Object { "build/$_.o" })
 $netObjs = @($netModules | ForEach-Object { "build/$_.o" })
-$linkArgs = @('-m','elf_i386','-T','kernel/linker.ld','build/entry.o','build/interrupts.o','build/kernel.o','build/desktop.o','build/compositor.o','build/graphics.o','build/gfx_device.o','build/soft3d.o','build/input_dispatch.o','build/wm.o','build/ui.o','build/hw.o','build/hal.o','build/mem.o','build/pmm.o','build/vmm.o','build/klog.o','build/ahci.o','build/storage.o','build/pollikfs.o','build/vfs.o','build/process.o','build/syscall.o','build/elf.o','build/trash.o','build/ui_animation.o','build/desktop_items.o','build/auth.o','build/media.o','build/pollikgl.o','build/audio.o') + $userElfObjs + @('build/network.o','build/framebuffer.o') + $netObjs + $browserObjs + $guiObjs + @('build/elk.o') + @('build/libbearssl.a','-o','build/kernel.elf')
+$linkArgs = @('-m','elf_i386','-T','kernel/linker.ld','build/entry.o','build/interrupts.o','build/kernel.o','build/desktop.o','build/compositor.o','build/graphics.o','build/gfx_primitives.o','build/gfx_device.o','build/soft3d.o','build/input_dispatch.o','build/wm.o','build/ui.o','build/hw.o','build/hal.o','build/mem.o','build/pmm.o','build/vmm.o','build/klog.o','build/ahci.o','build/storage.o','build/pollikfs.o','build/vfs.o','build/process.o','build/syscall.o','build/elf.o','build/trash.o','build/ui_animation.o','build/desktop_items.o','build/auth.o','build/media.o','build/pollikgl.o','build/audio.o') + $userElfObjs + @('build/network.o','build/framebuffer.o') + $netObjs + $browserObjs + $guiObjs + @('build/elk.o') + @('build/libbearssl.a','-o','build/kernel.elf')
 Invoke-Checked ld.lld $linkArgs
 Invoke-Checked llvm-objcopy @('-O','binary','build/kernel.elf','build/kernel.bin')
 $kernelBytes = [IO.File]::ReadAllBytes("$PSScriptRoot/build/kernel.bin")

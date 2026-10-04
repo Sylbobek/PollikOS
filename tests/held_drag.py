@@ -17,7 +17,7 @@ def main():
     command = [clang, "-std=c11", "-O2", "-fno-builtin", "-Wall", "-Wextra", "-Werror"]
     if os.name == "nt":
         command.append("-fuse-ld=lld")
-    command += ["tests/held_drag.c", "kernel/graphics.c", "-o", str(executable)]
+    command += ["tests/held_drag.c", "kernel/graphics.c", "kernel/gfx/gfx_primitives.c", "-o", str(executable)]
     print("Compile native regression: " + subprocess.list2cmdline(command), flush=True)
     subprocess.run(command, cwd=ROOT, check=True)
     subprocess.run([str(executable)], cwd=ROOT, check=True)
