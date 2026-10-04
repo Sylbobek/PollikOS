@@ -17,7 +17,16 @@ static void layout_text_node(DomNode *node, int start_x, int start_y, int avail_
     }
 
     const char *visible=node->text;while(*visible && *visible<=32)visible++;
-    if(!*visible){node->box.x=start_x;node->box.y=start_y;node->box.w=node->box.h=0;return;}
+    if(!*visible){
+        node->box.x=start_x;node->box.y=start_y;
+        int has_ws=0; for(const char*q=node->text;*q;q++) if(*q==' '||*q=='\t'||*q=='\n'||*q=='\r'){has_ws=1;break;}
+        int fs=node->style.font_size>0?node->style.font_size:1;
+        int sw=has_ws?sys_text_width(" ",fs):0;
+        int lh=node->style.line_height>0?node->style.line_height:(get_font_height(fs)+4);
+        node->box.w=sw; node->box.h=has_ws?lh:0;
+        node->box.content_w=sw; node->box.content_h=node->box.h;
+        return;
+    }
     int scale = node->style.font_size > 0 ? node->style.font_size : 1;
     int line_h = node->style.line_height > 0 ? node->style.line_height : (get_font_height(scale) + 4);
     int space_w = sys_text_width(" ", scale);
@@ -97,60 +106,62 @@ static void layout_flex_container(DomNode *node, int cur_x, int cur_y, int conte
         }
         *out_h = (y > cur_y) ? (y - cur_y - gap) : 0;
     } else {
-        /* Row flex */
-        int total_children_w = 0;
-        int max_child_h = 0;
-        int child_count = 0;
+        /* Row flex with flex-grow/shrink and align-self */
+        DomNode *kids[32];
+        int kw[32], kh[32];
+        int n = 0, natural_total = 0, total_grow = 0, total_shrink = 0, max_child_h = 0;
 
         DomNode *child = node->first_child;
-        while (child) {
+        while (child && n < 32) {
             if (child->style.display != DISPLAY_NONE) {
-                int ch_h = 0;
                 int child_w = child->style.width >= 0 ? child->style.width : (content_w / 3);
+                if (child->style.flex_basis >= 0) child_w = child->style.flex_basis;
+                int ch_h = 0;
                 layout_node_recursive(child, 0, 0, child_w, &ch_h);
-                total_children_w += child->box.w;
+                kids[n] = child; kw[n] = child->box.w; kh[n] = child->box.h;
+                natural_total += child->box.w;
+                total_grow += child->style.flex_grow > 0 ? child->style.flex_grow : 0;
+                total_shrink += child->style.flex_shrink;
                 if (child->box.h > max_child_h) max_child_h = child->box.h;
-                child_count++;
+                n++;
             }
             child = child->next_sibling;
         }
-
-        if (child_count > 1) {
-            total_children_w += (child_count - 1) * gap;
+        int gaps = n > 1 ? (n - 1) * gap : 0;
+        int extra = content_w - natural_total - gaps;
+        if (extra > 0 && total_grow > 0) {
+            for (int i = 0; i < n; i++) {
+                int g = kids[i]->style.flex_grow; if (g < 0) g = 0;
+                kw[i] += extra * g / total_grow;
+            }
+        } else if (extra < 0 && total_shrink > 0) {
+            for (int i = 0; i < n; i++) {
+                int s = kids[i]->style.flex_shrink; if (s < 0) s = 0;
+                kw[i] += extra * s / total_shrink;
+                if (kw[i] < 10) kw[i] = 10;
+            }
         }
 
-        /* Justify content offset */
-        int start_x = cur_x;
-        int extra_space = content_w - total_children_w;
-        if (extra_space < 0) extra_space = 0;
-
+        int final_total = gaps;
+        for (int i = 0; i < n; i++) final_total += kw[i];
+        int start_x = cur_x, free = content_w - final_total;
+        if (free < 0) free = 0;
         int space_between = 0;
-        if (node->style.justify == JUSTIFY_CENTER) {
-            start_x += extra_space / 2;
-        } else if (node->style.justify == JUSTIFY_END) {
-            start_x += extra_space;
-        } else if (node->style.justify == JUSTIFY_BETWEEN && child_count > 1) {
-            space_between = extra_space / (child_count - 1);
-        }
+        if (node->style.justify == JUSTIFY_CENTER) start_x += free / 2;
+        else if (node->style.justify == JUSTIFY_END) start_x += free;
+        else if (node->style.justify == JUSTIFY_BETWEEN && n > 1) space_between = free / (n - 1);
 
         int x = start_x;
-        child = node->first_child;
-        while (child) {
-            if (child->style.display != DISPLAY_NONE) {
-                int y = cur_y;
-                if (node->style.align_items == ALIGN_ITEMS_CENTER) {
-                    y += (max_child_h - child->box.h) / 2;
-                } else if (node->style.align_items == ALIGN_ITEMS_END) {
-                    y += (max_child_h - child->box.h);
-                } else if (node->style.align_items == ALIGN_ITEMS_STRETCH) {
-                    child->box.h = max_child_h;
-                }
-
-                int ch_h = 0;
-                layout_node_recursive(child, x, y, child->box.w, &ch_h);
-                x += child->box.w + gap + space_between;
-            }
-            child = child->next_sibling;
+        for (int i = 0; i < n; i++) {
+            AlignItems a = kids[i]->style.align_self >= 0
+                ? (AlignItems)kids[i]->style.align_self : node->style.align_items;
+            int y = cur_y;
+            if (a == ALIGN_ITEMS_CENTER) y += (max_child_h - kh[i]) / 2;
+            else if (a == ALIGN_ITEMS_END) y += (max_child_h - kh[i]);
+            int ch_h = 0;
+            layout_node_recursive(kids[i], x, y, kw[i], &ch_h);
+            if (a == ALIGN_ITEMS_STRETCH) kids[i]->box.h = max_child_h;
+            x += kw[i] + gap + space_between;
         }
         *out_h = max_child_h;
     }
@@ -266,6 +277,7 @@ static void layout_node_recursive(DomNode *node, int cur_x, int cur_y, int avail
     int box_y = cur_y + mt;
 
     int box_w = node->style.width;
+    if (box_w >= 0 && !node->style.box_border_box) box_w += pl + pr + 2 * bw; /* content-box */
     if (box_w < 0) {
         if (node->style.display == DISPLAY_INLINE || node->style.display == DISPLAY_INLINE_BLOCK) {
             box_w = avail_w; /* May shrink after child layout */
@@ -274,6 +286,15 @@ static void layout_node_recursive(DomNode *node, int cur_x, int cur_y, int avail
         }
     }
     if (box_w < 0) box_w = 0;
+    /* min/max width (content-box semantics unless border-box is set). */
+    if (node->style.max_width >= 0) {
+        int cap = node->style.max_width + (node->style.box_border_box ? 0 : pl + pr + 2 * bw);
+        if (box_w > cap) box_w = cap;
+    }
+    if (node->style.min_width >= 0) {
+        int floorw = node->style.min_width + (node->style.box_border_box ? 0 : pl + pr + 2 * bw);
+        if (box_w < floorw) box_w = floorw;
+    }
 
     int inner_w = box_w - pl - pr - 2 * bw;
     if (inner_w < 0) inner_w = 0;
@@ -341,8 +362,17 @@ static void layout_node_recursive(DomNode *node, int cur_x, int cur_y, int avail
     }
 
     int box_h = node->style.height;
+    if (box_h >= 0 && !node->style.box_border_box) box_h += pt + pb + 2 * bw;
     if (box_h < 0) {
         box_h = children_h + pt + pb + 2 * bw;
+    }
+    if (node->style.max_height >= 0) {
+        int cap = node->style.max_height + (node->style.box_border_box ? 0 : pt + pb + 2 * bw);
+        if (box_h > cap) box_h = cap;
+    }
+    if (node->style.min_height >= 0) {
+        int floorh = node->style.min_height + (node->style.box_border_box ? 0 : pt + pb + 2 * bw);
+        if (box_h < floorh) box_h = floorh;
     }
     if (box_h < 0) box_h = 0;
 

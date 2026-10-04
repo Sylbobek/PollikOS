@@ -5,6 +5,8 @@
 #include "desktop.h"
 #include "input_dispatch.h"
 #include "gui/apps.h"
+#include "auth.h"
+#include "audio.h"
 
 /* Freestanding runtime and machine boot remain separate from the GUI shell. */
 void *memset(void *p, int v, unsigned n) {
@@ -55,25 +57,35 @@ void kernel_main(void) {
     vmm_self_test();
     if (!framebuffer_init((const u8 *)0x7000)) {
         serial("Unsupported VBE framebuffer\n");
-        for (;;) __asm__ volatile("cli; hlt");
+        hal_cpu_halt_forever();
     }
     desktop_init();
+    compositor_splash("Bringing up the system", 8);
     mem_init();
+    compositor_splash("Initializing memory", 22);
     fs_init();
+    compositor_splash("Mounting the file system", 38);
     extern void vfs_init(void);
     vfs_init();
+    compositor_splash("Preparing your files", 52);
     input_dispatch_init();
     rtc_init();
+    compositor_splash("Starting devices", 66);
+    audio_init();
     net_init();
+    compositor_splash("Connecting to the network", 78);
     gui_apps_init();
     process_init();
+    compositor_splash("Loading applications", 90);
+    auth_init();
     desktop_start();
+    audio_play_sound(SOUND_STARTUP);
     serial("VBE ready; PS/2 ready; desktop ready\n");
     for (;;) {
         const char *old_net = net_status;
         net_poll();
         phase2_poll();
         if (desktop_poll(old_net != net_status) && !(inb(0x64) & 1))
-            __asm__ volatile("sti; hlt");
+            hal_cpu_idle_once();
     }
 }

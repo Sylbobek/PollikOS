@@ -16,6 +16,8 @@ To **renderer CPU, nie benchmark GPU**. Nie ma sprzętowej akceleracji 3D, pomia
 
 PollikMark zajmuje slot aplikacji 6 (siódma ikona, F7). Klawisze 1–8 uruchamiają wybrany test; Enter uruchamia sekwencję wszystkich wspieranych testów; Esc lub `s` zatrzymuje bez minimalizowania okna. `i` przełącza informacje, `n`/`p` przegląda poziomy po zatrzymaniu. Zamknięcie zwalnia bufory, zachowując surowe wyniki; ponowne uruchomienie danego poziomu zastępuje jego wynik. Rozpoczęcie Run all nie zeruje globalnie całej tablicy, więc zachowane poziomy mogą pochodzić z wcześniejszych uruchomień.
 
+Widok informacji (`i`) pokazuje rozdzielczość i format framebufferu, możliwości programowego renderera, teksturę, dostępną pamięć fizyczną, rozdzielczość zegara, liczbę klatek kompozytora, bieżące prezentacje/s oraz łączne czasy etapów GUI. Wartości są ograniczane do kolumn panelu, aby etykiety nie zachodziły na siebie.
+
 Domyślne okno ma 680×410, minimalne 480×280. Obszar wejściowy viewportu to `(win_w - 220) × (win_h - 190)`. Jest dopasowywany z zachowaniem proporcji (z całkowitoliczbowym obcięciem) do **maksymalnie 192×128 px** — nie zawsze ma dokładnie taki rozmiar. Przykłady wynikające z kodu:
 
 | Okno | Viewport |

@@ -5,6 +5,13 @@ import os
 import socket
 import subprocess
 import time
+import argparse
+import sys
+from format_pollikfs2 import format_disk
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--notes-only', action='store_true', help='Run cursor, Terminal and Notes checks only')
+options = parser.parse_args()
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BUILD = ROOT / "build"
@@ -14,7 +21,12 @@ with socket.socket() as reserve:
 log = BUILD / "smoke-serial.log"
 log.write_text("")
 data_disk = BUILD / "smoke-data.img"
-data_disk.write_bytes(bytes(4 * 1024 * 1024))
+format_disk(data_disk, total_size_mb=40)
+sys.path.insert(0, str(ROOT / "sdk" / "tools"))
+from pollikfs_install import PollikFsImage
+fixture_fs = PollikFsImage.load(data_disk)
+fixture_fs.install_file("/home/test.pol", (BUILD / "hello.elf").read_bytes())
+fixture_fs.save(data_disk)
 process = subprocess.Popen([
     "qemu-system-x86_64", "-machine", "pc", "-m", "64M", "-vga", "std",
     "-drive", f"format=raw,file={BUILD / os.environ.get('POLLIK_TEST_IMAGE', 'PollikOS-Alpha.img')},if=ide,index=0,snapshot=on",
@@ -48,6 +60,15 @@ try:
     def hmp(command):
         return qmp("human-monitor-command", {"command-line": command})
 
+    def move_mouse(dx, dy):
+        while dx or dy:
+            sx = max(-80, min(80, dx))
+            sy = max(-80, min(80, dy))
+            hmp(f"mouse_move {sx} {sy}")
+            dx -= sx
+            dy -= sy
+            time.sleep(.005)
+
     def key(name):
         hmp("sendkey " + name)
         time.sleep(.15)
@@ -62,6 +83,23 @@ try:
     while "desktop ready" not in log.read_text():
         if time.monotonic() > deadline:
             raise AssertionError("Kernel did not reach the desktop")
+        time.sleep(.1)
+    # The disposable disk starts with a valid empty filesystem, so first boot
+    # must finish account setup before desktop shortcuts are usable.
+    if "SETUP: first-run installer ready" not in log.read_text():
+        raise AssertionError("Fresh smoke filesystem did not enter first-run setup")
+    key("ret")
+    for char in "smoke":
+        key(char)
+    key("ret")
+    for _ in range(2):
+        for char in "smokepass":
+            key(char)
+        key("ret")
+    deadline = time.monotonic() + 15
+    while "AUTH: account created; installation complete" not in log.read_text():
+        if time.monotonic() > deadline:
+            raise AssertionError("First-run account setup did not complete")
         time.sleep(.1)
     desktop = shot("welcome")
     assert b"1024 768" in desktop[:40], "Wrong display dimensions"
@@ -92,8 +130,11 @@ try:
     # Measure the active Notes body from the actual framebuffer (full window
     # includes 34px chrome), then use notes.c's 150px reserve / 20px row pitch.
     pixels = before[-1024*768*3:]
+    # See GUI_SMOKE_FIXTURE.md: current dark compositor uses 121520; the
+    # historical faf9fc body remains valid for light-mode Notes.
+    body_colors = (b"\x12\x15\x20", b"\xfa\xf9\xfc")
     body_rows = [y for y in range(768) if any(
-        pixels[i:i+3] == b"\xfa\xf9\xfc"
+        pixels[i:i+3] in body_colors
         for i in range(y*1024*3, (y+1)*1024*3, 3))]
     assert body_rows, "Active Notes body not found"
     # Matching pixels also occur in dock icons: use the longest contiguous run,
@@ -124,22 +165,27 @@ try:
     qmp("input-send-event", {"events":[{"type":"btn","data":{"down":True,"button":"wheel-up"}}]})
     qmp("input-send-event", {"events":[{"type":"btn","data":{"down":False,"button":"wheel-up"}}]})
     assert shot("notes-wheel-restored") == before, "Reverse scroll did not restore notes"
+    if options.notes_only:
+        print('PASS: focused GUI cursor, Terminal, Notes editing and wheel round trip')
+        qmp('quit')
+        raise SystemExit(0)
     key("f5")
     settings = shot("settings")
-    # Initial pointer is (760,500); ocean palette is at (514..794,249..323).
-    hmp("mouse_move -110 -220")
+    # Settings opens at (170,125); accent swatch 1 is centered at local
+    # (257,261), so move there from the current pointer at (760,500).
+    hmp("mouse_move -333 -114")
     time.sleep(.2)
     hmp("mouse_button 1")
     time.sleep(.15)
     hmp("mouse_button 0")
-    ocean = shot("settings-ocean")
-    assert ocean[-1024*3:] != settings[-1024*3:], "PS/2 click did not change wallpaper"
+    accent = shot("settings-accent")
+    assert accent != settings, "PS/2 click did not change the selected accent"
     key("esc")
-    # Move to terminal dock icon (508,710) and open it with the mouse.
-    hmp("mouse_move -142 430")
+    # Move from the accent swatch to the Terminal dock icon at (443,710).
+    hmp("mouse_move 16 324")
     time.sleep(.2)
     hover_image=shot("dock-hover")
-    assert hover_image != ocean, "Dock hover did not redraw"
+    assert hover_image != accent, "Dock hover did not redraw"
     hmp("mouse_button 1")
     time.sleep(.15)
     hmp("mouse_button 0")
@@ -163,6 +209,22 @@ try:
                 raise AssertionError(f"Command did not complete: {command}: {result}")
             time.sleep(.05)
 
+    # Explorer launches a real Ring 3 .pol executable.
+    key("f2")
+    time.sleep(.1)
+    launch_start = len(log.read_text())
+    key("down")
+    key("down")
+    key("down")
+    key("ret")
+    deadline = time.monotonic() + 5
+    while "[TEST] EVENT_QUEUE PASS" not in log.read_text()[launch_start:]:
+        if time.monotonic() > deadline:
+            raise AssertionError("Explorer did not launch the selected .pol Ring 3 program")
+        time.sleep(.05)
+    installed = shell("ls /Applications")
+    assert ".app" not in installed, "Applications folder still contains placeholder .app packages"
+    move_mouse(-2048, -2048)
     assert "FS commit OK" in log.read_text()
     assert "NET RTL8139 ready" in log.read_text()
     assert "RUNNING" in shell("ps")
@@ -206,8 +268,21 @@ try:
             raise AssertionError("Reboot failed")
         time.sleep(.1)
     assert "FS mounted persistent snapshot" in log.read_text()
+    deadline = time.monotonic() + 15
+    while "AUTH: login required" not in log.read_text():
+        if time.monotonic() > deadline:
+            raise AssertionError("Reboot did not show the account login screen")
+        time.sleep(.1)
+    for char in "smokepass":
+        key(char)
+    key("ret")
+    deadline = time.monotonic() + 15
+    while "AUTH: login accepted" not in log.read_text():
+        if time.monotonic() > deadline:
+            raise AssertionError("Test account login failed after reboot")
+        time.sleep(.1)
     shell("open test.txt")
-    assert "xyz" in shell("cat"), "Saved file did not survive reboot"
+    assert "xyz" in shell("cat test.txt"), "Saved file did not survive reboot"
     shell("open welcome.txt")
     assert "File removed" in shell("rm test.txt")
     assert "test.txt" not in shell("ls"), "Removed file still listed"

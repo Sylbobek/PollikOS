@@ -36,7 +36,7 @@ void vmm_switch_address_space(page_directory_t *pd) {
     if (active_pdir == pd)
         return; /* Skip unnecessary CR3 reload / TLB flush */
     active_pdir = pd;
-    __asm__ volatile("mov %0, %%cr3" :: "r"((uintptr_t)pd) : "memory");
+    hal_write_cr3((unsigned long)(uintptr_t)pd);
 }
 
 #define USER_PDE_FIRST (USER_SPACE_START >> 22)
@@ -131,7 +131,7 @@ int map_page(page_directory_t *pd, uintptr_t virt_addr, uintptr_t phys_addr, u32
 
     page_table_t *pt = (page_table_t *)(pd[pde_idx] & ~0xFFFu);
     pt[pte_idx] = (phys_addr & ~0xFFFu) | (flags & 0xFFFu) | PAGE_PRESENT;
-    invlpg(virt_addr);
+    hal_invalidate_page((const void *)virt_addr);
     return 1;
 }
 
@@ -150,7 +150,7 @@ int unmap_page(page_directory_t *pd, uintptr_t virt_addr) {
 
     page_table_t *pt = (page_table_t *)(pd[pde_idx] & ~0xFFFu);
     pt[pte_idx] = 0;
-    invlpg(virt_addr);
+    hal_invalidate_page((const void *)virt_addr);
     return 1;
 }
 
@@ -352,13 +352,13 @@ void vmm_init(void) {
     }
 
     /* 4. Load CR3 with physical address of Page Directory */
-    __asm__ volatile("mov %0, %%cr3" :: "r"((uintptr_t)kernel_pdir) : "memory");
+    hal_write_cr3((unsigned long)(uintptr_t)kernel_pdir);
 
     /* 5. Enable Paging (CR0.PG, bit 31) and Write Protect in Ring 0 (CR0.WP, bit 16) */
     u32 cr0;
-    __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+    cr0 = (u32)hal_read_cr0();
     cr0 |= 0x80010000u; /* Bit 31: PG, Bit 16: WP */
-    __asm__ volatile("mov %0, %%cr0" :: "r"(cr0) : "memory");
+    hal_write_cr0(cr0);
 
     active_pdir = kernel_pdir;
     klog_hex(KLOG_CAT_VMM, "Paging active (CR0.PG=1, CR0.WP=1, CR3=", (uintptr_t)kernel_pdir);
@@ -367,7 +367,7 @@ void vmm_init(void) {
 void vmm_page_fault_handler(void *frame_ptr) {
     Frame *f = (Frame *)frame_ptr;
     u32 cr2;
-    __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+    cr2 = (u32)hal_read_cr2();
 
     char h_cr2[12], h_eip[12], h_err[12];
     hex_to_str(h_cr2, cr2);

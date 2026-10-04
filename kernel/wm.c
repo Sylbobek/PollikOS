@@ -1,6 +1,7 @@
 #include "wm.h"
 #include "system.h"
 #include "klog.h"
+#include "audio.h"
 #include "gui/apps.h"
 
 static int g_screen_w = 1024;
@@ -9,7 +10,18 @@ static int g_screen_h = 768;
 WindowSurface g_surfaces[NUM_APPS];
 
 Window g_windows[NUM_APPS] = {
-    {0, 0, 170, 125, 680, 410, WINDOW_STATE_NORMAL, 1, 0, 1, 1, 0, 480, 280, 1920, 1200, 170, 125, 680, 410, "Welcome"},
+    {0, 0, 170, 125, 680, 410, WINDOW_STATE_NORMAL, 1, 0, 1, 1, 0, 480, 280, 1920, 1200, 170, 125, 680, 410, "Welcome To pollikos"},
+    {1, 0, 130,  85, 680, 410, WINDOW_STATE_NORMAL, 0, 0, 0, 0, 0, 480, 280, 1920, 1200, 130,  85, 680, 410, "Files"},
+    {2, 0, 210, 145, 680, 410, WINDOW_STATE_NORMAL, 0, 0, 0, 0, 0, 480, 280, 1920, 1200, 210, 145, 680, 410, "Terminal"},
+    {3, 0, 170, 125, 680, 410, WINDOW_STATE_NORMAL, 0, 0, 0, 0, 0, 480, 280, 1920, 1200, 170, 125, 680, 410, "Notes"},
+    {4, 0, 170, 125, 680, 410, WINDOW_STATE_NORMAL, 0, 0, 0, 0, 0, 480, 280, 1920, 1200, 170, 125, 680, 410, "Settings"},
+    {5, 0, 170, 125, 680, 410, WINDOW_STATE_NORMAL, 0, 0, 0, 0, 0, 480, 280, 1920, 1200, 170, 125, 680, 410, "Browser"},
+    {6, 0, 170, 125, 680, 410, WINDOW_STATE_NORMAL, 0, 0, 0, 0, 0, 480, 280, 1920, 1200, 170, 125, 680, 410, "PollikMark3D"}
+};
+
+/* Default geometry per slot; restored on close so reopening starts fresh. */
+static const Window g_window_defaults[NUM_APPS] = {
+    {0, 0, 170, 125, 680, 410, WINDOW_STATE_NORMAL, 1, 0, 1, 1, 0, 480, 280, 1920, 1200, 170, 125, 680, 410, "Welcome To pollikos"},
     {1, 0, 130,  85, 680, 410, WINDOW_STATE_NORMAL, 0, 0, 0, 0, 0, 480, 280, 1920, 1200, 130,  85, 680, 410, "Files"},
     {2, 0, 210, 145, 680, 410, WINDOW_STATE_NORMAL, 0, 0, 0, 0, 0, 480, 280, 1920, 1200, 210, 145, 680, 410, "Terminal"},
     {3, 0, 170, 125, 680, 410, WINDOW_STATE_NORMAL, 0, 0, 0, 0, 0, 480, 280, 1920, 1200, 170, 125, 680, 410, "Notes"},
@@ -109,27 +121,21 @@ static u64 perf_div(u64 n, u32 d) {
     return ((u64)qh << 32) | ql;
 }
 static u64 perf_tsc(void) {
-    u32 lo, hi;
-    __asm__ volatile("cpuid; rdtsc" : "=a"(lo), "=d"(hi) : "a"(0) : "ebx", "ecx", "memory");
-    return ((u64)hi << 32) | lo;
+    return (u64)hal_read_tsc_serialized();
 }
 static int perf_tick_wait(u32 start, u32 count) {
     /* Bounded even if IRQs/PIT are broken. */
     for (u32 limit = 50000000; limit; limit--) {
         if ((u32)(ticks - start) >= count) return 1;
-        __asm__ volatile("pause");
+        hal_cpu_relax();
     }
     return 0;
 }
 void wm_timer_init(void) {
-    u32 flags, changed, a, b, c, d;
-    __asm__ volatile("pushfl; popl %0" : "=r"(flags));
-    changed = flags ^ (1u << 21);
-    __asm__ volatile("pushl %0; popfl; pushfl; popl %0" : "+r"(changed) :: "cc");
-    __asm__ volatile("pushl %0; popfl" :: "r"(flags) : "cc");
+    u32 a, b, c, d;
     g_tsc_per_ms = 0;
-    if (((changed ^ flags) & (1u << 21)) && (flags & 512)) {
-        __asm__ volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1));
+    if (hal_cpu_has_cpuid() && hal_interrupts_enabled()) {
+        hal_cpuid(1, 0, &a, &b, &c, &d);
         if ((d & 16) && perf_tick_wait(ticks, 1)) {
             u64 begin = perf_tsc();
             if (perf_tick_wait(ticks, 12)) {
@@ -198,7 +204,7 @@ void wm_init(int screen_w, int screen_h) {
     u32 slot_pages = surface_slot_pages(screen_w, screen_h, &capacity);
     if (!slot_pages) {
         serial("[WM] FATAL: invalid surface capacity\n");
-        for (;;) __asm__ volatile("cli; hlt");
+        hal_cpu_halt_forever();
     }
     WorkArea wa;
     wm_get_work_area(&wa);
@@ -207,8 +213,8 @@ void wm_init(int screen_w, int screen_h) {
         const GuiApp *app = gui_app_get(i);
         g_windows[i].min_w = app ? app->min_width : 480;
         g_windows[i].min_h = app ? app->min_height : 280;
-        g_windows[i].max_w = wa.w;
-        g_windows[i].max_h = wa.h;
+        g_windows[i].max_w = screen_w;
+        g_windows[i].max_h = screen_h;
         g_pre_minimized_state[i] = WINDOW_STATE_NORMAL;
         g_animations[i].active = 0;
         g_animations[i].type = ANIM_NONE;
@@ -222,8 +228,7 @@ void wm_init(int screen_w, int screen_h) {
             number(n, i);
             serial(n);
             serial("\n");
-            for (;;)
-                __asm__ volatile("cli; hlt");
+            hal_cpu_halt_forever();
         }
         memset((void *)phys, 0, slot_pages * PMM_PAGE_SIZE);
         ((u32 *)phys)[0] = SURFACE_CANARY;
@@ -378,6 +383,7 @@ void wm_open(int id) {
     w->visible = 1;
     wm_focus(id);
     wm_invalidate_window(id);
+    audio_play_sound(SOUND_CLICK);
 }
 
 void wm_close(int id) {
@@ -392,6 +398,22 @@ void wm_close(int id) {
         w->state = g_pre_minimized_state[id];
         if (r.w > 0 && r.h > 0) wm_set_rect(id, r);
     }
+    /* Reset to the slot's default geometry so a later open starts fresh. */
+    const Window *def = &g_window_defaults[id];
+    w->x = def->x;
+    w->y = def->y;
+    w->width = def->width;
+    w->height = def->height;
+    w->state = WINDOW_STATE_NORMAL;
+    w->restore_x = def->restore_x;
+    w->restore_y = def->restore_y;
+    w->restore_w = def->restore_w;
+    w->restore_h = def->restore_h;
+    g_pre_minimized_state[id] = WINDOW_STATE_NORMAL;
+    g_minimized_rect[id] = (Rect){0, 0, 0, 0};
+    w->dirty = 1;
+    g_surfaces[id].dirty = 1;
+
     w->open = 0;
     w->visible = 0;
     w->minimized = 0;
@@ -400,6 +422,7 @@ void wm_close(int id) {
         wm_unfocus();
         wm_focus_frontmost();
     }
+    audio_play_sound(SOUND_CLICK);
 }
 
 void wm_get_work_area(WorkArea *out_wa) {
@@ -448,10 +471,10 @@ void wm_get_snap_bounds(SnapTarget target, Rect *out_rect) {
         out_rect->h = wa.h;
         break;
     case SNAP_MAXIMIZE:
-        out_rect->x = wa.x;
-        out_rect->y = wa.y;
-        out_rect->w = wa.w;
-        out_rect->h = wa.h;
+        out_rect->x = 0;
+        out_rect->y = 32;
+        out_rect->w = g_screen_w;
+        out_rect->h = (g_screen_h - 96) - 32;
         break;
     case SNAP_TOP_LEFT:
         out_rect->x = wa.x;
@@ -633,6 +656,10 @@ void wm_update_animations(u32 now_ms) {
         int new_y = a->start_y + (((a->end_y - a->start_y) * factor) >> 8);
         int new_w = a->start_w + (((a->end_w - a->start_w) * factor) >> 8);
         int new_h = a->start_h + (((a->end_h - a->start_h) * factor) >> 8);
+        /* A zero-extent frame would make the compositor divide by ww/wh and
+         * triple-fault Ring 0 (spontaneous reboot). Never let a frame reach 0. */
+        if (new_w < 1) new_w = 1;
+        if (new_h < 1) new_h = 1;
 
         a->cur_x = new_x;
         a->cur_y = new_y;
@@ -909,9 +936,19 @@ int wm_has_damage(void) {
     return g_full_redraw || (g_num_dirty_rects > 0);
 }
 
+static int g_target_fps = 120;
+
+int wm_get_target_fps(void) {
+    return g_target_fps;
+}
+
+void wm_set_target_fps(int fps) {
+    g_target_fps = (fps <= 60) ? 60 : 120;
+}
+
 int wm_frame_due(u32 now_ms) {
-    /* 60 FPS = 16.6 ms per frame */
-    return (now_ms - g_last_frame_ms >= 16);
+    u32 interval = (g_target_fps <= 60) ? 16 : 8;
+    return (now_ms - g_last_frame_ms >= interval);
 }
 
 void wm_frame_scheduled(u32 now_ms) {

@@ -35,8 +35,9 @@ void browser_client_key(u8 code, char ch, int shift, int control) {
         else if (ch == '.') ch = '>';
         else if (ch == ',') ch = '<';
     }
-    browser_handle_key(code, ch);
+    browser_handle_key_ex(code, ch, shift, control);
 }
+int browser_client_drag(int x, int y, int active) { return browser_drag(x, y, active); }
 void browser_client_resized(int width, int height) {
     /* Geometry only: safe on the loader's cooperative presentation stack. */
     g_browser.x = 0; g_browser.y = 0;
@@ -45,6 +46,9 @@ void browser_client_resized(int width, int height) {
 }
 int browser_client_poll(void) {
     browser_poll();
+    if (g_browser.open && !g_browser.minimized && !g_browser.is_loading &&
+        browser_advance_media(g_browser.document))
+        g_browser.layout_dirty = 1;
     return g_browser.layout_dirty;
 }
 void browser_client_scroll(int delta) {

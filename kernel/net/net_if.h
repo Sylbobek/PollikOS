@@ -1,8 +1,12 @@
 #ifndef POLLIK_NET_IF_H
 #define POLLIK_NET_IF_H
 
+#ifdef POLLIK_X64
+#include "../arch/x86_64/net_platform.h"
+#else
 #include "../system.h"
 #include "../mem.h"
+#endif
 
 typedef enum {
     IF_TYPE_ETHERNET = 0,

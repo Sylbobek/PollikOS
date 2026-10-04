@@ -14,7 +14,7 @@
 // Alternatively, you can license this software under a commercial
 // license, please contact us at https://cesanta.com/contact.html
 
-#if defined(__GNUC__) && !defined(JS_OPT) && !defined(ARDUINO_AVR_UNO) && \
+#if defined(__GNUC__) && !defined(__clang__) && !defined(JS_OPT) && !defined(ARDUINO_AVR_UNO) && \
     !defined(ARDUINO_AVR_NANO) && !defined(ARDUINO_AVR_PRO) &&            \
     !defined(__APPLE__)
 #pragma GCC optimize("O3,inline")

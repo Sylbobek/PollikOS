@@ -20,6 +20,10 @@ void number(char *s, u32 n) { int k=0; char b[12]; do {b[k++]='0'+n%10;n/=10;}wh
 void js_init(void) {}
 void js_execute(const char *s, DomNode *d) {(void)s;(void)d;}
 void js_dispatch_event(DomNode *n, const char *s) {(void)n;(void)s;CHECK(!in_service);}
+void js_set_event_pos(int x, int y) {(void)x;(void)y;}
+void js_set_event_key(int k) {(void)k;}
+void js_service_tasks(void) {}
+int js_has_pending_tasks(void) {return 0;}
 void browser_load_images(DomNode *n,const char *s) {(void)n;(void)s;browser_work_checkpoint();}
 void render_dom(DomNode *n,int x,int y,int w,int h,int scroll) {
     (void)n;
@@ -39,8 +43,8 @@ int sys_get_glyph_advance(u8 c,int scale) {(void)c;return 6*scale;}
 void sys_draw_rect_clipped(int x,int y,int w,int h,u32 c,int a,int b,int d,int e) {
     (void)a;(void)b;(void)d;(void)e;
     if(c==0xf4f2f8) {
-        CHECK(x==g_browser.x && y==g_browser.y+g_browser.h-18);
-        CHECK(w==g_browser.w && h==18); ++status_strip;
+        CHECK(x==g_browser.x && y==g_browser.y+g_browser.h-22);
+        CHECK(w==g_browser.w && h==22); ++status_strip;
     }
     if(c==0x403060) {
         CHECK(x>=g_browser.x+150 && x<g_browser.x+g_browser.w-48);
@@ -51,6 +55,11 @@ void sys_draw_rect_clipped(int x,int y,int w,int h,u32 c,int a,int b,int d,int e
 void sys_draw_rounded_clipped(int x,int y,int w,int h,int r,u32 c,int a,int b,int d,int e) {
     (void)r;sys_draw_rect_clipped(x,y,w,h,c,a,b,d,e);
 }
+void sys_draw_roundrect_stroke_clipped(int x,int y,int w,int h,int r,int bw,u32 border,u32 fill,int a,int b,int d,int e) {
+    (void)r;(void)bw;(void)border;
+    sys_draw_rect_clipped(x,y,w,h,fill,a,b,d,e);
+}
+int ui_is_dark(void) {return 0;}
 void sys_draw_letter_clipped(int x,int y,u8 c,u32 color,int scale,int a,int b,int d,int e) {
     (void)c;(void)scale;sys_draw_rect_clipped(x,y,1,1,color,a,b,d,e);
 }
@@ -112,7 +121,7 @@ static void check_viewports(void) {
         browser_handle_scroll(-2147483647-1);CHECK(g_browser.scroll_y==0);
         browser_handle_scroll(2147483647);CHECK(g_browser.scroll_y==max);
         browser_render(1);
-        if(max>0) CHECK(thumb_bottom==g_browser.y+g_browser.h-18);
+        if(max>0) CHECK(thumb_bottom==g_browser.y+g_browser.h-22);
         browser_focus_address();
         for(int j=0;j<250;j++) browser_handle_key(30,'w');
         CHECK(g_browser.input_cursor==250);

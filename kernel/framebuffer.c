@@ -45,9 +45,26 @@ int framebuffer_init(const u8 *v) {
     outw(0x1ce,0);u16 id=inw(0x1cf);
     if(id>=0xb0c0 && id<=0xb0c5) {
         dispi(4,0);dispi(1,w);dispi(2,h);dispi(3,32);dispi(6,w);dispi(8,0);dispi(9,0);dispi(4,0x41);
-        outw(0x1ce,1);screen_w=inw(0x1cf);
-        outw(0x1ce,2);screen_h=inw(0x1cf);
-        bytes=4;stride=screen_w*4;
+        /* Read the mode back instead of trusting the write: a warm reboot can
+         * leave DISPI latched at the previous resolution while the VBE block is
+         * re-POSTed to 1024x768. Assuming screen_w*4 then produced a skewed
+         * ("deformed") image in fullscreen until the mode was re-applied. */
+        outw(0x1ce,1);int rw=inw(0x1cf);
+        outw(0x1ce,2);int rh=inw(0x1cf);
+        outw(0x1ce,3);int rbpp=inw(0x1cf);
+        outw(0x1ce,6);int rvirt=inw(0x1cf);
+        if(rw>=1024 && rh>=720) { screen_w=rw; screen_h=rh; }
+        if(rbpp==32 || rbpp==24) bytes=rbpp/8;
+        /* DISPI VIRT_WIDTH (index 6) is in PIXELS, not bytes. The byte pitch is
+         * virt_width_pixels * bytes_per_pixel; comparing it to screen_w*bytes
+         * would mix units and corrupt stride. */
+        if(rvirt>=screen_w) stride=rvirt*bytes;
+        else stride=screen_w*bytes;
+        if(rw!=w || rh!=h) {
+            serial("GFX DISPI mode mismatch: requested ");
+            char nb[16];number(nb,w);serial(nb);serial("x");number(nb,h);serial(nb);
+            serial(" got ");number(nb,screen_w);serial(nb);serial("x");number(nb,screen_h);serial(nb);serial("\n");
+        }
     }
     char dimensions[16];
     serial("GFX resolution: ");

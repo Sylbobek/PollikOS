@@ -69,6 +69,7 @@ typedef struct {
     int exit_code;
     u32 reports;
     u32 switches;
+    u32 ticks_consumed;
     page_directory_t *page_directory;
     uintptr_t kernel_stack_bottom;
     uintptr_t kernel_stack_top;
@@ -92,6 +93,7 @@ typedef struct {
 
 void process_init(void);
 void process_list(char *out);
+int process_get_count(void);
 int process_action(int pid, int action);
 void process_fault_test(void);
 int process_spawn_elf(const char *name, const u8 *elf_data, u32 elf_size);

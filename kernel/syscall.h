@@ -1,8 +1,6 @@
 #ifndef POLLIK_SYSCALL_H
 #define POLLIK_SYSCALL_H
 
-#include "system.h"
-
 #define SYS_EXIT       1
 #define SYS_FORK       2
 #define SYS_READ       3
@@ -26,6 +24,7 @@
 #define SYS_CONNECT    168
 #define SYS_SEND       169
 #define SYS_RECV       170
+#define SYS_ABI_INFO   171
 
 /* Standard POSIX-style Error Codes */
 #define EPERM   1
@@ -40,5 +39,6 @@
 
 void syscall_init(void);
 void *syscall_dispatch(void *frame_ptr);
+void syscall_close_process_sockets(int pid);
 
 #endif

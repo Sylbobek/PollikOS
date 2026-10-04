@@ -13,6 +13,7 @@ import struct
 import subprocess
 import tempfile
 import time
+from format_pollikfs2 import format_disk
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BUILD = ROOT / 'build'
@@ -79,8 +80,7 @@ class Guest:
 
     def __enter__(self):
         data = self.folder / 'data.img'
-        with data.open('wb') as f:
-            f.truncate(64 * 1024 * 1024)
+        format_disk(data, total_size_mb=40)
         with socket.socket() as reserve:
             reserve.bind(('127.0.0.1', 0))
             port = reserve.getsockname()[1]
@@ -106,6 +106,21 @@ class Guest:
             self.qmp('qmp_capabilities')
             self.wait(lambda: 'desktop ready' in self.log.read_text(), 'desktop boot', 40)
             assert f'GFX resolution: {self.resolution}' in self.log.read_text()
+            if 'SETUP: first-run installer ready' in self.log.read_text():
+                def send_key(key):
+                    self.hmp('sendkey ' + key)
+                    time.sleep(.12)
+                send_key('ret')
+                for key in 'benchmark': send_key(key)
+                send_key('ret')
+                for key in 'test123': send_key(key)
+                send_key('ret')
+                for key in 'test123': send_key(key)
+                send_key('ret')
+                self.wait(lambda: 'AUTH: account created; installation complete' in self.log.read_text(),
+                          'disposable benchmark account setup', 20)
+            else:
+                assert 'AUTH: login required' in self.log.read_text(), 'formatted test disk was not recognized'
             self.wait(lambda: self.stats()['frame_count'] > 0, 'initial frame')
             return self
         except BaseException:

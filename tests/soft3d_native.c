@@ -9,6 +9,7 @@ int framebuffer_bpp(void){return 32;}
 static u32 pixels[34*32+2];
 static float depth[34*32+2];
 static int near(float a,float b){return a-b<0.001f && b-a<0.001f;}
+static u32 at(int x,int y){return pixels[y*34+x+1];}
 int main(void) {
     GfxTarget t={pixels+1,depth+1,32,32,34,34*32};
     pixels[0]=pixels[34*32+1]=0xabcdef;depth[0]=depth[34*32+1]=123;
@@ -52,5 +53,65 @@ int main(void) {
     }
     CHECK(pixels[0]==0xabcdef && pixels[1089]==0xabcdef);
     CHECK(depth[0]==123 && depth[1089]==123);
-    printf("soft3d native: %s (matrices, depth, culling, clipping, bounds)\n",failed?"FAIL":"PASS");return !!failed;
+    /* Textured pipeline: power-of-two contract, wrap, nearest, bilinear. */
+    static u32 texbuf[16];
+    for(int i=0;i<16;i++)texbuf[i]=0x102030+i*0x010203;
+    GfxTexture tex={texbuf,4,4};
+    GfxTexture badtex=tex;badtex.pixels=0;
+    CHECK(soft3d_triangle_textured(&t,&tri,1,0,32,&badtex,1,0)==0);
+    badtex=tex;badtex.width=3;CHECK(soft3d_triangle_textured(&t,&tri,1,0,32,&badtex,1,0)==0);
+    badtex=tex;badtex.height=4096;CHECK(soft3d_triangle_textured(&t,&tri,1,0,32,&badtex,1,0)==0);
+    CHECK(soft3d_triangle_textured(&t,&tri,1,0,32,0,0,0)==0);
+    CHECK(soft3d_triangle_textured(&t,&tri,1,0,32,&tex,2,0)==0);
+    /* Same-position quad as two CCW triangles; constant uv where uv=(0.5,0.5)
+     * maps to texel (2,2). Both triangles sample every covered pixel. */
+    Triangle quad={{{{-0.95f,-0.95f,0,1},{1,1,1},{0.125f,0.125f}},
+        {{0.95f,-0.95f,0,1},{1,1,1},{0.125f,0.125f}},{{0.95f,0.95f,0,1},{1,1,1},{0.125f,0.125f}}}};
+    Triangle quad2={{{{-0.95f,-0.95f,0,1},{1,1,1},{0.125f,0.125f}},
+        {{0.95f,0.95f,0,1},{1,1,1},{0.125f,0.125f}},{{-0.95f,0.95f,0,1},{1,1,1},{0.125f,0.125f}}}};
+    gfx_clear(&t,0,~0u,0);
+    CHECK(soft3d_triangle_textured(&t,&quad,1,0,32,&tex,1,0)>300);
+    CHECK(soft3d_triangle_textured(&t,&quad2,1,0,32,&tex,1,0)>300);
+    CHECK(at(24,24)==texbuf[0] && at(12,6)==texbuf[0]);
+    for(int i=0;i<3;i++)quad.v[i].uv=quad2.v[i].uv=(Vec2){0.375f,0.375f};
+    gfx_clear(&t,0,~0u,0);
+    soft3d_triangle_textured(&t,&quad,1,0,32,&tex,1,0);
+    soft3d_triangle_textured(&t,&quad2,1,0,32,&tex,1,0);
+    CHECK(at(24,24)==texbuf[5]);
+    gfx_clear(&t,0,~0u,0);
+    soft3d_triangle_textured(&t,&quad,1,0,32,&tex,1,1);
+    soft3d_triangle_textured(&t,&quad2,1,0,32,&tex,1,1);
+    CHECK(at(24,24)==texbuf[5]);
+    for(int i=0;i<3;i++)quad.v[i].uv=quad2.v[i].uv=(Vec2){0.5f,0.5f};
+    gfx_clear(&t,0,~0u,0);
+    soft3d_triangle_textured(&t,&quad,1,0,32,&tex,1,1);
+    soft3d_triangle_textured(&t,&quad2,1,0,32,&tex,1,1);
+    CHECK(at(24,24)==0x182f47);
+    /* Flat quad (all w=1): affine and perspective-correct agree per pixel. */
+    for(int i=0;i<3;i++)quad.v[i].uv=quad2.v[i].uv=(Vec2){0.375f,0.375f};
+    static u32 flat_affine[34*32], flat_persp[34*32];
+    u32 *saved=t.color;t.color=flat_affine+1;
+    gfx_clear(&t,0,~0u,0);soft3d_triangle_textured(&t,&quad,1,0,32,&tex,0,0);
+    soft3d_triangle_textured(&t,&quad2,1,0,32,&tex,0,0);
+    t.color=flat_persp+1;
+    gfx_clear(&t,0,~0u,0);soft3d_triangle_textured(&t,&quad,1,0,32,&tex,1,0);
+    soft3d_triangle_textured(&t,&quad2,1,0,32,&tex,1,0);
+    for(int i=0;i<34*32;i++)CHECK(flat_affine[i]==flat_persp[i]);
+    /* Strongly foreshortened quad: affine and perspective differ on screen. */
+    static u32 grad[64*64];
+    for(int y=0;y<64;y++)for(int x=0;x<64;x++)grad[y*64+x]=((u32)(x*4)<<16)|((u32)(y*4)<<8)|0x33;
+    GfxTexture gt={grad,64,64};
+    Triangle near_quad={{{{-0.9f,-0.9f,0,1},{1,1,1},{0,0}},{{0.9f,-0.9f,0,1},{1,1,1},{1,0}},{{7.2f,7.2f,0,8},{1,1,1},{1,1}}}};
+    Triangle near_quad2={{{{-0.9f,-0.9f,0,1},{1,1,1},{0,0}},{{7.2f,7.2f,0,8},{1,1,1},{1,1}},{{-0.9f,0.9f,0,1},{1,1,1},{0,1}}}};
+    t.color=saved;
+    gfx_clear(&t,0,~0u,0);
+    u32 affine_writes=soft3d_triangle_textured(&t,&near_quad,1,0,32,&gt,0,0);
+    affine_writes+=soft3d_triangle_textured(&t,&near_quad2,1,0,32,&gt,0,0);
+    u32 affine_seen=at(24,24);
+    gfx_clear(&t,0,~0u,0);
+    u32 persp_writes=soft3d_triangle_textured(&t,&near_quad,1,0,32,&gt,1,0);
+    persp_writes+=soft3d_triangle_textured(&t,&near_quad2,1,0,32,&gt,1,0);
+    CHECK(affine_writes==persp_writes && affine_writes>300);
+    CHECK(affine_seen!=at(24,24));
+    printf("soft3d native: %s (matrices, depth, culling, clipping, bounds, texture)\n",failed?"FAIL":"PASS");return !!failed;
 }

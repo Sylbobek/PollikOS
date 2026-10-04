@@ -1,7 +1,7 @@
 #include "syscall.h"
+#include "../include/pollikos_abi.h"
 #include "vfs.h"
 #include "vmm.h"
-#include "pmm.h"
 #include "klog.h"
 #include "process.h"
 #include "net/tcp.h"
@@ -25,11 +25,42 @@ extern int process_recv_ipc(int pid, int *out_src, void *out_buf, u32 max_len);
 
 #define MAX_USER_SOCKETS 8
 static TcpSocket *g_user_sockets[MAX_USER_SOCKETS];
+static int g_user_socket_owners[MAX_USER_SOCKETS];
+
+/* Syscall code uses these wrappers for every user-memory transfer so the
+ * VMM copy helpers remain the single validation boundary for the ABI. */
+static int syscall_copy_in(void *kernel_dest, const void *user_src, u32 size) {
+    return size == 0 || copy_from_user(kernel_dest, user_src, size);
+}
+
+static int syscall_copy_out(void *user_dest, const void *kernel_src, u32 size) {
+    return size == 0 || copy_to_user(user_dest, kernel_src, size);
+}
+
+static int syscall_copy_string(char *kernel_dest, const char *user_src, u32 max_len) {
+    return copy_string_from_user(kernel_dest, user_src, max_len);
+}
 
 void syscall_init(void) {
-    for (int i = 0; i < MAX_USER_SOCKETS; i++)
+    for (int i = 0; i < MAX_USER_SOCKETS; i++) {
         g_user_sockets[i] = 0;
+        g_user_socket_owners[i] = -1;
+    }
     KLOG_INFO(KLOG_CAT_PROC, "Syscall dispatcher initialized (INT 0x80)");
+}
+
+void syscall_close_process_sockets(int pid) {
+    if (pid <= 0)
+        return;
+    for (int i = 0; i < MAX_USER_SOCKETS; i++) {
+        TcpSocket *socket = g_user_sockets[i];
+        if (g_user_socket_owners[i] != pid)
+            continue;
+        if (socket && socket != (TcpSocket *)1)
+            tcp_close(socket);
+        g_user_sockets[i] = 0;
+        g_user_socket_owners[i] = -1;
+    }
 }
 
 void *syscall_dispatch(void *frame_ptr) {
@@ -46,6 +77,35 @@ void *syscall_dispatch(void *frame_ptr) {
     }
 
     switch (num) {
+    case SYS_ABI_INFO: {
+        const void *user_info = (const void *)f->ebx;
+        u32 requested_size = 0;
+        if (!syscall_copy_in(&requested_size, user_info, sizeof(requested_size))) {
+            f->eax = (u32)-EFAULT;
+            return f;
+        }
+        if (requested_size < POLLIKOS_ABI_INFO_MIN_SIZE) {
+            f->eax = (u32)-EINVAL;
+            return f;
+        }
+
+        PollikAbiInfo info;
+        info.size = sizeof(info);
+        info.major = POLLIKOS_ABI_VERSION_MAJOR;
+        info.minor = POLLIKOS_ABI_VERSION_MINOR;
+        info.architecture = POLLIKOS_ABI_ARCH_I386;
+        info.transport = POLLIKOS_ABI_TRANSPORT_INT80;
+        info.operation_namespace = POLLIKOS_ABI_NAMESPACE_I386;
+        info.features = POLLIKOS_ABI_FEATURE_PROCESS | POLLIKOS_ABI_FEATURE_FILES |
+                        POLLIKOS_ABI_FEATURE_IPC | POLLIKOS_ABI_FEATURE_NETWORK;
+        u32 written = requested_size < sizeof(info) ? requested_size : sizeof(info);
+        if (!syscall_copy_out((void *)user_info, &info, written)) {
+            f->eax = (u32)-EFAULT;
+            return f;
+        }
+        f->eax = written;
+        return f;
+    }
     case SYS_EXIT: {
         int code = (int)f->ebx;
         process_exit_current(code);
@@ -55,7 +115,7 @@ void *syscall_dispatch(void *frame_ptr) {
         const char *u_path = (const char *)f->ebx;
         int flags = (int)f->ecx;
         char kpath[VFS_MAX_PATH];
-        if (!copy_string_from_user(kpath, u_path, sizeof(kpath))) {
+        if (!syscall_copy_string(kpath, u_path, sizeof(kpath))) {
             f->eax = (u32)-EFAULT;
             return f;
         }
@@ -67,10 +127,15 @@ void *syscall_dispatch(void *frame_ptr) {
         int fd = (int)f->ebx;
         if (fd >= 100 && fd < 100 + MAX_USER_SOCKETS) {
             int s = fd - 100;
-            if (g_user_sockets[s] > (TcpSocket *)1) {
+            if (g_user_socket_owners[s] != process_get_current_pid()) {
+                f->eax = (u32)-EBADF;
+                return f;
+            }
+            if (g_user_sockets[s] && g_user_sockets[s] != (TcpSocket *)1) {
                 tcp_close(g_user_sockets[s]);
             }
             g_user_sockets[s] = 0;
+            g_user_socket_owners[s] = -1;
             f->eax = 0;
             return f;
         }
@@ -105,7 +170,10 @@ void *syscall_dispatch(void *frame_ptr) {
                 if (total == 0) total = (rd < 0) ? (u32)-EIO : 0;
                 break;
             }
-            copy_to_user((u8 *)u_buf + total, kbuf, (u32)rd);
+            if (!syscall_copy_out((u8 *)u_buf + total, kbuf, (u32)rd)) {
+                f->eax = (u32)-EFAULT;
+                return f;
+            }
             total += (u32)rd;
             if ((u32)rd < chunk)
                 break;
@@ -136,7 +204,10 @@ void *syscall_dispatch(void *frame_ptr) {
                 u32 chunk = len - total;
                 if (chunk > sizeof(kbuf) - 1)
                     chunk = sizeof(kbuf) - 1;
-                copy_from_user(kbuf, (const u8 *)u_buf + total, chunk);
+                if (!syscall_copy_in(kbuf, (const u8 *)u_buf + total, chunk)) {
+                    f->eax = (u32)-EFAULT;
+                    return f;
+                }
                 kbuf[chunk] = 0;
                 serial(kbuf);
                 total += chunk;
@@ -149,7 +220,10 @@ void *syscall_dispatch(void *frame_ptr) {
                 u32 chunk = len - total;
                 if (chunk > sizeof(kbuf))
                     chunk = sizeof(kbuf);
-                copy_from_user(kbuf, (const u8 *)u_buf + total, chunk);
+                if (!syscall_copy_in(kbuf, (const u8 *)u_buf + total, chunk)) {
+                    f->eax = (u32)-EFAULT;
+                    return f;
+                }
                 int wr = vfs_write(fd, kbuf, chunk);
                 if (wr <= 0) {
                     if (total == 0) total = (u32)-EIO;
@@ -172,7 +246,7 @@ void *syscall_dispatch(void *frame_ptr) {
     case SYS_SPAWN: {
         const char *u_path = (const char *)f->ebx;
         char kpath[VFS_MAX_PATH];
-        if (!copy_string_from_user(kpath, u_path, sizeof(kpath))) {
+        if (!syscall_copy_string(kpath, u_path, sizeof(kpath))) {
             f->eax = (u32)-EFAULT;
             return f;
         }
@@ -217,7 +291,10 @@ void *syscall_dispatch(void *frame_ptr) {
         SystemEvent ev;
         int cur_pid = process_get_current_pid();
         if (process_poll_event(cur_pid, &ev)) {
-            copy_to_user((u8 *)u_ev, (const u8 *)&ev, sizeof(SystemEvent));
+            if (!syscall_copy_out((u8 *)u_ev, &ev, sizeof(SystemEvent))) {
+                f->eax = (u32)-EFAULT;
+                return f;
+            }
             f->eax = 1;
             return f;
         }
@@ -234,7 +311,10 @@ void *syscall_dispatch(void *frame_ptr) {
         SystemEvent ev;
         int cur_pid = process_get_current_pid();
         if (process_poll_event(cur_pid, &ev)) {
-            copy_to_user((u8 *)u_ev, (const u8 *)&ev, sizeof(SystemEvent));
+            if (!syscall_copy_out((u8 *)u_ev, &ev, sizeof(SystemEvent))) {
+                f->eax = (u32)-EFAULT;
+                return f;
+            }
             f->eax = 1;
         } else {
             f->eax = 0;
@@ -253,7 +333,10 @@ void *syscall_dispatch(void *frame_ptr) {
                 f->eax = (u32)-EFAULT;
                 return f;
             }
-            copy_from_user(k_buf, (const u8 *)u_data, len);
+            if (!syscall_copy_in(k_buf, (const u8 *)u_data, len)) {
+                f->eax = (u32)-EFAULT;
+                return f;
+            }
         }
         int cur_pid = process_get_current_pid();
         int res = process_send_ipc(cur_pid, dest_pid, k_buf, len);
@@ -280,9 +363,15 @@ void *syscall_dispatch(void *frame_ptr) {
         int res = process_recv_ipc(cur_pid, &src_pid, k_buf, max_len);
         if (res >= 0) {
             if (u_src)
-                copy_to_user((u8 *)u_src, (const u8 *)&src_pid, sizeof(int));
+                if (!syscall_copy_out((u8 *)u_src, &src_pid, sizeof(int))) {
+                    f->eax = (u32)-EFAULT;
+                    return f;
+                }
             if (u_buf && res > 0)
-                copy_to_user((u8 *)u_buf, k_buf, (u32)res);
+                if (!syscall_copy_out((u8 *)u_buf, k_buf, (u32)res)) {
+                    f->eax = (u32)-EFAULT;
+                    return f;
+                }
             f->eax = (u32)res;
         } else {
             f->eax = (u32)-EAGAIN;
@@ -302,6 +391,7 @@ void *syscall_dispatch(void *frame_ptr) {
             return f;
         }
         g_user_sockets[slot] = (TcpSocket *)1;
+        g_user_socket_owners[slot] = process_get_current_pid();
         f->eax = (u32)(slot + 100);
         return f;
     }
@@ -312,6 +402,11 @@ void *syscall_dispatch(void *frame_ptr) {
             return f;
         }
         int slot = fd - 100;
+        if (g_user_socket_owners[slot] != process_get_current_pid() ||
+            g_user_sockets[slot] != (TcpSocket *)1) {
+            f->eax = (u32)-EBADF;
+            return f;
+        }
         const u8 *u_ip = (const u8 *)f->ecx;
         u16 port = (u16)f->edx;
         if (!user_range_valid(0, u_ip, 4, 0)) {
@@ -319,10 +414,15 @@ void *syscall_dispatch(void *frame_ptr) {
             return f;
         }
         u8 k_ip[4];
-        copy_from_user(k_ip, u_ip, 4);
+        if (!syscall_copy_in(k_ip, u_ip, 4)) {
+            f->eax = (u32)-EFAULT;
+            return f;
+        }
 
         TcpSocket *sock = net_manager_connect_tcp(k_ip, port);
         if (!sock) {
+            g_user_sockets[slot] = 0;
+            g_user_socket_owners[slot] = -1;
             f->eax = (u32)-EIO;
             return f;
         }
@@ -337,6 +437,10 @@ void *syscall_dispatch(void *frame_ptr) {
             return f;
         }
         int slot = fd - 100;
+        if (g_user_socket_owners[slot] != process_get_current_pid()) {
+            f->eax = (u32)-EBADF;
+            return f;
+        }
         TcpSocket *sock = g_user_sockets[slot];
         if (!sock || sock == (TcpSocket *)1) {
             f->eax = (u32)-EBADF;
@@ -357,7 +461,10 @@ void *syscall_dispatch(void *frame_ptr) {
         while (total < len) {
             u32 chunk = len - total;
             if (chunk > sizeof(k_buf)) chunk = sizeof(k_buf);
-            copy_from_user(k_buf, (const u8 *)u_buf + total, chunk);
+            if (!syscall_copy_in(k_buf, (const u8 *)u_buf + total, chunk)) {
+                f->eax = (u32)-EFAULT;
+                return f;
+            }
             int sent = tcp_send(sock, k_buf, (int)chunk);
             if (sent <= 0) break;
             total += (u32)sent;
@@ -373,6 +480,10 @@ void *syscall_dispatch(void *frame_ptr) {
             return f;
         }
         int slot = fd - 100;
+        if (g_user_socket_owners[slot] != process_get_current_pid()) {
+            f->eax = (u32)-EBADF;
+            return f;
+        }
         TcpSocket *sock = g_user_sockets[slot];
         if (!sock || sock == (TcpSocket *)1) {
             f->eax = (u32)-EBADF;
@@ -392,7 +503,10 @@ void *syscall_dispatch(void *frame_ptr) {
         u32 chunk = max_len > sizeof(k_buf) ? sizeof(k_buf) : max_len;
         int rd = tcp_read(sock, k_buf, (int)chunk);
         if (rd > 0) {
-            copy_to_user((u8 *)u_buf, k_buf, (u32)rd);
+            if (!syscall_copy_out((u8 *)u_buf, k_buf, (u32)rd)) {
+                f->eax = (u32)-EFAULT;
+                return f;
+            }
             f->eax = (u32)rd;
         } else if (rd == 0) {
             f->eax = tcp_is_connected(sock) ? (u32)-EAGAIN : 0;

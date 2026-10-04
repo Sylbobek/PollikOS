@@ -5,6 +5,8 @@
 /* Short drawing names retain the original client painting expressions. */
 #define rect ui_bridge_rect
 #define roundrect ui_bridge_roundrect
+#define roundrect_border ui_bridge_roundrect_border
+#define rounded ui_bridge_rounded
 #define text ui_bridge_text
 #define centered app_draw_centered
 #define mono app_draw_mono
@@ -48,7 +50,11 @@ static inline void app_text_box(AppRect r, const char *s, u32 c, int scale, int 
         letter(x, y, ch, c, scale); x += advance;
     }
 }
-/* Shared Notes/Terminal clipboard and append-only editing. Return 1 when
- * the original handler would mark a note changed (even empty backspace). */
+/* In-kernel clipboard shared by Notes and Terminal; this is not the host OS
+ * clipboard. */
+void app_clipboard_copy(const char *text, int length);
+int app_clipboard_paste(char *out, int capacity);
+/* Shared Notes/Terminal append-only editing. Return 1 when the original
+ * handler would mark a note changed (even empty backspace). */
 int app_edit_key(char *buf, int *n, int max, u8 code, char ch, int control);
 #endif

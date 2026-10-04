@@ -1,7 +1,11 @@
 #ifndef POLLIK_NET_UTIL_H
 #define POLLIK_NET_UTIL_H
 
+#ifdef POLLIK_X64
+#include "../arch/x86_64/net_platform.h"
+#else
 #include "../system.h"
+#endif
 
 static inline u16 net_be16(const u8 *p) {
     return (u16)(p[0] << 8 | p[1]);

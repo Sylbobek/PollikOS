@@ -1,6 +1,8 @@
 #ifndef POLLIKOS_SDK_H
 #define POLLIKOS_SDK_H
 
+#include "pollikos_abi.h"
+
 typedef unsigned char u8;
 typedef unsigned short u16;
 typedef unsigned int u32;
@@ -28,6 +30,7 @@ typedef unsigned int size_t;
 #define SYS_CONNECT    168
 #define SYS_SEND       169
 #define SYS_RECV       170
+#define SYS_ABI_INFO   171
 
 typedef enum {
     EVENT_NONE = 0,
@@ -97,6 +100,11 @@ static inline u32 _syscall3(u32 num, u32 a1, u32 a2, u32 a3) {
     u32 ret;
     __asm__ volatile("int $0x80" : "=a"(ret) : "a"(num), "b"(a1), "c"(a2), "d"(a3) : "memory");
     return ret;
+}
+
+/* Returns the number of ABI-info bytes written, or a negative PollikOS error. */
+static inline int pollikos_get_abi_info(PollikAbiInfo *info) {
+    return (int)_syscall1(SYS_ABI_INFO, (u32)info);
 }
 
 __attribute__((noreturn)) static inline void exit(int code) {
@@ -203,6 +211,7 @@ static inline int pollikos_recv(int sock, void *buf, u32 max_len) {
 
 int main(void);
 
+// NOLINTNEXTLINE(misc-definitions-in-headers)
 void _start(void) {
     int code = main();
     exit(code);

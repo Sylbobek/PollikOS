@@ -110,7 +110,12 @@ uintptr_t process_sbrk(u32 bytes) {
     uintptr_t target_page = (new_brk + 4095u) & ~0xFFFu;
 
     for (uintptr_t v = curr_page; v < target_page; v += PAGE_SIZE) {
-        allocate_page(processes[current].page_directory, v, PAGE_PRESENT | PAGE_USER | PAGE_RW);
+        if (!allocate_page(processes[current].page_directory, v, PAGE_PRESENT | PAGE_USER | PAGE_RW)) {
+            for (uintptr_t rb = curr_page; rb < v; rb += PAGE_SIZE) {
+                free_page(processes[current].page_directory, rb);
+            }
+            return 0;
+        }
     }
 
     processes[current].heap_end = new_brk;
@@ -499,8 +504,8 @@ static ProcessFrame *schedule(ProcessFrame *frame) {
                     continue;
                 }
             }
-            __asm__ volatile("fnsave %0; fwait" : "=m"(processes[current].fpu_state));
-            __asm__ volatile("frstor %0" :: "m"(processes[next].fpu_state));
+            hal_x87_save_reset(processes[current].fpu_state);
+            hal_x87_restore(processes[next].fpu_state);
 
             current = next;
             processes[next].switches++;
@@ -550,6 +555,7 @@ static void reap_dead_processes(int keep_running) {
     for (int i = 1; i < MAX_PROCESSES; i++) {
         if (i == keep_running || processes[i].state != PROC_STATE_DEAD)
             continue;
+        syscall_close_process_sockets(processes[i].pid);
         vfs_close_process_fds((vfs_file_t **)processes[i].fd_table);
         if (processes[i].is_flat) {
             if (processes[i].page_directory) {
@@ -574,6 +580,9 @@ ProcessFrame *process_schedule(ProcessFrame *frame) {
 ProcessFrame *interrupt_dispatch(ProcessFrame *f) {
     if (f->vector == 32) {
         ticks++;
+        if (current >= 0 && current < MAX_PROCESSES && processes[current].alive) {
+            processes[current].ticks_consumed++;
+        }
         outb(0x20, 0x20);
         return schedule(f);
     }
@@ -648,12 +657,13 @@ static void create_legacy_worker(int pid) {
 
 void process_init(void) {
     u32 cr0;
-    __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+    cr0 = (u32)hal_read_cr0();
     cr0 &= ~12u;
-    __asm__ volatile("mov %0, %%cr0; fninit" :: "r"(cr0));
+    hal_write_cr0(cr0);
+    hal_x87_init();
 
     for (int i = 0; i < MAX_PROCESSES; i++) {
-        __asm__ volatile("fnsave %0; fwait" : "=m"(processes[i].fpu_state));
+        hal_x87_save_reset(processes[i].fpu_state);
     }
 
     segment(1, 0, 0xFFFFF, 0x9A, 0xC0); /* 0x08: Kernel Code */
@@ -667,7 +677,7 @@ void process_init(void) {
 
     TablePtr gp = {sizeof(gdt) - 1, (u32)gdt};
     load_gdt(&gp);
-    __asm__ volatile("ltr %0" :: "r"((u16)0x28));
+    hal_load_task_register(0x28);
 
     for (int i = 0; i < 256; i++) {
         u32 addr = (u32)isr_table[i < 48 ? i : 13];
@@ -676,7 +686,7 @@ void process_init(void) {
         idt[i] = (Gate){(u16)(addr & 65535), 8, 0, (u8)(i == 128 ? 0xEE : 0x8E), (u16)(addr >> 16)};
     }
     TablePtr ip = {sizeof(idt) - 1, (u32)idt};
-    __asm__ volatile("lidt %0" :: "m"(ip));
+    hal_load_idt(&ip);
 
     outb(0x20, 0x11);
     outb(0xa0, 0x11);
@@ -714,7 +724,7 @@ void process_init(void) {
     process_spawn_elf_path("/bin/hello");
 
     KLOG_INFO(KLOG_CAT_PROC, "Process manager and scheduler v2 ready");
-    __asm__ volatile("sti");
+    hal_irq_enable();
 }
 
 static void append(char **p, const char *s) {
@@ -725,18 +735,31 @@ static void append(char **p, const char *s) {
 
 void process_list(char *out) {
     char *p = out, n[12];
-    append(&p, "PID NAME       STATE     WORK / SLICES\n0   DESKTOP    KERNEL\n");
-    for (int i = 1; i < MAX_PROCESSES; i++) {
+    append(&p, "PID NAME       STATE     CPU%  WORK / SLICES\n");
+    u32 total_sys_ticks = ticks ? ticks : 1;
+    for (int i = 0; i < MAX_PROCESSES; i++) {
         if (!processes[i].alive && !processes[i].switches)
             continue;
         number(n, i);
         append(&p, n);
         append(&p, "   ");
-        append(&p, processes[i].name[0] ? processes[i].name : "WORKER");
-        append(&p, "     ");
-        append(&p, !processes[i].alive   ? "STOPPED "
+        const char *nm = processes[i].name[0] ? processes[i].name : (i == 0 ? "DESKTOP" : "WORKER");
+        append(&p, nm);
+        int name_len = 0;
+        while (nm[name_len]) name_len++;
+        while (name_len < 11) {
+            append(&p, " ");
+            name_len++;
+        }
+        append(&p, i == 0 ? "KERNEL  "
+                   : !processes[i].alive ? "STOPPED "
                    : processes[i].paused ? "PAUSED  "
                                          : "RUNNING ");
+        u32 pct = (processes[i].ticks_consumed * 100) / total_sys_ticks;
+        number(n, pct);
+        if (pct < 10) append(&p, " ");
+        append(&p, n);
+        append(&p, "%  ");
         number(n, processes[i].reports);
         append(&p, n);
         append(&p, " / ");
@@ -746,10 +769,18 @@ void process_list(char *out) {
     }
 }
 
+int process_get_count(void) {
+    int count = 0;
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (processes[i].alive) count++;
+    }
+    return count;
+}
+
 int process_action(int pid, int action) {
     if (pid < 1 || pid >= MAX_PROCESSES)
         return 0;
-    __asm__ volatile("cli");
+    unsigned long irq_flags = hal_irq_save_disable();
     if (action == 0)
         processes[pid].paused = 1;
     if (action == 1)
@@ -765,7 +796,7 @@ int process_action(int pid, int action) {
             fault_request = 0;
         create_legacy_worker(pid);
     }
-    __asm__ volatile("sti");
+    hal_irq_restore(irq_flags);
     return 1;
 }
 

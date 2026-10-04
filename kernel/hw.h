@@ -36,9 +36,15 @@ void power_reboot(void);
 
 /* Speaker */
 void speaker_beep(u32 freq_hz, u32 duration_ms);
+int sound_is_muted(void);
+void sound_set_muted(int muted);
+u32 sound_get_freq(void);
+void sound_set_freq(u32 freq);
 
 /* PCI */
 int pci_scan_bus(PciDevice *out_devs, int max_devs);
 const char *pci_class_name(u8 class_code, u8 subclass);
+u32 pci_config_read32(u8 bus, u8 dev, u8 fn, u8 reg);
+void pci_config_write32(u8 bus, u8 dev, u8 fn, u8 reg, u32 val);
 
 #endif

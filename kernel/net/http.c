@@ -72,22 +72,184 @@ static int parse_url(const char *url, int *is_https, char *host, int max_host, u
     return 1;
 }
 
-int http_resolve_url(const char *base,const char *ref,char *out,int cap) {
-    if(!base||!ref||!out||cap<1)return 0;
-    int n=0;
-    if(!memcmp(ref,"http://",strlen(ref)>=7?7:strlen(ref)+1)||!memcmp(ref,"https://",strlen(ref)>=8?8:strlen(ref)+1)) {
-        if((int)strlen(ref)>=cap)return 0;memcpy(out,ref,strlen(ref)+1);return 1;
+/* RFC 3986-ish reference resolution shared by links, CSS, scripts, images,
+ * forms and redirects. Handles absolute URLs, protocol-relative //host paths,
+ * root-relative /a, relative a/b, ./ and ../, and query-only / fragment-only
+ * references against a base URL. */
+static int url_has_scheme(const char *s) {
+    const char *p = s;
+    if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z'))) return 0;
+    p++;
+    while ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+           (*p >= '0' && *p <= '9') || *p == '+' || *p == '-' || *p == '.') p++;
+    return *p == ':';
+}
+
+/* Parse scheme://authority/path?query#fragment into fixed-size slices. */
+typedef struct {
+    char scheme[16];
+    char auth[128];
+    char path[256];
+    char query[128];
+    char frag[64];
+} UrlParts;
+
+static void url_parse(const char *u, UrlParts *p) {
+    memset(p, 0, sizeof(*p));
+    const char *q = u;
+    const char *colon = 0;
+    for (const char *s = u; *s && *s != '/' && *s != '?' && *s != '#'; s++) {
+        if (*s == ':' && !colon) colon = s;
     }
-    const char *scheme=base;while(*scheme&&*scheme!=':')scheme++;
-    if(!*scheme)return 0;
-    int prefix=scheme-base+3;int end=prefix;while(base[end]&&base[end]!='/'&&base[end]!='?'&&base[end]!='#')end++;
-    if(ref[0]=='/'&&ref[1]=='/')prefix=scheme-base+1;
-    else if(ref[0]=='/')prefix=end;
-    else {prefix=end;for(int i=end;base[i]&&base[i]!='?'&&base[i]!='#';i++)if(base[i]=='/')prefix=i+1;}
-    if(prefix+(int)strlen(ref)+2>cap)return 0;
-    memcpy(out,base,prefix);n=prefix;
-    if(ref[0]!='/'&&prefix==end)out[n++]='/';
-    while(*ref&&*ref!='#')out[n++]=*ref++;out[n]=0;return 1;
+    if (colon) {
+        int n = (int)(colon - u);
+        if (n > (int)sizeof(p->scheme) - 1) n = (int)sizeof(p->scheme) - 1;
+        memcpy(p->scheme, u, (unsigned)n);
+        p->scheme[n] = 0;
+        for (int i = 0; i < n; i++) if (p->scheme[i] >= 'A' && p->scheme[i] <= 'Z') p->scheme[i] += 32;
+        q = colon + 1;
+    }
+    if (q[0] == '/' && q[1] == '/') {
+        q += 2;
+        int n = 0;
+        while (*q && *q != '/' && *q != '?' && *q != '#' && n < (int)sizeof(p->auth) - 1)
+            p->auth[n++] = *q++;
+        p->auth[n] = 0;
+    }
+    if (*q && *q != '?' && *q != '#') {
+        int n = 0;
+        while (*q && *q != '?' && *q != '#' && n < (int)sizeof(p->path) - 1)
+            p->path[n++] = *q++;
+        p->path[n] = 0;
+    } else {
+        p->path[0] = 0;
+    }
+    if (*q == '?') {
+        q++;
+        int n = 0;
+        while (*q && *q != '#' && n < (int)sizeof(p->query) - 1)
+            p->query[n++] = *q++;
+        p->query[n] = 0;
+    }
+    if (*q == '#') {
+        q++;
+        int n = 0;
+        while (*q && n < (int)sizeof(p->frag) - 1)
+            p->frag[n++] = *q++;
+        p->frag[n] = 0;
+    }
+}
+
+/* Remove "." and ".." segments from an absolute path. */
+static void url_remove_dot_segments(const char *in, char *out, int cap) {
+    char stack[64][48];
+    int top = 0;
+    const char *p = in;
+    int absolute = (*p == '/');
+    while (*p) {
+        while (*p == '/') p++;
+        const char *seg = p;
+        while (*p && *p != '/') p++;
+        int len = (int)(p - seg);
+        if (len == 0) continue;
+        if (len == 1 && seg[0] == '.') continue;
+        if (len == 2 && seg[0] == '.' && seg[1] == '.') { if (top > 0) top--; continue; }
+        if (top < 64) {
+            if (len > 47) len = 47;
+            memcpy(stack[top], seg, (unsigned)len);
+            stack[top][len] = 0;
+            top++;
+        }
+    }
+    int n = 0;
+    if (absolute && n < cap - 1) out[n++] = '/';
+    for (int i = 0; i < top; i++) {
+        if (i > 0 && n < cap - 1) out[n++] = '/';
+        for (const char *s = stack[i]; *s && n < cap - 1; s++) out[n++] = *s;
+    }
+    if (n == 0 && cap > 1) { out[n++] = '/'; }
+    out[n < cap ? n : cap - 1] = 0;
+}
+
+static void url_assemble(const UrlParts *p, char *out, int cap) {
+    int n = 0;
+    #define PUT(s) do { const char *ps_=(s); while(*ps_ && n<cap-1) out[n++]=*ps_++; } while(0)
+    if (p->scheme[0]) { PUT(p->scheme); PUT("://"); }
+    else if (p->auth[0]) { PUT("//"); }
+    PUT(p->auth);
+    if (p->path[0]) PUT(p->path); else PUT("/");
+    if (p->query[0]) { PUT("?"); PUT(p->query); }
+    if (p->frag[0]) { PUT("#"); PUT(p->frag); }
+    #undef PUT
+    out[n] = 0;
+}
+
+int http_resolve_url(const char *base,const char *ref,char *out,int cap) {
+    if (!base || !ref || !out || cap < 2) return 0;
+    while (*ref == ' ' || *ref == '\t' || *ref == '\n' || *ref == '\r') ref++;
+    if (!ref[0]) { if ((int)strlen(base) >= cap) return 0; memcpy(out, base, strlen(base) + 1); return 1; }
+
+    /* Absolute reference (has a scheme) replaces the base entirely. */
+    if (url_has_scheme(ref)) {
+        int l = (int)strlen(ref);
+        if (l >= cap) return 0;
+        memcpy(out, ref, (unsigned)l + 1);
+        return 1;
+    }
+
+    if (!ref[0]) {                   /* empty reference: the base itself */
+        int l = (int)strlen(base);
+        if (l >= cap) return 0;
+        memcpy(out, base, (unsigned)l + 1);
+        return 1;
+    }
+
+    UrlParts b, r, res;
+    url_parse(base, &b);
+    url_parse(ref, &r);
+
+    if (r.auth[0]) {
+        /* Protocol-relative //host/path inherits the base scheme. */
+        res = r;
+        memcpy(res.scheme, b.scheme, sizeof(res.scheme));
+    } else {
+        res = b;                     /* inherit scheme + authority + path */
+        if (ref[0] == '#') {
+            /* Fragment-only: keep base path and query, replace fragment. */
+            memcpy(res.query, b.query, sizeof(res.query));
+            memcpy(res.frag, r.frag, sizeof(res.frag));
+        } else if (ref[0] == '?') {
+            /* Query-only: keep base path, replace query (+ fragment). */
+            memcpy(res.query, r.query, sizeof(res.query));
+            memcpy(res.frag, r.frag, sizeof(res.frag));
+        } else {
+            if (r.path[0] == '/') {
+                memcpy(res.path, r.path, sizeof(res.path));
+            } else {
+                /* Merge relative path against the base directory. */
+                char merged[256];
+                int n = 1;
+                merged[0] = '/';
+                const char *bp = b.path;
+                const char *last = 0;
+                for (const char *s = bp; *s; s++) if (*s == '/') last = s;
+                if (last) {
+                    int dlen = (int)(last - bp) + 1;
+                    if (dlen > (int)sizeof(merged) - 1) dlen = (int)sizeof(merged) - 1;
+                    memcpy(merged, bp, (unsigned)dlen);
+                    n = dlen;
+                }
+                for (const char *s = r.path; *s && n < (int)sizeof(merged) - 1; s++) merged[n++] = *s;
+                merged[n] = 0;
+                url_remove_dot_segments(merged, res.path, sizeof(res.path));
+            }
+            memcpy(res.query, r.query, sizeof(res.query));
+            memcpy(res.frag, r.frag, sizeof(res.frag));
+        }
+    }
+
+    url_assemble(&res, out, cap);
+    return out[0] != 0;
 }
 
 static int parse_hex(const char *s, int len) {
@@ -176,7 +338,7 @@ static int framed_complete(const u8 *data,int n,int head) {
     return length>=0 ? n-end>=length : 0;
 }
 
-int http_request(const char *method, const char *url, const char *extra_headers, const u8 *post_data, int post_len, HttpResponse *resp) {
+int http_request_timeout(const char *method, const char *url, const char *extra_headers, const u8 *post_data, int post_len, u32 response_timeout_ticks, HttpResponse *resp) {
     if (!resp) return 0;
     http_response_init(resp);
     if (!url || !method || post_len < 0 || (post_len && !post_data)) { resp->error=1;return 0; }
@@ -296,14 +458,16 @@ redirect_loop:
     int raw_len = 0;
     u8 chunk[1024];
 
+    /* This is a hard response deadline, not an idle timeout. Resetting it for
+     * each received chunk lets a server keep the kernel browser busy forever
+     * by trickling one byte at a time. Unsigned subtraction survives wrap. */
     u32 read_start=ticks;
     for (;;) {
         /* Also service on successful reads, not only idle sockets. */
         net_service_wait();
-        if(ticks-read_start>1500) {resp->error=1;break;}
+        if(ticks-read_start>response_timeout_ticks) {resp->error=1;break;}
         int n = is_https ? tls_read(tls_sock, chunk, sizeof(chunk)) : tcp_read(tcp_sock, chunk, sizeof(chunk));
         if (n > 0) {
-            read_start=ticks;
             if (raw_len + n > 262144) break;
             if (raw_len + n >= (int)raw_cap) {
                 raw_cap *= 2;
@@ -486,8 +650,16 @@ redirect_loop:
     return 1;
 }
 
+int http_request(const char *method, const char *url, const char *extra_headers, const u8 *post_data, int post_len, HttpResponse *resp) {
+    return http_request_timeout(method, url, extra_headers, post_data, post_len, 1500, resp);
+}
+
 int http_get(const char *url, HttpResponse *resp) {
     return http_request("GET", url, 0, 0, 0, resp);
+}
+
+int http_get_timeout(const char *url, HttpResponse *resp, u32 response_timeout_ticks) {
+    return http_request_timeout("GET", url, 0, 0, 0, response_timeout_ticks, resp);
 }
 
 int http_post(const char *url, const char *content_type, const u8 *data, int data_len, HttpResponse *resp) {

@@ -1,6 +1,11 @@
 #include "input_dispatch.h"
 #include "shell_internal.h"
+#include "ui.h"
 #include "hw.h"
+#include "desktop_items.h"
+#include "ui_animation.h"
+#include "trash.h"
+#include "auth.h"
 
 /* Private PS/2 decoder and pointer state. Symbol names remain compatible with
  * the existing QMP tests without exporting mutable pointers to other modules. */
@@ -8,6 +13,9 @@ static int mx = 760, my = 500;
 static int mouse_packet_size = 3;
 static int alt_held;
 static int window_only;
+static int s_ctrl_held = 0;
+static int app_pointer_capture = -1;
+int input_ctrl_held(void) { return s_ctrl_held; }
 int input_pointer_x(void) { return mx; }
 int input_pointer_y(void) { return my; }
 void cancel_interaction(int id) {
@@ -57,6 +65,7 @@ int input_cursor_kind(void) {
         if (hit == HIT_RESIZE_TOP_RIGHT || hit == HIT_RESIZE_BOTTOM_LEFT) return CURSOR_RESIZE_NESW;
         return gui_app_cursor(top, mx - windows[top].x, my - windows[top].y);
     }
+    if (desktop_items_hit_test(mx, my) >= 0) return CURSOR_POINTER;
     return CURSOR_DEFAULT;
 }
 static void wait_write(void) {
@@ -94,7 +103,10 @@ void input_dispatch_init(void) {
     for (int t = 0; t < 100000; t++) if (inb(0x64) & 1) { config = inb(0x60); break; }
     if (config < 0) { serial("INPUT controller timeout\n"); return; }
     wait_write(); outb(0x64, 0x60);
-    wait_write(); outb(0x60, (config | 0x40) & ~0x23);
+    /* Polling needs no IRQ enables, but both PS/2 clocks must be on. The
+     * controller config bit 4 disables the keyboard clock; clear it along
+     * with the auxiliary-disable bit before initializing the mouse. */
+    wait_write(); outb(0x60, (config | 0x40) & ~0x33);
     if (!mouse_cmd(0xf6)) { serial("INPUT mouse ACK failed\n"); return; }
     int ok = mouse_cmd(0xf3) && mouse_cmd(200) && mouse_cmd(0xf3) && mouse_cmd(100) && mouse_cmd(0xf3) && mouse_cmd(80);
     if (ok && mouse_cmd(0xf2)) {
@@ -107,16 +119,29 @@ void input_dispatch_init(void) {
 static void click(void) {
     /* Do not execute modal callbacks or launch clients on the loader's stack. */
     if (window_only && (g_active_dialog.active || g_active_menu.active)) return;
-    if (g_active_dialog.active && ui_dialog_on_mouse_down(mx, my, 0)) { shell.dirty = 1; return; }
-    if (g_active_menu.active && ui_menu_on_mouse_down(&g_active_menu, mx, my, 0)) { shell.dirty = 1; return; }
+    if (g_active_dialog.active && ui_dialog_on_mouse_down(mx, my, 0)) {
+        int dx, dy, dw, dh;
+        ui_dialog_bounds(&dx, &dy, &dw, &dh);
+        request_partial_redraw(dx - 8, dy - 8, dw + 16, dh + 16);
+        return;
+    }
+    if (my < 32) {
+        if (!window_only) desktop_bar_handle_click(mx, my);
+        return;
+    }
+    if (g_active_menu.active && ui_menu_on_mouse_down(&g_active_menu, mx, my, 0)) return;
+
+    /* 1. Dock (always in foreground) */
     int target = dock_hit();
     if (target >= 0) {
         if (window_only) return;
         shell.last_title_click_id = -1;
-        open_app(target);
+        dock_activate_app(target);
         serial("APP opened\n");
         return;
     }
+
+    /* 2. Window controls & client area */
     for (int z = NUM_APPS - 1; z >= 0; z--) {
         int id = z_order[z];
         if (!windows[id].open || windows[id].minimized) continue;
@@ -124,6 +149,9 @@ static void click(void) {
         int ww = window_width(id), wh = window_height(id);
         HitTestResult hit = wm_hit_test(id, mx, my);
         if (hit == HIT_NONE) continue;
+        /* Clicking into an application releases any desktop icon selection;
+         * otherwise the highlight stayed lit behind the focused window. */
+        if (desktop_items_selected_count() > 0) desktop_items_clear_selection();
         focus_app(id);
         if (hit != HIT_TITLEBAR) shell.last_title_click_id = -1;
         if (hit >= HIT_RESIZE_LEFT && hit <= HIT_RESIZE_BOTTOM_RIGHT) {
@@ -164,19 +192,66 @@ static void click(void) {
         if (hit == HIT_CLIENT) {
             if (window_only) return;
             compositor_invalidate(id);
-            gui_app_click(id, mx - wx, my - wy);
+            int local_x = mx - wx, local_y = my - wy;
+            gui_app_click(id, local_x, local_y);
+            app_pointer_capture = gui_app_drag(id, local_x, local_y, 1) >= 0 ? id : -1;
             return;
         }
     }
+
+    /* 3. Top bar */
+    if (my < 30) {
+        shell.last_title_click_id = -1;
+        wm_unfocus();
+        desktop_items_clear_selection();
+        request_scene_redraw();
+        return;
+    }
+
+    /* 4. Desktop items & desktop background */
     shell.last_title_click_id = -1;
-    wm_unfocus(); request_scene_redraw();
+    wm_unfocus();
+    int item_idx = desktop_items_hit_test(mx, my);
+    if (item_idx >= 0) {
+        if (s_ctrl_held) {
+            desktop_items_toggle_select(item_idx);
+        } else {
+            if (!desktop_items_is_selected(item_idx)) {
+                desktop_items_select_single(item_idx);
+            }
+            static int last_desktop_click_id = -1;
+            static u32 last_desktop_click_ms = 0;
+            u32 now_ms = wm_time_ms();
+            if (last_desktop_click_id == item_idx && (now_ms - last_desktop_click_ms <= 400)) {
+                desktop_items_open(item_idx);
+                last_desktop_click_id = -1;
+            } else {
+                last_desktop_click_id = item_idx;
+                last_desktop_click_ms = now_ms;
+                desktop_items_drag_start(item_idx, mx, my);
+            }
+        }
+    } else {
+        if (!s_ctrl_held) {
+            desktop_items_clear_selection();
+        }
+        if (my >= 30 && my < shell.height - 114) {
+            desktop_items_marquee_start(mx, my);
+        }
+    }
+    request_scene_redraw();
 }
 static void key(u8 code) {
     static int shift, control;
-    if (code == 29) { control = 1; return; }
-    if (code == 157) { control = 0; return; }
+    if (code == 29) { s_ctrl_held = 1; control = 1; return; }
+    if (code == 157) { s_ctrl_held = 0; control = 0; return; }
     if (code == 42 || code == 54) { shift = 1; return; }
     if (code == 170 || code == 182) { shift = 0; return; }
+    if (auth_is_active()) {
+        if (!(code & 128)) auth_key_ex(code, shift, control);
+        request_scene_redraw();
+        return;
+    }
     if (window_only) {
         if (code == 56) alt_held = 1;
         if (code == 184) {
@@ -185,8 +260,13 @@ static void key(u8 code) {
         }
         return; /* Discard, do not replay commands against a different focus. */
     }
-    if (g_active_dialog.active && ui_dialog_on_key(code)) { shell.dirty = 1; return; }
-    if (g_active_menu.active && ui_menu_on_key(&g_active_menu, code, shift)) { shell.dirty = 1; return; }
+    if (g_active_dialog.active && ui_dialog_on_key(code, shift, control)) { shell.dirty = 1; return; }
+    if (g_active_menu.active && ui_menu_on_key(&g_active_menu, code, shift)) {
+        if (g_active_menu.active)
+            request_partial_redraw(g_active_menu.x - 4, g_active_menu.y - 3,
+                                   g_active_menu.w + 8, g_active_menu.h + 10);
+        return;
+    }
     if (code == 56) { alt_held = 1; return; }
     if (code == 184) {
         alt_held = 0;
@@ -225,10 +305,30 @@ static void key(u8 code) {
     shell.dirty = 1;
     int top = active_app();
     if (top >= 0) compositor_invalidate(top);
+    if (code == 60) { /* F2: rename selected item */
+        if (desktop_items_get_selected() >= 0) {
+            desktop_prompt_rename_selected();
+            return;
+        }
+    }
+    if (code == 83) { /* Del: move selected item to trash */
+        if (desktop_items_selected_count() > 0) {
+            desktop_prompt_delete_selected();
+            return;
+        }
+    }
+    if (code == 28) { /* Enter: open selected item if no window has focus */
+        int sel = desktop_items_get_selected();
+        if (sel >= 0 && top < 0) {
+            desktop_items_open(sel);
+            return;
+        }
+    }
     if (code >= 59 && code < 59 + APP_COUNT) { open_app(code - 59); serial("APP keyboard open\n"); return; }
     if (code == 87) { if (top >= 0) toggle_maximize(top); return; }
     if (code == 1) {
         if (top == APP_POLLIKMARK) gui_app_key(top, code, shift, control);
+        else if (top == APP_FILES && files_preview_active()) gui_app_key(top, code, shift, control);
         else if (top >= 0) minimize_app(top);
         return;
     }
@@ -244,29 +344,94 @@ static void pointer_packet(const u8 *packet) {
     if (mx > shell.width - 1) mx = shell.width - 1;
     if (my < 0) my = 0;
     if (my > shell.height - 1) my = shell.height - 1;
-    if (g_active_dialog.active && ui_dialog_on_mouse_move(mx, my)) shell.dirty = 1;
-    if (g_active_menu.active && ui_menu_on_mouse_move(&g_active_menu, mx, my)) shell.dirty = 1;
+    if (auth_is_active()) {
+        if (auth_pointer(mx, my, packet[0] & 1)) request_scene_redraw();
+        return;
+    }
+    /* A modal dialog repaints only its own card: focused-button changes and
+     * title-bar drags damage the union of the old and new rectangle, never the
+     * whole scene, so the pointer stays smooth on every PS/2 packet. */
+    if (g_active_dialog.active) {
+        int ox, oy, ow, oh, was_focused = g_active_dialog.focused_btn;
+        ui_dialog_bounds(&ox, &oy, &ow, &oh);
+        int moved = ui_dialog_on_mouse_move(mx, my);
+        if (moved || g_active_dialog.focused_btn != was_focused) {
+            int nx, ny, nw, nh;
+            ui_dialog_bounds(&nx, &ny, &nw, &nh);
+            int ux1 = ox < nx ? ox : nx, uy1 = oy < ny ? oy : ny;
+            int ux2 = ox + ow > nx + nw ? ox + ow : nx + nw;
+            int uy2 = oy + oh > ny + nh ? oy + oh : ny + nh;
+            request_partial_redraw(ux1 - 8, uy1 - 8, (ux2 - ux1) + 16, (uy2 - uy1) + 16);
+        }
+    }
+    if (g_active_menu.active && ui_menu_on_mouse_move(&g_active_menu, mx, my))
+        request_partial_redraw(g_active_menu.x - 4, g_active_menu.y - 3,
+                               g_active_menu.w + 8, g_active_menu.h + 10);
+    /* While a modal dialog is open nothing behind it may react: no bar hover,
+     * no desktop icon drag/marquee, no wheel scroll and no context menu. This
+     * is what previously let a second right-click stack a menu on the About
+     * card and leave the desktop stuck. */
+    if (!g_active_dialog.active) {
+        if (desktop_bar_handle_pointer(mx, my)) shell.dirty = 1;
+        if (desktop_items_is_dragging()) {
+            desktop_items_drag_move(mx, my);
+            shell.dirty = 1;
+        }
+        if (desktop_items_marquee_is_active()) {
+            desktop_items_marquee_update(mx, my, s_ctrl_held);
+            shell.dirty = 1;
+        }
+    }
     wm_perf_record_input(pdx != 0 || pdy != 0);
-    if (!window_only && mouse_packet_size == 4 && packet[3]) gui_app_scroll(active_app(), (signed char)packet[3]);
+    if (!window_only && !g_active_dialog.active && mouse_packet_size == 4 && packet[3])
+        gui_app_scroll(active_app(), (signed char)packet[3]);
     int down = packet[0] & 1, right = packet[0] & 2;
-    if (!window_only && right && !right_held) {
-        cancel_interaction(-1); request_scene_redraw();
+    if (!window_only && !g_active_dialog.active && right && !right_held && my >= 32) {
+        int interaction_changed_scene = shell.drag || shell.resizing >= 0 || shell.snap_preview != SNAP_NONE;
+        cancel_interaction(-1);
+        if (interaction_changed_scene) request_scene_redraw();
         shell.context_app = -1;
-        int hit_file = -1;
-        for (int z = NUM_APPS - 1; z >= 0; z--) {
-            int id = z_order[z], wx = windows[id].x, wy = windows[id].y;
-            if (!windows[id].open || windows[id].minimized) continue;
-            if (mx >= wx && mx < wx + window_width(id) && my >= wy && my < wy + window_height(id)) {
-                shell.context_app = id;
-                focus_app(id); compositor_invalidate(id);
-                if (id == APP_FILES) hit_file = files_select_at(mx - wx, my - wy);
-                break;
+        int dh = dock_hit();
+        if (dh >= 0) {
+            open_dock_context_menu(mx, my, dh);
+        } else {
+            int hit_file = -1;
+            for (int z = NUM_APPS - 1; z >= 0; z--) {
+                int id = z_order[z], wx = windows[id].x, wy = windows[id].y;
+                if (!windows[id].open || windows[id].minimized) continue;
+                if (mx >= wx && mx < wx + window_width(id) && my >= wy && my < wy + window_height(id)) {
+                    shell.context_app = id;
+                    focus_app(id); compositor_invalidate(id);
+                    if (id == APP_FILES) hit_file = files_select_at(mx - wx, my - wy);
+                    break;
+                }
+            }
+            if (shell.context_app >= 0) {
+                open_context_menu(mx, my, shell.context_app, hit_file);
+            } else {
+                int item_idx = desktop_items_hit_test(mx, my);
+                if (item_idx >= 0) {
+                    if (!desktop_items_is_selected(item_idx)) {
+                        desktop_items_select_single(item_idx);
+                    }
+                    open_context_menu(mx, my, CONTEXT_DESKTOP_ITEM, item_idx);
+                } else {
+                    desktop_items_clear_selection();
+                    open_context_menu(mx, my, -1, -1);
+                }
             }
         }
-        open_context_menu(mx, my, shell.context_app, hit_file);
     }
     right_held = right;
     if (down && !held) click();
+    if (app_pointer_capture >= 0 && (down || held) && (pdx || pdy)) {
+        int id = app_pointer_capture;
+        if (gui_app_drag(id, mx - windows[id].x, my - windows[id].y, 1) > 0) {
+            compositor_invalidate_animated(id);
+            shell.dirty = 1;
+            shell.partial = 1;
+        }
+    }
     /* Include the final release packet's movement before committing. */
     if ((down || held) && shell.resizing >= 0) {
         int id = shell.resizing;
@@ -294,24 +459,74 @@ static void pointer_packet(const u8 *packet) {
         if (shell.drag_moved && w->state == WINDOW_STATE_NORMAL) {
             WorkArea wa;
             wm_get_work_area(&wa);
+            /* Hard guards: never let a dragged window cover the top bar or the
+             * Dock shelf. The work area is the base bound, then the shadow's
+             * +7 top / +14 bottom extent is kept clear of both. */
+            int top_limit = wa.y;
+            int bottom_limit = wa.y + wa.h;
+            if (top_limit < 39) top_limit = 39;          /* bar 0..32 + shadow */
+            int dock_top = shell.height - 145;
+            if (bottom_limit > dock_top) bottom_limit = dock_top;
             int new_x = mx - shell.dx, new_y = my - shell.dy;
-            int max_x = wa.x + wa.w - w->width, max_y = wa.y + wa.h - w->height;
+            int max_x = wa.x + wa.w - w->width, max_y = bottom_limit - w->height - 14;
             if (max_x < wa.x) max_x = wa.x;
-            if (max_y < wa.y) max_y = wa.y;
+            if (max_y < top_limit) max_y = top_limit;
             if (new_x < wa.x) new_x = wa.x;
             if (new_x > max_x) new_x = max_x;
-            if (new_y < wa.y) new_y = wa.y;
+            if (new_y < top_limit) new_y = top_limit;
             if (new_y > max_y) new_y = max_y;
+            /* Never let the titlebar slip under the top bar even after a
+             * maximize-restore drag that started on the old geometry. */
+            if (new_y < 36) new_y = 36;
             if (w->x != new_x || w->y != new_y) {
                 wm_invalidate_window(id); w->x = new_x; w->y = new_y; wm_invalidate_window(id);
                 shell.dirty = 1; /* Translation reuses the client cache. */
             }
             SnapTarget prev_snap = shell.snap_preview;
             shell.snap_preview = drag_snap_target(id);
-            if (shell.snap_preview != prev_snap) request_scene_redraw();
+            if (shell.snap_preview != prev_snap) {
+                /* Only the old and new preview rectangles changed. Damaging
+                 * just those keeps a drag smooth when the preview appears or
+                 * disappears, instead of a full-scene repaint. */
+                int ux1 = 0x7fffffff, uy1 = 0x7fffffff;
+                int ux2 = -0x7fffffff, uy2 = -0x7fffffff;
+                Rect r;
+                if (prev_snap != SNAP_NONE) {
+                    wm_get_snap_bounds(prev_snap, &r);
+                    if (r.w > 0 && r.h > 0) {
+                        ux1 = r.x; uy1 = r.y; ux2 = r.x + r.w; uy2 = r.y + r.h;
+                    }
+                }
+                if (shell.snap_preview != SNAP_NONE) {
+                    wm_get_snap_bounds(shell.snap_preview, &r);
+                    if (r.w > 0 && r.h > 0) {
+                        if (r.x < ux1) ux1 = r.x;
+                        if (r.y < uy1) uy1 = r.y;
+                        if (r.x + r.w > ux2) ux2 = r.x + r.w;
+                        if (r.y + r.h > uy2) uy2 = r.y + r.h;
+                    }
+                }
+                if (ux2 > ux1 && uy2 > uy1)
+                    request_partial_redraw(ux1 - 16, uy1 - 16,
+                                           (ux2 - ux1) + 32, (uy2 - uy1) + 32);
+            }
         }
     }
     if (!down) {
+        if (g_active_dialog.active) ui_dialog_on_mouse_up(mx, my);
+        if (app_pointer_capture >= 0) {
+            int id = app_pointer_capture;
+            gui_app_drag(id, mx - windows[id].x, my - windows[id].y, 0);
+            app_pointer_capture = -1;
+        }
+        if (desktop_items_is_dragging()) {
+            desktop_items_drag_end(mx, my);
+            shell.dirty = 1;
+        }
+        if (desktop_items_marquee_is_active()) {
+            desktop_items_marquee_end();
+            shell.dirty = 1;
+        }
         if (shell.resizing >= 0) {
             cancel_interaction(shell.resizing); request_scene_redraw(); serial("WINDOW resized\n");
         }
@@ -330,7 +545,10 @@ static void pointer_packet(const u8 *packet) {
             request_scene_redraw();
         }
     }
-    if (!shell.drag && shell.resizing < 0) {
+    /* A modal dialog owns the pointer; never track titlebar hover behind it.
+     * Hover transitions repaint only the affected window frames instead of
+     * forcing a full-scene pass on every PS/2 packet. */
+    if (!shell.drag && shell.resizing < 0 && !g_active_dialog.active) {
         int top = active_app(), hbtn = 0;
         if (top >= 0) {
             HitTestResult ht = wm_hit_test(top, mx, my);
@@ -339,9 +557,17 @@ static void pointer_packet(const u8 *packet) {
             else if (ht == HIT_MAXIMIZE) hbtn = 3;
         }
         if (hbtn != shell.hovered_btn || top != g_hovered_window) {
-            if (g_hovered_window >= 0 && g_hovered_window < NUM_APPS) compositor_invalidate(g_hovered_window);
+            if (g_hovered_window >= 0 && g_hovered_window < NUM_APPS)
+                compositor_invalidate_animated(g_hovered_window);
             shell.hovered_btn = hbtn; g_hovered_window = top;
-            if (top >= 0) compositor_invalidate(top);
+            if (top >= 0) compositor_invalidate_animated(top);
+            shell.dirty = 1;
+            shell.partial = 1;
+        }
+        static int prev_dock_vis = 1;
+        int cur_dock_vis = dock_is_visible();
+        if (cur_dock_vis != prev_dock_vis) {
+            prev_dock_vis = cur_dock_vis;
             request_scene_redraw();
         }
     }

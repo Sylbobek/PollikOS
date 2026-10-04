@@ -61,7 +61,7 @@ int rtl8139_init(NetworkInterface *iface) {
 
     /* Set up RX buffer ring */
     rx_offset = 0;
-    outl(io + 0x30, (u32)rx_ring);
+    outl(io + 0x30, (u32)(uintptr_t)rx_ring);
 
     /* Clear missed packet counter and set interrupt mask */
     outw(io + 0x3c, 0);
@@ -86,7 +86,7 @@ int rtl8139_init(NetworkInterface *iface) {
     iface->link_up = rtl8139_is_link_up(iface);
     iface->send_frame = rtl8139_send_frame;
     iface->poll = rtl8139_poll;
-    iface->driver_data = (void *)(u32)io;
+    iface->driver_data = (void *)(uintptr_t)io;
 
     serial("NET RTL8139 ready; awaiting DHCP\n");
     return 1;
@@ -113,7 +113,7 @@ int rtl8139_send_frame(NetworkInterface *iface, const u8 *frame, int len) {
     memcpy(tx_buffers[i], frame, (unsigned)len);
     __asm__ volatile("" ::: "memory");
 
-    outl(io + 0x20 + i * 4, (u32)tx_buffers[i]);
+    outl(io + 0x20 + i * 4, (u32)(uintptr_t)tx_buffers[i]);
     outl(io + 0x10 + i * 4, (u32)(len < 60 ? 60 : len));
 
     tx_index = (tx_index + 1) % 4;
@@ -137,7 +137,7 @@ void rtl8139_poll(NetworkInterface *iface) {
             /* Reset RX logic */
             outb(io + 0x37, 4);
             rx_offset = 0;
-            outl(io + 0x30, (u32)rx_ring);
+            outl(io + 0x30, (u32)(uintptr_t)rx_ring);
             outb(io + 0x37, 12);
             outl(io + 0x44, RX_CONFIG);
             break;

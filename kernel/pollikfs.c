@@ -1,10 +1,14 @@
 #include "pollikfs.h"
 #include "klog.h"
+#ifndef POLLIK_X64
+#include "storage.h"
+#endif
 
 extern int ata_read_sector(u32 lba, void *buffer);
 extern int ata_write_sector(u32 lba, const void *buffer);
 extern int ata_flush(void);
 
+#if !defined(POLLIK_X64) && !defined(POLLIK_FS_READONLY)
 extern u8 _binary_build_hello_elf_start[];
 extern u8 _binary_build_hello_elf_end[];
 extern u8 _binary_build_fault_test_elf_start[];
@@ -13,27 +17,68 @@ extern u8 _binary_build_fault_kernel_elf_start[];
 extern u8 _binary_build_fault_kernel_elf_end[];
 extern u8 _binary_build_fault_stack_elf_start[];
 extern u8 _binary_build_fault_stack_elf_end[];
-
+#endif
 static PollikSuperblock g_sb;
 static u8 g_block_buf[POLLIK2_BLOCK_SIZE];
 static u8 g_block_buf2[POLLIK2_BLOCK_SIZE];
 static int g_fs_mounted = 0;
+/* Monotonic per-slot allocation epoch. Incremented every time alloc_inode
+ * hands out a slot, so an open descriptor can detect that its inode was
+ * unlinked and the slot was reused by a different file. In-memory only; no
+ * on-disk byte changes and the format stays byte-for-byte identical. */
+#ifdef POLLIK_X64
+static u32 g_inode_generation[POLLIK2_INODE_COUNT];
+static int inode_generation_valid(const vfs_file_t *file) {
+    if (!file || file->inode == 0 || file->inode >= POLLIK2_INODE_COUNT) return 0;
+    return file->inode_generation == g_inode_generation[file->inode];
+}
+#endif
 
+static int g_fs_error;
+int pollikfs_error(void) { return g_fs_error; }
+int pollikfs_mounted(void) { return g_fs_mounted; }
+static u32 le32(const void *source) {
+    const u8 *p = source;
+    return (u32)p[0] | ((u32)p[1]<<8) | ((u32)p[2]<<16) | ((u32)p[3]<<24);
+}
+static int corrupt(void) { g_fs_error = VFS_CORRUPT; return 0; }
+static int data_block(u32 block) {
+    return block >= g_sb.data_blocks_start && block < g_sb.total_blocks;
+}
+static int entry_valid(const PollikDirent *e) {
+    if (!le32(&e->inode)) return 1;
+    const u8 *record_length = (const u8 *)&e->rec_len;
+    if (le32(&e->inode) >= g_sb.inode_count || (record_length[0] | ((u32)record_length[1]<<8)) != 64 || !e->name_len ||
+        e->name_len > 55 || e->name[e->name_len] || (e->file_type != VFS_FILE && e->file_type != VFS_DIR))
+        return corrupt();
+    for (u32 i = 0; i < e->name_len; ++i) if (!e->name[i] || e->name[i] == '/') return corrupt();
+    return 1;
+}
 static int read_block(u32 block_num, void *buf) {
+    if (block_num >= POLLIK2_TOTAL_BLOCKS) return corrupt();
+#ifdef POLLIK_X64
     u32 lba = POLLIK2_START_LBA + block_num * POLLIK2_SECTORS_PER_BLOCK;
-    if (!ata_read_sector(lba, buf))
-        return 0;
-    if (!ata_read_sector(lba + 1, (u8 *)buf + 512))
-        return 0;
+#else
+    u32 lba = storage_pollikfs_start_lba() + block_num * POLLIK2_SECTORS_PER_BLOCK;
+#endif
+    if (!ata_read_sector(lba, buf) || !ata_read_sector(lba + 1, (u8 *)buf + 512)) {
+        g_fs_error = VFS_IO; return 0;
+    }
     return 1;
 }
 
 static int write_block(u32 block_num, const void *buf) {
+#ifdef POLLIK_X64
     u32 lba = POLLIK2_START_LBA + block_num * POLLIK2_SECTORS_PER_BLOCK;
-    if (!ata_write_sector(lba, buf))
+#else
+    u32 lba = storage_pollikfs_start_lba() + block_num * POLLIK2_SECTORS_PER_BLOCK;
+#endif
+    if (!ata_write_sector(lba, buf)) {
         return 0;
-    if (!ata_write_sector(lba + 1, (const u8 *)buf + 512))
+    }
+    if (!ata_write_sector(lba + 1, (const u8 *)buf + 512)) {
         return 0;
+    }
     return 1;
 }
 
@@ -48,7 +93,15 @@ static int read_inode(u32 inode_num, PollikInode *out_inode) {
     if (!read_block(block, g_block_buf))
         return 0;
 
-    memcpy(out_inode, g_block_buf + offset, sizeof(PollikInode));
+    u32 words[15];
+    for (u32 i = 0; i < 15; ++i) words[i] = le32(g_block_buf+offset+i*4);
+    memcpy(out_inode, words, sizeof(PollikInode));
+    if (out_inode->mode > VFS_DIR || out_inode->size > POLLIK2_MAX_FILE) return corrupt();
+    for (u32 i = 0; i < 8; ++i)
+        if (out_inode->direct[i] && !data_block(out_inode->direct[i])) return corrupt();
+    if (out_inode->indirect && !data_block(out_inode->indirect)) return corrupt();
+    if (out_inode->double_indirect && !data_block(out_inode->double_indirect)) return corrupt();
+    if (out_inode->mode == VFS_DIR && (out_inode->size > 8192 || out_inode->size % 1024)) return corrupt();
     return 1;
 }
 
@@ -67,7 +120,21 @@ static int write_inode(u32 inode_num, const PollikInode *in_inode) {
     return write_block(block, g_block_buf);
 }
 
+#ifdef SELFTEST
+static long long allocation_budget = -1;
+void pollikfs_fail_after(long long successful_allocations) { allocation_budget = successful_allocations; }
+static int allocation_allowed(void) {
+    if (!allocation_budget) return 0;
+    if (allocation_budget > 0) --allocation_budget;
+    return 1;
+}
+#else
+static int allocation_allowed(void) { return 1; }
+#endif
+
 static u32 alloc_block(void) {
+    if (!allocation_allowed())
+        return 0;
     for (u32 b = 0; b < g_sb.block_bitmap_count; b++) {
         if (!read_block(g_sb.block_bitmap_block + b, g_block_buf))
             return 0;
@@ -113,6 +180,8 @@ static void free_block(u32 block_num) {
 }
 
 static u32 alloc_inode(u32 mode) {
+    if (!allocation_allowed() || g_sb.free_inodes == 0)
+        return 0;
     PollikInode node;
     for (u32 i = 1; i < g_sb.inode_count; i++) {
         if (!read_inode(i, &node))
@@ -124,6 +193,11 @@ static u32 alloc_inode(u32 mode) {
             node.modified = ticks;
             write_inode(i, &node);
             g_sb.free_inodes--;
+            /* A new occupant of this slot is a different file: invalidate any
+             * descriptor still holding the previous allocation's token. */
+#ifdef POLLIK_X64
+            g_inode_generation[i]++;
+#endif
             return i;
         }
     }
@@ -184,15 +258,15 @@ static u32 dir_find_entry(u32 dir_inode_num, const char *name, u32 *out_type) {
         if (dir_node.direct[b] == 0)
             continue;
 
-        if (!read_block(dir_node.direct[b], g_block_buf))
-            continue;
+        if (!read_block(dir_node.direct[b], g_block_buf)) return 0;
 
         PollikDirent *entries = (PollikDirent *)g_block_buf;
         for (u32 i = 0; i < entries_per_block; i++) {
+            if (!entry_valid(&entries[i])) return 0;
             if (entries[i].inode != 0) {
                 int match = 1;
                 u32 idx = 0;
-                while (name[idx] || entries[i].name[idx]) {
+                while (idx < 56 && (name[idx] || entries[i].name[idx])) {
                     if (name[idx] != entries[i].name[idx]) {
                         match = 0;
                         break;
@@ -202,7 +276,7 @@ static u32 dir_find_entry(u32 dir_inode_num, const char *name, u32 *out_type) {
                 if (match) {
                     if (out_type)
                         *out_type = entries[i].file_type;
-                    return entries[i].inode;
+                    return le32(&entries[i].inode);
                 }
             }
         }
@@ -224,6 +298,10 @@ static u32 resolve_path_parent(const char *path, char *out_name) {
             comp[ci++] = *p++;
         }
         comp[ci] = 0;
+        if ((*p && *p != '/') || !ci || (ci == 1 && comp[0] == '.') ||
+            (ci == 2 && comp[0] == '.' && comp[1] == '.')) {
+            g_fs_error = VFS_BAD_PATH; return 0;
+        }
 
         while (*p == '/')
             p++;
@@ -241,8 +319,14 @@ static u32 resolve_path_parent(const char *path, char *out_name) {
             /* Subdirectory traversal */
             u32 type = 0;
             curr_inode = dir_find_entry(curr_inode, comp, &type);
-            if (!curr_inode || type != VFS_DIR)
+            if (!curr_inode) {
+                if (!g_fs_error) g_fs_error = VFS_NOT_FOUND;
                 return 0;
+            }
+            if (type != VFS_DIR) {
+                g_fs_error = VFS_NOTDIR;
+                return 0;
+            }
         }
     }
 
@@ -250,8 +334,10 @@ static u32 resolve_path_parent(const char *path, char *out_name) {
 }
 
 static u32 resolve_path(const char *path) {
-    if (!path || path[0] != '/')
-        return 0;
+    if (!path || path[0] != '/') { g_fs_error = VFS_BAD_PATH; return 0; }
+    u32 length = 0;
+    while (length < VFS_MAX_PATH && path[length]) ++length;
+    if (length == VFS_MAX_PATH) { g_fs_error = VFS_BAD_PATH; return 0; }
 
     if (path[1] == 0)
         return g_sb.root_inode;
@@ -265,11 +351,15 @@ static u32 resolve_path(const char *path) {
     return dir_find_entry(parent, name, &type);
 }
 
+#ifndef POLLIK_FS_READONLY
 void pollikfs_format(void) {
     /* Destructive operation: callers must explicitly request formatting.
      * Never invoke this as recovery from a mount failure. */
     g_fs_mounted = 0;
     KLOG_INFO(KLOG_CAT_BOOT, "Formatting PollikFS v2 filesystem");
+#ifdef POLLIK_X64
+    memset(g_inode_generation, 0, sizeof(g_inode_generation));
+#endif
 
     memset(&g_sb, 0, sizeof(PollikSuperblock));
     g_sb.magic = POLLIK2_MAGIC;
@@ -332,6 +422,9 @@ void pollikfs_format(void) {
     u32 etc_ino = alloc_inode(VFS_DIR);
     dir_add_entry(root_ino, "etc", etc_ino, VFS_DIR);
 
+    u32 tmp_ino = alloc_inode(VFS_DIR);
+    dir_add_entry(root_ino, "tmp", tmp_ino, VFS_DIR);
+
     /* Helper to install embedded binary into directory */
     #define INSTALL_EMBEDDED(name_str, sym_start, sym_end) do { \
         u32 sz = (u32)(sym_end - sym_start); \
@@ -357,10 +450,12 @@ void pollikfs_format(void) {
         } \
     } while(0)
 
+#ifndef POLLIK_X64
     INSTALL_EMBEDDED("hello", _binary_build_hello_elf_start, _binary_build_hello_elf_end);
     INSTALL_EMBEDDED("fault_test", _binary_build_fault_test_elf_start, _binary_build_fault_test_elf_end);
     INSTALL_EMBEDDED("fault_kernel", _binary_build_fault_kernel_elf_start, _binary_build_fault_kernel_elf_end);
     INSTALL_EMBEDDED("fault_stack", _binary_build_fault_stack_elf_start, _binary_build_fault_stack_elf_end);
+#endif
     #undef INSTALL_EMBEDDED
 
     /* Install default /home/notes.txt */
@@ -388,15 +483,23 @@ void pollikfs_format(void) {
     KLOG_INFO(KLOG_CAT_BOOT, "PollikFS v2 format complete (/bin/hello, /home/notes.txt created)");
 }
 
+#endif
 void pollikfs_init(void) {
-    g_fs_mounted = 0;
+    g_fs_mounted = 0; g_fs_error = VFS_OK;
+#ifndef POLLIK_X64
+    storage_select_pollikfs();
+#endif
     if (!read_block(0, g_block_buf)) {
         KLOG_ERROR(KLOG_CAT_BOOT, "PollikFS v2: failed to read superblock from data disk");
         return;
     }
 
-    memcpy(&g_sb, g_block_buf, sizeof(PollikSuperblock));
+    u32 words[13];
+    for (u32 i = 0; i < 13; ++i) words[i] = le32(g_block_buf+i*4);
+    memset(&g_sb, 0, sizeof(g_sb));
+    memcpy(&g_sb, words, sizeof(words));
     if (g_sb.magic != POLLIK2_MAGIC) {
+        g_fs_error = VFS_CORRUPT;
         KLOG_ERROR(KLOG_CAT_BOOT, "PollikFS v2: invalid signature; mount refused, disk unchanged (explicit format required)");
         return;
     }
@@ -416,51 +519,117 @@ void pollikfs_init(void) {
         g_sb.data_blocks_start != 5 + inode_blocks ||
         g_sb.free_blocks > POLLIK2_TOTAL_BLOCKS - (5 + inode_blocks) ||
         g_sb.free_inodes > POLLIK2_INODE_COUNT - 1) {
+        g_fs_error = VFS_CORRUPT;
         KLOG_ERROR(KLOG_CAT_BOOT, "PollikFS v2: invalid superblock geometry; mount refused, disk unchanged");
         return;
     }
 
+    PollikInode root;
+    if (!read_inode(g_sb.root_inode, &root) || root.mode != VFS_DIR) { corrupt(); return; }
     g_fs_mounted = 1;
     KLOG_INFO(KLOG_CAT_BOOT, "PollikFS v2 superblock mounted successfully");
 }
 
+/* Persist updated free counters with the bitmap changes. Mutations call this
+ * once at the end of the operation; single-CPU IF=0 writers serialize it. */
+static int superblock_sync(void) {
+    memset(g_block_buf, 0, POLLIK2_BLOCK_SIZE);
+    memcpy(g_block_buf, &g_sb, sizeof(PollikSuperblock));
+    return write_block(0, g_block_buf);
+}
+
+/* Release every data block owned by an inode, including a single indirect. */
+static void free_inode_blocks(PollikInode *node) {
+    for (u32 b = 0; b < POLLIK2_DIRECT_BLOCKS; ++b) {
+        if (node->direct[b]) {
+            free_block(node->direct[b]);
+            node->direct[b] = 0;
+        }
+    }
+    if (node->indirect) {
+        if (read_block(node->indirect, g_block_buf2)) {
+            u32 *entries = (u32 *)g_block_buf2;
+            for (u32 i = 0; i < POLLIK2_INDIRECT_ENTRIES; ++i)
+                if (entries[i]) free_block(entries[i]);
+        }
+        free_block(node->indirect);
+        node->indirect = 0;
+    }
+    if (node->double_indirect) {
+        /* free_block clobbers g_block_buf, so re-read the outer table each
+         * iteration instead of caching it. */
+        for (u32 i = 0; i < POLLIK2_INDIRECT_ENTRIES; ++i) {
+            if (!read_block(node->double_indirect, g_block_buf)) break;
+            u32 middle = ((u32 *)g_block_buf)[i];
+            if (!middle) continue;
+            if (read_block(middle, g_block_buf2)) {
+                u32 *entries = (u32 *)g_block_buf2;
+                for (u32 j = 0; j < POLLIK2_INDIRECT_ENTRIES; ++j)
+                    if (entries[j]) free_block(entries[j]);
+            }
+            free_block(middle);
+        }
+        free_block(node->double_indirect);
+        node->double_indirect = 0;
+    }
+}
+
 int pollikfs_open(const char *path, int flags, vfs_file_t *out_file) {
+    g_fs_error = VFS_OK;
     if (!g_fs_mounted || !path || !out_file)
         return -1;
+    unsigned access = (unsigned)flags & (O_RDONLY|O_WRONLY|O_RDWR);
+    if ((flags & ~(O_RDONLY|O_WRONLY|O_RDWR|O_CREAT|O_TRUNC|O_APPEND|O_EXCL)) ||
+        access == 0 || access > O_RDWR ||
+        ((flags & (O_TRUNC|O_APPEND)) && access == O_RDONLY)) {
+        g_fs_error = VFS_DENIED;
+        return -1;
+    }
 
     u32 ino = resolve_path(path);
+    if (!ino && !g_fs_error) g_fs_error = VFS_NOT_FOUND;
     if (!ino) {
-        if (flags & O_CREAT) {
-            char name[56];
-            u32 parent = resolve_path_parent(path, name);
-            if (!parent)
-                return -1;
-
-            ino = alloc_inode(VFS_FILE);
-            if (!ino)
-                return -1;
-
-            if (!dir_add_entry(parent, name, ino, VFS_FILE))
-                return -1;
-        } else {
+        if (!(flags & O_CREAT))
+            return -1;
+        char name[56];
+        u32 parent = resolve_path_parent(path, name);
+        if (!parent)
+            return -1;
+        u32 created = alloc_inode(VFS_FILE);
+        if (!created) {
+            g_fs_error = g_sb.free_inodes == 0 ? VFS_NOSPACE : VFS_IO;
             return -1;
         }
+        if (!dir_add_entry(parent, name, created, VFS_FILE)) {
+            /* Roll back the inode so a failed create leaks nothing. */
+            PollikInode empty;
+            memset(&empty, 0, sizeof(empty));
+            write_inode(created, &empty);
+            g_sb.free_inodes++;
+            superblock_sync();
+            if (g_fs_error == VFS_OK) g_fs_error = VFS_IO;
+            return -1;
+        }
+        ino = created;
+        superblock_sync();
     }
 
     PollikInode node;
     if (!read_inode(ino, &node))
         return -1;
 
-    if (flags & O_TRUNC) {
-        for (u32 b = 0; b < POLLIK2_DIRECT_BLOCKS; b++) {
-            if (node.direct[b]) {
-                free_block(node.direct[b]);
-                node.direct[b] = 0;
-            }
-        }
+    if (node.mode == VFS_DIR) {
+        if ((unsigned)flags != O_RDONLY) { g_fs_error = VFS_ISDIR; return -1; }
+    } else if (node.mode != VFS_FILE) {
+        g_fs_error = VFS_DENIED;
+        return -1;
+    } else if (flags & O_TRUNC) {
+        free_inode_blocks(&node);
         node.size = 0;
         node.modified = ticks;
-        write_inode(ino, &node);
+        if (!write_inode(ino, &node))
+            return -1;
+        superblock_sync();
     }
 
     out_file->type = (node.mode == VFS_DIR) ? VFS_DIR : VFS_FILE;
@@ -468,6 +637,9 @@ int pollikfs_open(const char *path, int flags, vfs_file_t *out_file) {
     out_file->offset = (flags & O_APPEND) ? node.size : 0;
     out_file->size = node.size;
     out_file->inode = ino;
+#ifdef POLLIK_X64
+    out_file->inode_generation = g_inode_generation[ino];
+#endif
     out_file->ref_count = 1;
     out_file->fs_private = 0;
 
@@ -475,17 +647,26 @@ int pollikfs_open(const char *path, int flags, vfs_file_t *out_file) {
 }
 
 int pollikfs_read(vfs_file_t *file, void *buf, u32 count) {
+    g_fs_error = VFS_OK;
     if (!g_fs_mounted || !file || !buf || count == 0)
         return 0;
 
     PollikInode node;
     if (!read_inode(file->inode, &node))
         return -1;
+#ifdef POLLIK_X64
+    if (!inode_generation_valid(file)) {
+        /* The slot was unlinked and reallocated to a different file. The
+         * descriptor keeps the original unlink-while-open semantics: reads
+         * observe EOF and never touch the new occupant's data. */
+        return 0;
+    }
+#endif
 
     if (file->offset >= node.size)
         return 0;
 
-    if (file->offset + count > node.size)
+    if (count > node.size - file->offset)
         count = node.size - file->offset;
 
     u32 total_read = 0;
@@ -501,19 +682,29 @@ int pollikfs_read(vfs_file_t *file, void *buf, u32 count) {
         u32 phys_blk = 0;
         if (blk_idx < POLLIK2_DIRECT_BLOCKS) {
             phys_blk = node.direct[blk_idx];
-        } else {
-            /* Read from indirect block */
+        } else if (blk_idx < POLLIK2_DIRECT_BLOCKS + POLLIK2_INDIRECT_ENTRIES) {
             if (node.indirect) {
-                if (read_block(node.indirect, g_block_buf2)) {
-                    u32 *ind = (u32 *)g_block_buf2;
-                    phys_blk = ind[blk_idx - POLLIK2_DIRECT_BLOCKS];
+                if (!read_block(node.indirect, g_block_buf2)) return -1;
+                phys_blk = le32(g_block_buf2+(blk_idx-POLLIK2_DIRECT_BLOCKS)*4);
+            }
+        } else {
+            u32 rest = blk_idx - POLLIK2_DIRECT_BLOCKS - POLLIK2_INDIRECT_ENTRIES;
+            u32 outer = rest / POLLIK2_INDIRECT_ENTRIES;
+            u32 inner = rest % POLLIK2_INDIRECT_ENTRIES;
+            if (outer >= POLLIK2_INDIRECT_ENTRIES) { corrupt(); return -1; }
+            if (node.double_indirect) {
+                if (!read_block(node.double_indirect, g_block_buf)) return -1;
+                u32 middle = le32(g_block_buf+outer*4);
+                if (middle) {
+                    if (!read_block(middle, g_block_buf2)) return -1;
+                    phys_blk = le32(g_block_buf2+inner*4);
                 }
             }
         }
 
         if (phys_blk) {
-            if (!read_block(phys_blk, g_block_buf))
-                break;
+            if (!data_block(phys_blk)) { corrupt(); return -1; }
+            if (!read_block(phys_blk, g_block_buf)) return -1;
             memcpy(dest + total_read, g_block_buf + blk_offset, chunk);
         } else {
             memset(dest + total_read, 0, chunk);
@@ -527,58 +718,106 @@ int pollikfs_read(vfs_file_t *file, void *buf, u32 count) {
 }
 
 int pollikfs_write(vfs_file_t *file, const void *buf, u32 count) {
+    g_fs_error = VFS_OK;
     if (!g_fs_mounted || !file || !buf || count == 0)
         return 0;
 
     PollikInode node;
     if (!read_inode(file->inode, &node))
         return -1;
+    if (node.mode != VFS_FILE) {
+        g_fs_error = VFS_DENIED; /* deleted/reused or non-regular inode */
+        return -1;
+    }
+#ifdef POLLIK_X64
+    if (!inode_generation_valid(file)) {
+        g_fs_error = VFS_DENIED; /* inode slot now belongs to a different file */
+        return -1;
+    }
+#endif
+    /* Append positions at the current EOF for every write, not just at open. */
+    if (file->flags & O_APPEND)
+        file->offset = node.size;
 
     u32 total_written = 0;
     const u8 *src = (const u8 *)buf;
+    int no_space = 0;
 
     while (total_written < count) {
-        u32 blk_idx = (file->offset + total_written) / POLLIK2_BLOCK_SIZE;
-        u32 blk_offset = (file->offset + total_written) % POLLIK2_BLOCK_SIZE;
+        u32 position = file->offset + total_written;
+        u32 blk_idx = position / POLLIK2_BLOCK_SIZE;
+        u32 blk_offset = position % POLLIK2_BLOCK_SIZE;
         u32 chunk = POLLIK2_BLOCK_SIZE - blk_offset;
         if (chunk > count - total_written)
             chunk = count - total_written;
+        if (blk_idx >= POLLIK2_DIRECT_BLOCKS + POLLIK2_INDIRECT_ENTRIES +
+                       (u32)POLLIK2_INDIRECT_ENTRIES*POLLIK2_INDIRECT_ENTRIES) {
+            no_space = 1; /* beyond the double-indirect PollikFS limit */
+            break;
+        }
 
         u32 phys_blk = 0;
         if (blk_idx < POLLIK2_DIRECT_BLOCKS) {
             if (!node.direct[blk_idx]) {
                 node.direct[blk_idx] = alloc_block();
-                if (!node.direct[blk_idx])
-                    break;
+                if (!node.direct[blk_idx]) { no_space = 1; break; }
             }
             phys_blk = node.direct[blk_idx];
-        } else {
-            /* Indirect block */
+        } else if (blk_idx < POLLIK2_DIRECT_BLOCKS + POLLIK2_INDIRECT_ENTRIES) {
+            u32 ind_idx = blk_idx - POLLIK2_DIRECT_BLOCKS;
             if (!node.indirect) {
                 node.indirect = alloc_block();
-                if (!node.indirect)
-                    break;
+                if (!node.indirect) { no_space = 1; break; }
             }
-            if (!read_block(node.indirect, g_block_buf2))
-                break;
-            u32 *ind = (u32 *)g_block_buf2;
-            u32 ind_idx = blk_idx - POLLIK2_DIRECT_BLOCKS;
-            if (ind_idx >= (POLLIK2_BLOCK_SIZE / sizeof(u32)))
-                break;
-            if (!ind[ind_idx]) {
-                ind[ind_idx] = alloc_block();
-                if (!ind[ind_idx])
-                    break;
-                write_block(node.indirect, g_block_buf2);
+            u32 entry = 0;
+            if (!read_block(node.indirect, g_block_buf2)) break;
+            entry = ((u32 *)g_block_buf2)[ind_idx];
+            if (!entry) {
+                /* alloc_block zeroes g_block_buf2, so allocate first and then
+                 * re-read the table before updating it. */
+                entry = alloc_block();
+                if (!entry) { no_space = 1; break; }
+                if (!read_block(node.indirect, g_block_buf2)) break;
+                ((u32 *)g_block_buf2)[ind_idx] = entry;
+                if (!write_block(node.indirect, g_block_buf2)) break;
             }
-            phys_blk = ind[ind_idx];
+            phys_blk = entry;
+        } else {
+            u32 rest = blk_idx - POLLIK2_DIRECT_BLOCKS - POLLIK2_INDIRECT_ENTRIES;
+            u32 outer = rest / POLLIK2_INDIRECT_ENTRIES;
+            u32 inner = rest % POLLIK2_INDIRECT_ENTRIES;
+            if (!node.double_indirect) {
+                node.double_indirect = alloc_block();
+                if (!node.double_indirect) { no_space = 1; break; }
+            }
+            u32 middle = 0;
+            if (!read_block(node.double_indirect, g_block_buf)) break;
+            middle = ((u32 *)g_block_buf)[outer];
+            if (!middle) {
+                middle = alloc_block(); /* clobbers g_block_buf */
+                if (!middle) { no_space = 1; break; }
+                if (!read_block(node.double_indirect, g_block_buf)) break;
+                ((u32 *)g_block_buf)[outer] = middle;
+                if (!write_block(node.double_indirect, g_block_buf)) break;
+            }
+            u32 entry = 0;
+            if (!read_block(middle, g_block_buf2)) break;
+            entry = ((u32 *)g_block_buf2)[inner];
+            if (!entry) {
+                entry = alloc_block(); /* clobbers g_block_buf2 */
+                if (!entry) { no_space = 1; break; }
+                if (!read_block(middle, g_block_buf2)) break;
+                ((u32 *)g_block_buf2)[inner] = entry;
+                if (!write_block(middle, g_block_buf2)) break;
+            }
+            phys_blk = entry;
         }
 
         if (blk_offset > 0 || chunk < POLLIK2_BLOCK_SIZE) {
-            read_block(phys_blk, g_block_buf);
+            if (!read_block(phys_blk, g_block_buf)) break;
         }
         memcpy(g_block_buf + blk_offset, src + total_written, chunk);
-        write_block(phys_blk, g_block_buf);
+        if (!write_block(phys_blk, g_block_buf)) break;
 
         total_written += chunk;
     }
@@ -586,31 +825,34 @@ int pollikfs_write(vfs_file_t *file, const void *buf, u32 count) {
     file->offset += total_written;
     if (file->offset > node.size)
         node.size = file->offset;
-
     node.modified = ticks;
-    write_inode(file->inode, &node);
+    if (!write_inode(file->inode, &node)) { g_fs_error = VFS_IO; return -1; }
+    superblock_sync();
     file->size = node.size;
     ata_flush();
 
-    return total_written;
+    if (total_written == 0 && count) {
+        g_fs_error = no_space ? VFS_NOSPACE : VFS_IO;
+        return -1;
+    }
+    return (int)total_written;
 }
-
 int pollikfs_seek(vfs_file_t *file, int offset, int whence) {
     if (!file)
         return -1;
 
-    int new_pos = 0;
+    long long new_pos = 0;
     if (whence == SEEK_SET) {
         new_pos = offset;
     } else if (whence == SEEK_CUR) {
-        new_pos = (int)file->offset + offset;
+        new_pos = (long long)file->offset + offset;
     } else if (whence == SEEK_END) {
-        new_pos = (int)file->size + offset;
+        new_pos = (long long)file->size + offset;
     } else {
         return -1;
     }
 
-    if (new_pos < 0)
+    if (new_pos < 0 || new_pos > 0x7fffffff)
         return -1;
 
     file->offset = (u32)new_pos;
@@ -620,15 +862,16 @@ int pollikfs_seek(vfs_file_t *file, int offset, int whence) {
 int pollikfs_close(vfs_file_t *file) {
     if (!file)
         return -1;
-    file->ref_count--;
     return 0;
 }
 
 int pollikfs_stat(const char *path, vfs_stat_t *st) {
+    g_fs_error = VFS_OK;
     if (!g_fs_mounted || !path || !st)
         return -1;
 
     u32 ino = resolve_path(path);
+    if (!ino && !g_fs_error) g_fs_error = VFS_NOT_FOUND;
     if (!ino)
         return -1;
 
@@ -644,7 +887,102 @@ int pollikfs_stat(const char *path, vfs_stat_t *st) {
     return 0;
 }
 
+int pollikfs_fstat(const vfs_file_t *file, vfs_stat_t *st) {
+    g_fs_error = VFS_OK;
+    if (!g_fs_mounted || !file || !st || file->ref_count <= 0) return -1;
+#ifdef POLLIK_X64
+    if (!inode_generation_valid(file)) { g_fs_error = VFS_DENIED; return -1; }
+#endif
+    PollikInode node;
+    if (!read_inode(file->inode, &node)) return -1;
+    st->inode = file->inode;
+    st->size = node.size;
+    st->type = (node.mode == VFS_DIR) ? VFS_DIR : VFS_FILE;
+    st->created = node.created;
+    st->modified = node.modified;
+    return 0;
+}
+
+/* Find a directory entry in a parent directory, returning its block/slot. */
+static int find_dirent(u32 parent, const char *name, u32 *block_out, u32 *index_out,
+                       u32 *inode_out, u32 *type_out) {
+    PollikInode parent_node;
+    if (!read_inode(parent, &parent_node) || parent_node.mode != VFS_DIR)
+        return 0;
+    u32 entries_per_block = POLLIK2_BLOCK_SIZE / sizeof(PollikDirent);
+    for (u32 b = 0; b < POLLIK2_DIRECT_BLOCKS; b++) {
+        if (!parent_node.direct[b]) continue;
+        if (!read_block(parent_node.direct[b], g_block_buf)) return 0;
+        PollikDirent *entries = (PollikDirent *)g_block_buf;
+        for (u32 i = 0; i < entries_per_block; i++) {
+            if (entries[i].inode == 0) continue;
+            int match = 1;
+            u32 idx = 0;
+            while (name[idx] || entries[i].name[idx]) {
+                if (name[idx] != entries[i].name[idx]) { match = 0; break; }
+                idx++;
+            }
+            if (match) {
+                if (block_out) *block_out = parent_node.direct[b];
+                if (index_out) *index_out = i;
+                if (inode_out) *inode_out = entries[i].inode;
+                if (type_out) *type_out = entries[i].file_type;
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static int clear_dirent(u32 block, u32 index) {
+    if (!read_block(block, g_block_buf)) return 0;
+    PollikDirent *entries = (PollikDirent *)g_block_buf;
+    entries[index].inode = 0;
+    entries[index].name[0] = 0;
+    return write_block(block, g_block_buf);
+}
+
+static int directory_empty(u32 inode_num) {
+    PollikInode node;
+    if (!read_inode(inode_num, &node) || node.mode != VFS_DIR) return 0;
+    if (node.indirect) return 0; /* directories never use indirect blocks */
+    u32 entries_per_block = POLLIK2_BLOCK_SIZE / sizeof(PollikDirent);
+    for (u32 b = 0; b < POLLIK2_DIRECT_BLOCKS; b++) {
+        if (!node.direct[b]) continue;
+        if (!read_block(node.direct[b], g_block_buf)) return 0;
+        PollikDirent *entries = (PollikDirent *)g_block_buf;
+        for (u32 i = 0; i < entries_per_block; i++)
+            if (entries[i].inode != 0) return 0;
+    }
+    return 1;
+}
+
+/* True when a directory equal to `inode` appears anywhere on `path`; this
+ * prevents moving a directory beneath its own descendant. */
+static int path_contains_inode(const char *path, u32 inode) {
+    if (!path || path[0] != '/') return 0;
+    u32 current = g_sb.root_inode;
+    if (current == inode) return 1;
+    const char *p = path + 1;
+    while (*p) {
+        char comp[56];
+        u32 ci = 0;
+        while (*p && *p != '/' && ci < 55) comp[ci++] = *p++;
+        comp[ci] = 0;
+        while (*p == '/') ++p;
+        if (!ci) break;
+        u32 type = 0;
+        u32 next = dir_find_entry(current, comp, &type);
+        if (!next) return 0;
+        if (next == inode) return 1;
+        if (type != VFS_DIR) return 0;
+        current = next;
+    }
+    return 0;
+}
+
 int pollikfs_mkdir(const char *path) {
+    g_fs_error = VFS_OK;
     if (!g_fs_mounted || !path)
         return -1;
 
@@ -653,24 +991,58 @@ int pollikfs_mkdir(const char *path) {
     if (!parent)
         return -1;
 
-    u32 new_ino = alloc_inode(VFS_DIR);
-    if (!new_ino)
+    u32 existing_type = 0;
+    if (dir_find_entry(parent, name, &existing_type)) {
+        g_fs_error = VFS_EXISTS;
         return -1;
+    }
+
+    u32 new_ino = alloc_inode(VFS_DIR);
+    if (!new_ino) {
+        g_fs_error = g_sb.free_inodes == 0 ? VFS_NOSPACE : VFS_IO;
+        return -1;
+    }
 
     PollikInode node;
-    read_inode(new_ino, &node);
+    memset(&node, 0, sizeof(node));
+    node.mode = VFS_DIR;
+    node.created = ticks;
+    node.modified = ticks;
     node.direct[0] = alloc_block();
-    node.size = POLLIK2_BLOCK_SIZE;
-    write_inode(new_ino, &node);
-
-    if (!dir_add_entry(parent, name, new_ino, VFS_DIR))
+    if (!node.direct[0]) {
+        PollikInode empty;
+        memset(&empty, 0, sizeof(empty));
+        write_inode(new_ino, &empty);
+        g_sb.free_inodes++;
+        superblock_sync();
+        g_fs_error = VFS_NOSPACE;
         return -1;
+    }
+    node.size = POLLIK2_BLOCK_SIZE;
+    if (!write_inode(new_ino, &node)) {
+        free_block(node.direct[0]);
+        g_fs_error = VFS_IO;
+        return -1;
+    }
 
+    if (!dir_add_entry(parent, name, new_ino, VFS_DIR)) {
+        free_inode_blocks(&node);
+        PollikInode empty;
+        memset(&empty, 0, sizeof(empty));
+        write_inode(new_ino, &empty);
+        g_sb.free_inodes++;
+        superblock_sync();
+        if (g_fs_error == VFS_OK) g_fs_error = VFS_IO;
+        return -1;
+    }
+
+    superblock_sync();
     ata_flush();
     return 0;
 }
 
 int pollikfs_unlink(const char *path) {
+    g_fs_error = VFS_OK;
     if (!g_fs_mounted || !path)
         return -1;
 
@@ -679,54 +1051,251 @@ int pollikfs_unlink(const char *path) {
     if (!parent)
         return -1;
 
-    PollikInode parent_node;
-    if (!read_inode(parent, &parent_node) || parent_node.mode != VFS_DIR)
+    u32 block = 0, index = 0, target_ino = 0, target_type = 0;
+    if (!find_dirent(parent, name, &block, &index, &target_ino, &target_type)) {
+        if (g_fs_error == VFS_OK) g_fs_error = VFS_NOT_FOUND;
+        return -1;
+    }
+    if (target_type == VFS_DIR) { g_fs_error = VFS_ISDIR; return -1; }
+
+    PollikInode target;
+    if (!read_inode(target_ino, &target))
+        return -1;
+    if (!clear_dirent(block, index))
+        return -1;
+    free_inode_blocks(&target);
+    if (target.mode == VFS_FILE)
+        g_sb.free_inodes++;
+    memset(&target, 0, sizeof(PollikInode));
+    if (!write_inode(target_ino, &target))
+        return -1;
+    superblock_sync();
+    ata_flush();
+    return 0;
+}
+
+int pollikfs_rmdir(const char *path) {
+    g_fs_error = VFS_OK;
+    if (!g_fs_mounted || !path)
+        return -1;
+
+    char name[56];
+    u32 parent = resolve_path_parent(path, name);
+    if (!parent)
+        return -1;
+
+    u32 block = 0, index = 0, target_ino = 0, target_type = 0;
+    if (!find_dirent(parent, name, &block, &index, &target_ino, &target_type)) {
+        if (g_fs_error == VFS_OK) g_fs_error = VFS_NOT_FOUND;
+        return -1;
+    }
+    if (target_type != VFS_DIR) { g_fs_error = VFS_NOTDIR; return -1; }
+    if (!directory_empty(target_ino)) { g_fs_error = VFS_NOT_EMPTY; return -1; }
+
+    PollikInode target;
+    if (!read_inode(target_ino, &target))
+        return -1;
+    if (!clear_dirent(block, index))
+        return -1;
+    free_inode_blocks(&target);
+    g_sb.free_inodes++;
+    memset(&target, 0, sizeof(PollikInode));
+    if (!write_inode(target_ino, &target))
+        return -1;
+    superblock_sync();
+    ata_flush();
+    return 0;
+}
+
+int pollikfs_readdir(vfs_file_t *file, vfs_dirent_t *dirent) {
+    if (!g_fs_mounted || !file || !dirent || file->type != VFS_DIR)
+        return -1;
+#ifdef POLLIK_X64
+    if (!inode_generation_valid(file)) { g_fs_error = VFS_DENIED; return -1; }
+#endif
+
+    PollikInode dir_node;
+    if (!read_inode(file->inode, &dir_node) || dir_node.mode != VFS_DIR)
         return -1;
 
     u32 entries_per_block = POLLIK2_BLOCK_SIZE / sizeof(PollikDirent);
+    u32 entry_index = 0;
 
     for (u32 b = 0; b < POLLIK2_DIRECT_BLOCKS; b++) {
-        if (!parent_node.direct[b])
-            continue;
+        if (!dir_node.direct[b])
+            break;
 
-        if (!read_block(parent_node.direct[b], g_block_buf))
-            continue;
+        if (!read_block(dir_node.direct[b], g_block_buf))
+            return -1;
 
         PollikDirent *entries = (PollikDirent *)g_block_buf;
         for (u32 i = 0; i < entries_per_block; i++) {
+            if (!entry_valid(&entries[i])) return -1;
             if (entries[i].inode != 0) {
-                int match = 1;
-                u32 idx = 0;
-                while (name[idx] || entries[i].name[idx]) {
-                    if (name[idx] != entries[i].name[idx]) {
-                        match = 0;
-                        break;
+                if (entry_index == file->offset) {
+                    dirent->inode = le32(&entries[i].inode);
+                    dirent->type = entries[i].file_type;
+                    u32 n = 0;
+                    while (n < entries[i].name_len) {
+                        dirent->name[n] = entries[i].name[n];
+                        n++;
                     }
-                    idx++;
+                    dirent->name[n] = 0;
+                    file->offset++;
+                    return 1;
                 }
-                if (match) {
-                    u32 target_ino = entries[i].inode;
-                    entries[i].inode = 0;
-                    write_block(parent_node.direct[b], g_block_buf);
-
-                    /* Free target inode data blocks */
-                    PollikInode target_node;
-                    if (read_inode(target_ino, &target_node)) {
-                        for (u32 db = 0; db < POLLIK2_DIRECT_BLOCKS; db++) {
-                            if (target_node.direct[db]) {
-                                free_block(target_node.direct[db]);
-                            }
-                        }
-                        memset(&target_node, 0, sizeof(PollikInode));
-                        write_inode(target_ino, &target_node);
-                    }
-
-                    ata_flush();
-                    return 0;
-                }
+                entry_index++;
             }
         }
     }
 
-    return -1;
+    return 0;
 }
+
+int pollikfs_rename(const char *oldpath, const char *newpath) {
+    g_fs_error = VFS_OK;
+    if (!g_fs_mounted || !oldpath || !newpath)
+        return -1;
+
+    char old_name[56], new_name[56];
+    u32 old_parent = resolve_path_parent(oldpath, old_name);
+    if (!old_parent)
+        return -1;
+    u32 new_parent = resolve_path_parent(newpath, new_name);
+    if (!new_parent)
+        return -1;
+
+    u32 old_block = 0, old_index = 0, target_ino = 0, target_type = 0;
+    if (!find_dirent(old_parent, old_name, &old_block, &old_index, &target_ino, &target_type)) {
+        if (g_fs_error == VFS_OK) g_fs_error = VFS_NOT_FOUND;
+        return -1;
+    }
+    if (dir_find_entry(new_parent, new_name, 0)) {
+        g_fs_error = VFS_EXISTS; /* documented: rename never overwrites */
+        return -1;
+    }
+    if (target_type == VFS_DIR && path_contains_inode(newpath, target_ino)) {
+        g_fs_error = VFS_DENIED; /* would create a directory cycle */
+        return -1;
+    }
+
+    /* Add the destination first so a failure cannot lose the only entry. */
+    if (!dir_add_entry(new_parent, new_name, target_ino, target_type)) {
+        if (g_fs_error == VFS_OK) g_fs_error = VFS_IO;
+        return -1;
+    }
+    if (!clear_dirent(old_block, old_index))
+        return -1;
+
+    superblock_sync();
+    ata_flush();
+    return 0;
+}
+
+#ifdef POLLIK_X64
+/* Replace two directory records without allocating space. With the x86_64
+ * single-BSP IF=0 VFS contract, the operation is not visible between record
+ * writes; if the second write fails, restore the first record's full block. */
+int pollikfs_rename_replace(const char *oldpath, const char *newpath) {
+    g_fs_error = VFS_OK;
+    if (!g_fs_mounted || !oldpath || !newpath) return -1;
+
+    char old_name[56], new_name[56];
+    u32 old_parent = resolve_path_parent(oldpath, old_name);
+    if (!old_parent) return -1;
+    u32 new_parent = resolve_path_parent(newpath, new_name);
+    if (!new_parent) return -1;
+
+    u32 source_block = 0, source_index = 0, source_ino = 0, source_type = 0;
+    if (!find_dirent(old_parent, old_name, &source_block, &source_index,
+                     &source_ino, &source_type)) {
+        if (g_fs_error == VFS_OK) g_fs_error = VFS_NOT_FOUND;
+        return -1;
+    }
+    if (old_parent == new_parent) {
+        u32 i = 0;
+        while (old_name[i] && old_name[i] == new_name[i]) ++i;
+        if (!old_name[i] && !new_name[i]) {
+            if (source_type != VFS_FILE) { g_fs_error = VFS_ISDIR; return -1; }
+            return 0;
+        }
+    }
+
+    u32 target_block = 0, target_index = 0, target_ino = 0, target_type = 0;
+    if (!find_dirent(new_parent, new_name, &target_block, &target_index,
+                     &target_ino, &target_type)) {
+        if (g_fs_error != VFS_OK) return -1;
+        return pollikfs_rename(oldpath, newpath);
+    }
+    if (source_ino == target_ino) return 0;
+    if (source_type != VFS_FILE || target_type != VFS_FILE) {
+        g_fs_error = VFS_ISDIR;
+        return -1;
+    }
+
+    PollikInode source_node, target_node;
+    if (!read_inode(source_ino, &source_node) || !read_inode(target_ino, &target_node)) return -1;
+    if (source_node.mode != VFS_FILE || target_node.mode != VFS_FILE) {
+        g_fs_error = VFS_ISDIR;
+        return -1;
+    }
+
+    if (source_block == target_block) {
+        if (!read_block(source_block, g_block_buf)) return -1;
+        PollikDirent *entries = (PollikDirent *)g_block_buf;
+        if (entries[source_index].inode != source_ino || entries[target_index].inode != target_ino) {
+            g_fs_error = VFS_IO;
+            return -1;
+        }
+        entries[target_index].inode = source_ino;
+        entries[target_index].file_type = VFS_FILE;
+        memset(&entries[source_index], 0, sizeof(PollikDirent));
+        if (!write_block(source_block, g_block_buf)) { g_fs_error = VFS_IO; return -1; }
+    } else {
+        u8 target_before[POLLIK2_BLOCK_SIZE];
+        u8 source_before[POLLIK2_BLOCK_SIZE];
+        if (!read_block(target_block, g_block_buf)) return -1;
+        memcpy(target_before, g_block_buf, sizeof(target_before));
+        PollikDirent *target_entries = (PollikDirent *)g_block_buf;
+        if (target_entries[target_index].inode != target_ino) { g_fs_error = VFS_IO; return -1; }
+        target_entries[target_index].inode = source_ino;
+        target_entries[target_index].file_type = VFS_FILE;
+        if (!write_block(target_block, g_block_buf)) {
+            (void)write_block(target_block, target_before);
+            g_fs_error = VFS_IO;
+            return -1;
+        }
+
+        if (!read_block(source_block, g_block_buf)) {
+            (void)write_block(target_block, target_before);
+            return -1;
+        }
+        memcpy(source_before, g_block_buf, sizeof(source_before));
+        PollikDirent *source_entries = (PollikDirent *)g_block_buf;
+        if (source_entries[source_index].inode != source_ino) {
+            (void)write_block(target_block, target_before);
+            g_fs_error = VFS_IO;
+            return -1;
+        }
+        memset(&source_entries[source_index], 0, sizeof(PollikDirent));
+        if (!write_block(source_block, g_block_buf)) {
+            (void)write_block(source_block, source_before);
+            (void)write_block(target_block, target_before);
+            g_fs_error = VFS_IO;
+            return -1;
+        }
+    }
+
+    free_inode_blocks(&target_node);
+    PollikInode empty;
+    memset(&empty, 0, sizeof(empty));
+    if (!write_inode(target_ino, &empty)) { g_fs_error = VFS_IO; return -1; }
+    g_sb.free_inodes++;
+    if (!superblock_sync()) { g_fs_error = VFS_IO; return -1; }
+    ata_flush();
+    return 0;
+}
+#endif
+
+u32 pollikfs_free_blocks(void) { return g_fs_mounted ? g_sb.free_blocks : 0; }
+u32 pollikfs_free_inodes(void) { return g_fs_mounted ? g_sb.free_inodes : 0; }

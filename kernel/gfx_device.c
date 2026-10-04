@@ -2,7 +2,7 @@
 #include "graphics.h"
 extern int framebuffer_width(void), framebuffer_height(void), framebuffer_bpp(void);
 void gfx_device_info(GfxInfo *out) {
-    if (out) *out = (GfxInfo){framebuffer_width(), framebuffer_height(), framebuffer_bpp(), 15};
+    if (out) *out = (GfxInfo){framebuffer_width(), framebuffer_height(), framebuffer_bpp(), 31};
 }
 u32 gfx_ratio(u64 n, u32 d) {
     if (!d) return 0;

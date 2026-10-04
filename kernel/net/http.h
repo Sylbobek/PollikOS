@@ -18,7 +18,9 @@ typedef struct {
 void http_response_init(HttpResponse *resp);
 void http_response_free(HttpResponse *resp);
 int http_request(const char *method, const char *url, const char *extra_headers, const u8 *post_data, int post_len, HttpResponse *resp);
+int http_request_timeout(const char *method, const char *url, const char *extra_headers, const u8 *post_data, int post_len, u32 response_timeout_ticks, HttpResponse *resp);
 int http_get(const char *url, HttpResponse *resp);
+int http_get_timeout(const char *url, HttpResponse *resp, u32 response_timeout_ticks);
 int http_post(const char *url, const char *content_type, const u8 *data, int data_len, HttpResponse *resp);
 int http_head(const char *url, HttpResponse *resp);
 int http_get_public_ip(char *out_ip, int max_len);

@@ -1,5 +1,8 @@
 # Pollik OS v0.1 Alpha
 
+Eksperymentalny cel x86_64: [stan self-hostingu i instrukcja testów](SELF_HOSTING.md).
+Domyślny pulpit nadal działa w trybie i386; nowy cel uruchamia statyczne ELF64 z plik�w PollikFS v2 przez VFS w Ring 3 z wyw�aszczaniem przez timer, planowaniem proces�w, argc/argv/envp oraz odczytem plik�w przez prywatne deskryptory procesu i 64-bitowym PMM/VMM (testowany z 5 GiB RAM).
+
 Własny eksperymentalny system w C i asemblerze: bootloader BIOS, kernel x86, pulpit inspirowany macOS, trwałe pliki, procesy użytkownika i podstawowa sieć. Bez Linuksa, Windows, GRUB-a i standardowej biblioteki C. Narzędzia kompilacji to NASM i LLVM; emulator to QEMU.
 
 Nazwa wydania to **Pollik OS v0.1 Alpha**. Wcześniejsze numery 0.2/0.3 oznaczały lokalne prototypy. Nazwę i numer wersji interfejsu definiuje teraz wspólnie `kernel/system.h`.
@@ -21,66 +24,58 @@ W PowerShell w katalogu projektu:
 
 Launcher automatycznie dobiera rozdzielczość do monitora, na którym znajduje się kursor podczas uruchomienia. Możesz podać ją ręcznie: `.\run.ps1 -Resolution 1920x1080` albo uruchomić pełny ekran: `.\run.ps1 -Fullscreen`. Zakres wynosi 1024×768–3440×1440 (szerokość podzielna przez 8). Obsługa QEMU Standard VGA z 32 MiB VRAM ustawia rzeczywisty framebuffer; bez konfiguracji pozostaje tryb BIOS 1024×768. To dobór przy starcie, bez automatycznego przełączania podczas przenoszenia okna pomiędzy monitorami. Przekątna 24/27/34 cali nie wyznacza rozdzielczości; monitory 4K korzystają z ograniczonego trybu do 3440×1440.
 
-Zielony przycisk i F11 przełączają maksymalizację/przywrócenie. Przeglądarka przelicza układ strony do nowej szerokości. Pozostałe aplikacje zachowują dotychczasowy układ kontrolek w większym oknie. Prawy przycisk otwiera menu pulpitu lub okna; w Files zaznacza plik i pozwala go otworzyć. Nad linkami, polami tekstowymi i menu kursor zmienia kształt. Nie ma jeszcze zaznaczania wielu obiektów prostokątem ani pełnego zaznaczania tekstu.
+Zielony przycisk i F11 przełączają maksymalizację/przywrócenie. Przeciągnięcie okna do górnej krawędzi ekranu wywołuje płynny, półprzezroczysty podgląd powiększenia (snap maximize preview) z zaokrąglonymi rogami, działający bez zacinania w 120 FPS. Górny pasek pulpitu prezentuje minimalistyczną, wycentrowaną nazwę systemu **Pollik OS**. Przeglądarka przelicza układ strony do nowej szerokości. Pozostałe aplikacje zachowują dotychczasowy układ kontrolek w większym oknie. Prawy przycisk myszy otwiera zaawansowane menu kontekstowe: w oknach (Files, edytory), na pulpicie (tworzenie nowych folderów i plików tekstowych), na elementach pulpitu (otwieranie, zmiana nazwy, usuwanie) oraz na Docku (otwieranie, przypinanie/odpinanie aplikacji, zamykanie). Informacje o systemie i wersji znajdują się w Ustawieniach (Settings). Nad linkami, polami tekstowymi i menu kursor zmienia kształt. Obsługiwane jest zaznaczanie wielu obiektów półprzezroczystym prostokątem (Marquee Selection) oraz przeciąganie grupowe.
 
 YouTube: transport HTTPS i pobranie HTML działają, ale aplikacja YouTube wymaga nieobsługiwanych funkcji JavaScript i Web API. Filmy nie są odtwarzane. Błędy interpretera pokazują teraz informację o niepełnej obsłudze JS na pasku stanu, zamiast sugerować, że strona jest w pełni gotowa.
 
 Wymagane w PATH: `nasm`, `clang`, `ld.lld`, `llvm-objcopy`, `qemu-system-x86_64`. Są już dostępne na tym komputerze. Ctrl+Alt zwalnia mysz przechwyconą przez QEMU.
 
 - `build/PollikOS-Alpha.img` — rzadki obraz rozruchowy BIOS, 10 GiB pojemności logicznej. Kompilacja go odtwarza.
-- `build/PollikData.img` — osobny dysk dokumentów, rozszerzany do 10 GiB. Kompilacja **zachowuje istniejące dane**. Nie usuwaj go, jeśli chcesz zachować dokumenty; można kopiować go przy wyłączonym emulatorze jako kopię zapasową. PollikFS nadal mieści osiem plików po 1023 bajty; reszta pojemności czeka na rozbudowę systemu plików.
+- `build/PollikData.img` — osobny dysk dokumentów (10 GiB sparse). Kompilacja **bezwzględnie chroni istniejące dane użytkownika**: wykrywa geometrię PollikFS v2, automatycznie migruje starsze geometrie (z kopią zapasową `PollikData.img.bak_<timestamp>`) i odmawia formatowania bez jawnego parametru `.\build.ps1 -FormatData`.
 
 Skrypt uruchamia dyski jako primary IDE master/slave, VGA standard i RTL8139 w sieci użytkownika QEMU oraz przydziela 2 GiB RAM. Jądro nadal korzysta ze stałej mapy pamięci i nie udostępnia całej tej pamięci dynamicznemu alokatorowi. BIOS musi obsługiwać VBE 1024×768. Obrazy sparse zajmują na NTFS tylko zapisane zakresy.
 
 Przeglądarka pokazuje stan ładowania przed żądaniem i automatycznie odmalowuje wynik po jego zakończeniu. Pierwsze żądanie oczekuje na DHCP. Strona startowa oraz frazy wpisane przez Ctrl+L korzystają z wyników DuckDuckGo Lite; PollikOS nie ma własnego indeksu całego Internetu. Pobieranie pozostaje synchroniczne, więc podczas żądania obsługa wejścia czeka na jego zakończenie.
 
-## Pulpit i dokumenty
+## Pulpit i system plików
 
-Okna mają rogi o promieniu 28 px z wygładzaniem krawędzi. **Cienie są całkowicie usunięte**, również spod docka. Zaokrąglone są też ikony i przyciski. F1–F6 wybiera aplikacje; F6 otwiera przeglądarkę PollikOS Web, a Esc pokazuje pulpit. Działa mysz, dock i przeciąganie okna. Czerwony i żółty przycisk ukrywają okno; zielony przywraca jego pozycję na środku. Jedno okno jest widoczne naraz.
+Pulpit PollikOS to pełnoprawne, dynamiczne środowisko pracy połączone bezpośrednio z systemem plików **PollikFS v2** i warstwą **VFS**:
+- **Prawdziwy katalog pulpitu i czysty start:** Pulpit reprezentuje zawartość katalogu `/home/Desktop`. Każdy folder, plik tekstowy czy aplikacja to rzeczywisty obiekt VFS, a nie sztuczna makieta. Pulpit startuje w czystym stanie bez plików-zaślepek, eksponując jedynie skróty aplikacji i Kosz.
+- **Niewidzialna siatka i snapping:** Ikony ułożone są w dynamicznej, niewidzialnej siatce (104×96 px), zapobiegającej nakładaniu się elementów. Pozycje ikon są trwale zapamiętywane w pliku konfiguracji siatki `/home/Desktop/.layout` i zachowywane po restarcie. Użytkownik może przeciągać ikony myszą (drag & drop) między komórkami siatki, upuszczać pliki do folderów oraz bezpośrednio do Kosza.
+- **Zaznaczanie prostokątem (Marquee Selection) i Multi-select:** Przeciągnięcie kursora myszy po wolnej przestrzeni pulpitu wyświetla półprzezroczysty fioletowy prostokąt z obwódką, zaznaczający wszystkie przecinane elementy. Obsługiwany jest również klawisz Ctrl (Ctrl+Click / Ctrl+Drag) do przełączania i dodawania do zaznaczenia oraz grupowe przeciąganie zaznaczonych elementów z zachowaniem ich względnego układu.
+- **Wspólny model DesktopItem:** Obsługuje aplikacje systemowe (`Files`, `Terminal`, `Notes`, `Settings`, `Web`, `PollikMark`), katalogi, pliki tekstowe `.txt`, pliki ogólne oraz Kosz. Etykiety pod ikonami używają czcionki Pollik Sans z dwuwierszowym zawijaniem tekstu i cieniem dla pełnej czytelności na każdym tle.
+- **Menu kontekstowe i akcje:** Prawy przycisk myszy na wolnym pulpicie otwiera menu kontekstowe z możliwością utworzenia nowego folderu (`New Folder`, `New Folder 2`...) oraz nowego pliku tekstowego (`New Text File.txt`...). Prawy przycisk na elemencie umożliwia jego otwarcie, zmianę nazwy (`Rename` / klawisz `F2` z walidacją) oraz przeniesienie do Kosza (`Move to Trash` / klawisz `Del`).
+- **Prawdziwy Kosz (Trash) i Drag to Trash:** Obiekty można przeciągnąć bezpośrednio na ikonę Kosza — po najechaniu Kosz podświetla się koralowym/czerwonym kolorem jako cel upuszczenia, a po zwolnieniu przycisku element jest przenoszony do `/home/Trash` wraz z metadanymi w `/home/Trash/.trashinfo`. Ikona Kosza otrzymuje czerwoną plakietkę wskazującą stan pełny. Aplikacje systemowe są chronione przed usunięciem. Dwuklik na Koszu otwiera menedżer plików Files z możliwością przywrócenia pliku do pierwotnej lokalizacji lub trwałego opróżnienia.
+- **Płynne animacje oparte na czasie (Time-based Cubic Easing):** Animacje otwierania okien (scale/fade ~200 ms), minimalizacji do środka ikony Docka (translation/scale ~220 ms) oraz przywracania z Docka korzystają ze wspólnych krzywych `ease_out_cubic` i `ease_in_cubic`. Kompozytor transformuje zapamiętany bufor `WindowSurface` — aplikacje nie renderują zawartości w każdej klatce animacji (zero client repaints).
+- **Dynamiczny Dock i cykl życia aplikacji (Pin/Unpin):** Widoczność w Docku wynika z formuły `visible_in_dock = pinned || running`. Przypięte aplikacje są zawsze widoczne. Aplikacje nieprzypięte pojawiają się dynamicznie w Docku ze wskaźnikiem aktywności tylko w trakcie działania. Odpięcie działającej aplikacji (*Unpin from Dock*) nie usuwa jej natychmiast — pozostaje ona w Docku jako dynamiczna uruchomiona aplikacja, a znika dopiero po zamknięciu okna. Przypięcie działającej aplikacji (*Pin to Dock*) sprawia, że ikona pozostaje w Docku po zamknięciu. Menedżer plików `Files` jest zawsze przypięty (brak opcji odpięcia). Konfiguracja przypięć jest trwale zapisywana w `/home/.config/dock.conf` i zachowywana po restarcie.
+- **Hierarchia zdarzeń (Input Priority):** Ściśle uporządkowany routing wejścia: okna modalne/dialogi → aktywne menu kontekstowe → Dock (zawsze na pierwszym planie, bez blokowania przez okna w tle) → kontrolki i obszar okien → górny pasek → elementy pulpitu → tło pulpitu.
 
-Dock ma nową półprzezroczystą powierzchnię, pięć autorskich ikon inspirowanych współczesnymi interfejsami macOS/Windows, animowane powiększanie po najechaniu i etykiety aplikacji. Okna pojawiają się z krótką animacją przesunięcia (około 180 ms). Kursor ma wygładzony ciemny grot z jasną obwódką; nad tekstem zmienia się w kursor tekstowy, a nad dockiem we wskaźnik. Grafiki nie są kopiami zasobów Apple/Microsoft.
+Notatnik (Notes) otwiera pliki tekstowe z pulpitu po dwukliku oraz zapisuje dokumenty bezpośrednio do PollikFS v2 przez **Ctrl+S** lub przycisk **Save**. Menedżer plików (Files) wyświetla zawartość dysku w czasie rzeczywistym i umożliwia bezpośrednią nawigację po folderach oraz Koszu.
 
-Sterownik myszy negocjuje rozszerzenie PS/2 z rolką, sprawdza ACK i ponawia polecenia po RESEND; dostępny jest powrót do protokołu 3-bajtowego. Rolka przewija notatnik. Składanie obrazu używa pamięci podręcznej tapety, osobnego bufora sceny i częściowych zapisów framebufferu. Zwykły ruch kursora odtwarza jedynie jego poprzedni prostokąt i nowy kursor. Animacja docka zapisuje dolny pas ekranu. Zmiana zawartości okna wymaga pełnego odświeżenia. Częstotliwość animacji ogranicza zegar; nie ma gwarancji 60 FPS.
-
-Sterownik VBE sprawdza adres, pitch, tryb direct-color i układ kanałów RGB; obsługuje 24/32 bity oraz obcina prostokąty do granic ekranu. To nadal renderowanie programowe, bez akceleracji GPU i synchronizacji VSync. Nowe polecenie `gfx` pokazuje liczbę prezentacji i kopiowanych pikseli.
-
-Notatnik zapisuje dokument przez **Ctrl+S** lub przycisk **Save**. PgUp/PgDn przewijają treść. Zapis odbywa się również przed otwarciem innego dokumentu i przed poleceniem `reboot`; nieudany zapis blokuje te działania. Zamknięcie okna QEMU nie zapisuje niezapisanej edycji. Files pokazuje prawdziwą listę dokumentów odczytaną z dysku; kliknięcie wiersza otwiera dokument.
-
-PollikFS mieści osiem plików, każdy do 1023 bajtów, z nazwą do 23 znaków (`a-z`, `0-9`, `.`, `_`, `-`). To własny mały system plików ze stałym katalogiem, bez folderów. Sterownik ATA PIO zapisuje naprzemiennie dwie kompletne migawki: najpierw dane i flush, następnie nagłówek z generacją i sumami kontrolnymi. Przy uszkodzeniu ostatniej migawki można odczytać poprzednią. Jeśli obie są nieprawidłowe, zapis zostaje wyłączony; system nie formatuje automatycznie rozpoznanego niepustego, uszkodzonego dysku. Nie zastępuje to kopii zapasowych.
-
-Własna czcionka **Pollik Sans** zastępuje font 5×7. Ma 95 znaków ASCII, małe i wielkie litery, proporcjonalne odstępy i wygładzanie 4-bitowe. Krzywe są rasteryzowane osobno dla rozmiarów 14, 18, 26, 40 i 52 px, zamiast powiększania małych bitmap. Notatnik używa naturalnych odstępów, a terminal stałych komórek dla wyrównania kolumn.
-
-Klawiatura: podstawowy układ US; polskie znaki nie są jeszcze obsługiwane. Polecenia wpisuj małymi literami. Edycja odbywa się na końcu dokumentu (Backspace usuwa ostatni znak).
+Klawiatura: podstawowy układ US; polskie znaki nie są jeszcze obsługiwane. F2 rozpoczyna zmianę nazwy zaznaczonego elementu pulpitu, Del przenosi do Kosza, a Ctrl+S zapisuje plik w Notatniku. Escape zamyka otwarte menu kontekstowe i okna dialogowe.
 
 ## Terminal
 
 | Polecenie | Działanie |
 | --- | --- |
-| `help`, `about`, `mem`, `clear` | Pomoc, wersja, stała mapa pamięci, czyszczenie terminala |
-| `gfx` | Stan framebufferu i liczniki częściowego odświeżania |
-| `ls` | Lista plików |
-| `new projekt.txt` | Utworzenie pustego pliku na dysku i otwarcie w notatniku |
-| `open projekt.txt` | Otwarcie pliku |
-| `save` | Zapis aktualnego dokumentu |
-| `cat` | Początek aktualnego dokumentu |
-| `rm projekt.txt` | Usunięcie pliku; najpierw otwórz inny dokument |
-| `ps` | Stany, liczniki pracy i przydziałów czasu procesów |
-| `pause 1`, `resume 1` | Wstrzymanie/wznowienie procesu |
-| `kill 1`, `spawn 1` | Zatrzymanie/uruchomienie od początku procesu |
-| `faulttest` | Proces 1 wykonuje zabronioną instrukcję; kernel zatrzymuje tylko jego |
-| `net` | Stan karty, adresy, liczniki ramek i wynik ping |
-| `ping` | Asynchroniczny ping bramy QEMU 10.0.2.2 |
-| `publicip` | Pobiera publiczny adres IPv4 przez zweryfikowany HTTPS |
-| `theme` | Zmiana tapety |
-| `reboot` | Zapis edycji i restart przez kontroler klawiatury |
+| `help`, `about`, `version`, `gfx`, `mem`/`free` | Pomoc, informacje o systemie, grafika i pamięć |
+| `pwd`, `cd`, `ls`/`dir`, `cat`/`type`, `stat` | Nawigacja i odczyt plików oraz metadanych |
+| `mkdir`, `touch`, `rm`/`del`, `rmdir`, `mv`/`rename`, `cp` | Operacje na PollikFS; mv i cp nie nadpisują celu |
+| `echo`, `which`, `history`, `clear`/`cls` | Tekst, informacje o komendach i historia sesji |
+| `new`, `open`, `save` | Tworzenie i edycja plików w Notatniku |
+| `ps`/`tasks`, `pause`, `resume`, `kill`, `spawn`, `faulttest` | Lista i obsługa procesów demonstracyjnych |
+| `net`, `ping`, `publicip`, `lspci`, `beep` | Sieć i urządzenia |
+| `uptime`, `time`, `date`, `perf`, `theme`, `anim` | Czas, wydajność i ustawienia pulpitu |
+| `reboot`, `shutdown` | Zapis edycji i sterowanie zasilaniem |
+| `tcc --help`, `tcc --version` | Pomoc do natywnego TinyCC dla konsoli x86_64 |
 
-PID 1 i 2 to dwa wbudowane programy demonstracyjne. Terminal przyjmuje 48 znaków na polecenie i pokazuje ostatni wynik, bez historii. `cat` jest ograniczony do 239 znaków.
+Terminal ma przewijany zapis sesji, historię poleceń pod Up/Down (64 pozycje), edycję linii do 159 znaków oraz `history -c`. `cat` odczytuje do 32767 bajtów na polecenie. Pulpit działa jako i386 i nie może uruchomić programu ELF64 `/bin/tcc`; przykłady kompilacji są w `kernel/arch/x86_64/TINYCC_PORT.md` i `CONSOLE_TTY.md`.
 
 ## Procesy i sieć — co rzeczywiście działa
 
 Kernel konfiguruje IDT, PIC, PIT 100 Hz, TSS i GDT. Zegar wywłaszcza pulpit i dwa procesy ring 3. Każdy proces ma prywatny segment 64 KiB, własny stos użytkownika i własny stos kernela. Programy wykonują kod w CPL3, a `int 0x80` raportuje ich pracę. Wyjątek procesu zatrzymuje go i przekazuje czas innemu procesowi. Wyjątek kernela wypisuje numer na port szeregowy i zatrzymuje system.
 
-To rzeczywiste procesy użytkownika, ale **aplikacje pulpitu nadal działają w kernelu**. Istnieje stronicowanie (PMM/VMM) i loader statycznych ELF32 uruchamianych w Ring 3 z własnym katalogiem stron (`/bin/hello` po sformatowaniu PollikFS v2 oraz wbudowane programy testowe). Układ pamięci: jądro (obraz + BSS) od 1 MiB, sterta jądra do `0x7F0000`, workery od 8 MiB; jądro mapuje tożsamościowo RAM do 1 GiB, przestrzeń użytkownika ELF zajmuje `0x40000000`–`0xC0000000`. RAM powyżej 1 GiB nie jest używany przez to jądro 32-bitowe. Stage 2 ładuje obraz jądra pod 1 MiB, bez dawnego limitu 512 KiB. Szczegóły i ograniczenia: [ARCHITECTURE.md](ARCHITECTURE.md).
+To rzeczywiste procesy użytkownika, ale **aplikacje pulpitu nadal działają w kernelu**. Istnieje stronicowanie (PMM/VMM) i loader statycznych ELF32 uruchamianych w Ring 3 z własnym katalogiem stron (`/bin/hello` po sformatowaniu PollikFS v2 oraz wbudowane programy testowe). Układ pamięci: jądro (obraz + BSS) od 1 MiB, sterta jądra do `0x7F0000`, workery od 8 MiB; jądro mapuje tożsamościowo RAM do 1 GiB, przestrzeń użytkownika ELF zajmuje `0x40000000`–`0xC0000000`. RAM powyżej 1 GiB nie jest używany przez to jądro 32-bitowe. Stage 2 ładuje obraz jądra pod 1 MiB, bez dawnego limitu 512 KiB; build ogranicza kernel.bin do 4 MiB, a BSS < 0x600000. Szczegóły i ograniczenia: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 Sieć: własny sterownik PCI RTL8139 z DMA, Ethernet, ARP, IPv4, ICMP, UDP, DHCP, DNS i TCP. Adres, maska, brama oraz DNS pochodzą z dzierżawy DHCP; po utracie łącza są usuwane, zamiast używać wpisanego na stałe adresu. Przycisk **Test connection** w Settings wysyła rzeczywisty ping; wynik pojawia się w tym oknie i pod `net`.
 
@@ -88,7 +83,7 @@ PollikOS Web korzysta z tego samego stosu do HTTP/1.1 i HTTPS przez BearSSL: wal
 
 Zaufane CA są kompilowane z `kernel/certs/`. Zawarty jest lokalny `Norton Web/Mail Shield Root`, ponieważ na tym komputerze Norton przechwytuje HTTPS; weryfikacja nazwy, dat i podpisów pozostaje włączona. Usunięcie tego pliku z katalogu certyfikatów i przebudowanie obrazu wyłącza zaufanie do lokalnego pośrednika.
 
-Brak również USB, dźwięku, UEFI i instalatora. Fizyczny sprzęt nie był testowany.
+Nie ma natywnego stosu USB host (HID/storage) ani UEFI. Istnieje obraz instalatora Live przeznaczony do uruchomienia z USB i instalowania na dysk ATA oraz podstawowe audio Intel ICH AC'97 z fallbackiem PC Speaker. Fizyczny sprzet nie byl testowany.
 
 ## Testy
 

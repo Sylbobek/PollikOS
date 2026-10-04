@@ -93,10 +93,7 @@ void power_shutdown(void) {
     outw(0x600, 0x34);
 
     /* If ACPI shutdown failed, halt CPU */
-    __asm__ volatile("cli");
-    while (1) {
-        __asm__ volatile("hlt");
-    }
+    hal_cpu_halt_forever();
 }
 
 void power_reboot(void) {
@@ -110,20 +107,33 @@ void power_reboot(void) {
 
     outb(0x64, 0xFE);
 
-    /* Fallback: Triple fault via empty IDT */
-    struct {
-        u16 limit;
-        u32 base;
-    } __attribute__((packed)) null_idt = {0, 0};
-    __asm__ volatile("lidt %0; int3" :: "m"(null_idt));
+    /* Fallback: reset through a triple fault with an empty IDT. */
+    hal_cpu_triple_fault();
 
-    while (1) {
-        __asm__ volatile("cli; hlt");
-    }
+    hal_cpu_halt_forever();
+}
+
+static int g_sound_muted = 0;
+static u32 g_sound_freq = 440;
+
+int sound_is_muted(void) {
+    return g_sound_muted;
+}
+
+void sound_set_muted(int muted) {
+    g_sound_muted = muted;
+}
+
+u32 sound_get_freq(void) {
+    return g_sound_freq;
+}
+
+void sound_set_freq(u32 freq) {
+    if (freq > 0) g_sound_freq = freq;
 }
 
 void speaker_beep(u32 freq_hz, u32 duration_ms) {
-    if (freq_hz == 0) return;
+    if (g_sound_muted || freq_hz == 0) return;
     u32 div = 1193180 / freq_hz;
 
     /* Program PIT Channel 2 */
@@ -147,10 +157,16 @@ void speaker_beep(u32 freq_hz, u32 duration_ms) {
     outb(0x61, inb(0x61) & 0xFC);
 }
 
-static u32 pci_config_read32(u8 bus, u8 dev, u8 fn, u8 reg) {
+u32 pci_config_read32(u8 bus, u8 dev, u8 fn, u8 reg) {
     u32 address = 0x80000000u | ((u32)bus << 16) | ((u32)dev << 11) | ((u32)fn << 8) | (reg & 0xFC);
     outl(PCI_CONFIG_ADDRESS, address);
     return inl(PCI_CONFIG_DATA);
+}
+
+void pci_config_write32(u8 bus, u8 dev, u8 fn, u8 reg, u32 val) {
+    u32 address = 0x80000000u | ((u32)bus << 16) | ((u32)dev << 11) | ((u32)fn << 8) | (reg & 0xFC);
+    outl(PCI_CONFIG_ADDRESS, address);
+    outl(PCI_CONFIG_DATA, val);
 }
 
 int pci_scan_bus(PciDevice *out_devs, int max_devs) {

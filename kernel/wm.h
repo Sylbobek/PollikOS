@@ -196,9 +196,11 @@ void wm_start_animation(int id, AnimType type, int start_x, int start_y, int sta
                         int end_x, int end_y, int end_w, int end_h, u32 duration_ms);
 void wm_update_animations(u32 now_ms);
 
-/* Frame Scheduler (Target 60 FPS = 16.6 ms) */
+/* Frame Scheduler (Target 60/120 FPS) */
 int wm_frame_due(u32 now_ms);
 void wm_frame_scheduled(u32 now_ms);
+int wm_get_target_fps(void);
+void wm_set_target_fps(int fps);
 
 /* High-resolution Timing & Profiler */
 void wm_timer_init(void);

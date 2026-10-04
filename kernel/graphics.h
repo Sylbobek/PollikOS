@@ -17,11 +17,19 @@ void rect(int x, int y, int w, int h, u32 color);
 void rounded(int x, int y, int w, int h, int r, u32 color, int opacity);
 void roundrect_slice(int x, int y, int w, int h, int r, u32 color, int first, int last);
 void roundrect(int x, int y, int w, int h, int r, u32 color);
+/* Antialiased outline of thickness t that follows the rounded corners, unlike
+ * disjoint straight rect() stripes that leave the arcs bare. */
+void roundrect_border(int x, int y, int w, int h, int r, int t, u32 color);
+/* Full, even rounded stroke of thickness t over a solid fill: paints the ring
+ * colour then the interior, so corner pixels never fade out. */
+void roundrect_stroke(int x, int y, int w, int h, int r, int t, u32 stroke, u32 fill);
 void text(int x, int y, const char *s, u32 color, int scale);
 int text_width(const char *s, int scale);
 void centered(int x, int y, int w, const char *s, u32 color, int scale);
 void sprite(int x, int y, int w, int h, const u8 *indices, const u8 *alpha,
             const u32 *palette, int sw, int sh);
+/* Nearest-neighbour scale of an RGBA8 image into the target, honouring clip. */
+void graphics_blit_rgba(int dx, int dy, int dw, int dh, const u8 *rgba, int sw, int sh);
 static inline u32 blend(u32 a, u32 b, int t) {
     if (t <= 0) return a;
     if (t >= 256) return b;

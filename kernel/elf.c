@@ -125,9 +125,16 @@ int elf_load(page_directory_t *pd, const u8 *data, u32 size, uintptr_t *entry_ou
                     return 0;
                 }
                 memset((void *)ppage, 0, PAGE_SIZE);
-                map_page(pd, vpage, ppage, page_flags);
+                if (!map_page(pd, vpage, ppage, page_flags)) {
+                    pmm_free_page(ppage);
+                    KLOG_ERROR(KLOG_CAT_PROC, "elf_load: map_page failed");
+                    return 0;
+                }
             } else {
-                map_page(pd, vpage, ppage, existing_flags | page_flags);
+                if (!map_page(pd, vpage, ppage, existing_flags | page_flags)) {
+                    KLOG_ERROR(KLOG_CAT_PROC, "elf_load: remap_page failed");
+                    return 0;
+                }
             }
 
             /* Copy file payload into the mapped physical page */

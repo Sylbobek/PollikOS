@@ -50,10 +50,10 @@ void klog_dec(const char *cat, const char *prefix, u32 val) {
 void dump_registers(const void *frame_ptr, u32 cr2) {
     const RegFrame *f = (const RegFrame *)frame_ptr;
     u32 cr0, cr3, cr4 = 0;
-    __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
-    __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
+    cr0 = (u32)hal_read_cr0();
+    cr3 = (u32)hal_read_cr3();
     /* CR4 is only available on Pentium+, test if readable */
-    __asm__ volatile("mov %%cr4, %0" : "=r"(cr4) : : "memory");
+    cr4 = (u32)hal_read_cr4();
 
     char h[12];
 
@@ -99,11 +99,9 @@ void panic(const char *msg, const void *frame_ptr) {
     serial("\n");
 
     u32 cr2 = 0;
-    __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+    cr2 = (u32)hal_read_cr2();
     dump_registers(frame_ptr, cr2);
 
     serial("KERNEL SYSTEM HALTED.\n");
-    for (;;) {
-        __asm__ volatile("cli; hlt");
-    }
+    hal_cpu_halt_forever();
 }

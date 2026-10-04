@@ -5,3 +5,12 @@ CompileFlags:
     - -ffreestanding
     - -Ikernel/include
     - -Ikernel
+    - -Iinclude
+    - -Ithird_party/bearssl/inc
+    - -Ithird_party/bearssl/src
+    - -Wno-unused-parameter
+    - -Wno-unused-variable
+Diagnostics:
+  ClangTidy:
+    Remove:
+      - misc-definitions-in-headers

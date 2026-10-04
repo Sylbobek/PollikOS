@@ -14,7 +14,8 @@ with socket.socket() as reserve:
 log = BUILD / "browser-e2e.log"
 log.write_text("")
 data_disk = BUILD / "browser-e2e-data.img"
-data_disk.write_bytes(bytes(4 * 1024 * 1024))
+from format_pollikfs2 import format_disk
+format_disk(data_disk, total_size_mb=40)
 process = subprocess.Popen([
     "qemu-system-x86_64", "-machine", "pc", "-cpu", "max", "-rtc", "base=utc", "-m", "2G", "-vga", "std",
     "-drive", f"format=raw,file={BUILD / os.environ.get('POLLIK_TEST_IMAGE', 'PollikOS-Alpha.img')},if=ide,index=0,snapshot=on",
@@ -67,7 +68,22 @@ try:
     while "DHCP: Bound successfully" not in log.read_text():
         assert time.monotonic()<deadline,log.read_text()
         time.sleep(.1)
+    if "SETUP: first-run installer ready" in log.read_text():
+        key("ret")
+        for c in "browsertest": key(c)
+        key("ret")
+        for c in "test123": key(c)
+        key("ret")
+        for c in "test123": key(c)
+        key("ret")
+        deadline = time.monotonic() + 12
+        while "AUTH: account created; installation complete" not in log.read_text():
+            assert time.monotonic() < deadline, log.read_text()
+            time.sleep(.1)
     key("f6")
+    # The first-run app was just opened; let its pending local home document
+    # finish before sending address-bar keys.
+    time.sleep(1)
     key("ctrl-l")
     for c in os.environ.get('POLLIK_TEST_URL', 'example.com'):
         key({'.':'dot', ':':'shift-semicolon', '/':'slash', '?':'shift-slash', '=':'equal', '-':'minus'}.get(c,c))

@@ -5,7 +5,7 @@
  * Bounded targets keep raster integer arithmetic and address offsets safe. */
 typedef struct { u32 *color; float *depth; int width, height, stride; u32 capacity; } GfxTarget;
 typedef struct { int width, height, bpp; u32 capabilities; } GfxInfo;
-enum { GFX_CLEAR = 1, GFX_TRIANGLE = 2, GFX_DEPTH = 4, GFX_COLOR = 8 };
+enum { GFX_CLEAR = 1, GFX_TRIANGLE = 2, GFX_DEPTH = 4, GFX_COLOR = 8, GFX_TEXTURE = 16 };
 int gfx_target_valid(const GfxTarget *t);
 void gfx_device_info(GfxInfo *out);
 u32 gfx_clear(GfxTarget *t, u32 offset, u32 count, u32 color);

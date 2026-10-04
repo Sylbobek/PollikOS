@@ -66,7 +66,8 @@ def run(resolution):
                 g.button(True)
                 for width, height in targets:
                     g.move(x+width-1, y+height-1)
-                    g.wait(lambda: g.window(app)[4:6] == (width, height), 'PS/2 resize geometry')
+                    expected = (max(width, 640), max(height, 410)) if app == 4 else (width, height)
+                    g.wait(lambda: g.window(app)[4:6] == expected, 'PS/2 resize geometry')
                     if not rapid:
                         g.wait(lambda: g.presented(app), 'held resize painted', 30)
                 g.button(False)
@@ -110,13 +111,16 @@ def run(resolution):
                     elif app == 2:
                         cols = (width-68)//12
                         shown = min(48, cols-1)
-                        exact(46+shown*12+4, height-74, 0xc8b6ef, 'Terminal command cursor/columns')
-                        observed['command_columns'] = shown
-                        observed['command_ink'] = ink((46, height-90, 46+shown*12, height-74), 0xf4f3fa)
-                        if not observed['command_ink']:
+                        observed['estimated_columns'] = shown
+                        # The prompt now follows scrollback from the top, so
+                        # check the real prompt/input colors across the viewport
+                        # instead of assuming a fixed bottom input row.
+                        observed['prompt_ink'] = ink((18,48,width-24,height-36), 0xc8b6ef)
+                        observed['command_ink'] = ink((18,48,width-24,height-36), 0xf4f3fa)
+                        if not observed['prompt_ink'] or not observed['command_ink']:
                             return False
                     elif app == 3:
-                        exact(width-110, height-30, 0xe5dcf1, 'Notes relocated Save button')
+                        exact(width-40, 60, 0xe5dcf1, 'Notes Save button in editor header')
                         rows = max(1, (height-150)//20)
                         observed['editor_rows'] = rows
                         occupied = [r for r in range(rows) if ink((24, 89+r*20, width-33, 109+r*20), 0x50445e)]
@@ -126,20 +130,18 @@ def run(resolution):
                         if not occupied or max(occupied) < min(rows-1, 30):
                             return False
                     elif app == 4:
-                        col = (width-120)//2
-                        top, h = (91, 44) if height<380 else (124, 74)
-                        exact(64+2*col-26, top+h-8, 0xd7edeb, 'Settings responsive second theme card')
-                        exact(64+col+20, height-(62 if height<380 else 100)+29,
-                              0xe9e1f1, 'Settings relocated connection button')
+                        exact(211, 148, 0x2563eb, 'Settings selected theme outline')
+                        exact(width-50, 350, 0xffffff, 'Settings material-card padding')
                     elif app == 5:
                         exact(width-55, height-25, 0xffffff, 'Browser viewport bottom-right')
                         exact(width-40, height-5, 0xf4f2f8, 'Browser bottom status strip')
                         exact(width-50, 69, 0xcbc5d8, 'Browser address bar right extent')
                     else:
-                        exact(170, 85, 0x405574, 'PollikMark selected workload row')
+                        exact(20, 85, 0x405574, 'PollikMark selected workload row')
                         exact(width-20, height-12, 0x202b40, 'PollikMark responsive status background')
                         y = 212 if height>=410 else 80
-                        observed['level_label_ink'] = ink((190, y, min(width-8, 325), y+18), 0xd9e4f0)
+                        label = (190, y, min(width-8, 325), y+18)
+                        observed['level_label_ink'] = ink(label, 0x64718c) + ink(label, 0x8595b0)
                         if not observed['level_label_ink']:
                             return False
                     lfb, pitch, bpp = (scalar(n) for n in ('address', 'stride', 'bytes'))
@@ -183,6 +185,8 @@ def run(resolution):
             key('ctrl-c'); key('ctrl-v')
             for app in range(count):
                 focus(app)
+                if app == 1:
+                    key('down')  # The Files probe below checks the selected-row fill.
                 place(app)
                 for size in ((480,280), (640,480), (800,600), (g.width-16,g.height-142)):
                     resize(app, [size])

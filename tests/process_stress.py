@@ -57,6 +57,12 @@ def run(ram, timeout):
     assert "PANIC" not in text, f"kernel panic in {log}"
     expect("Isolation self-test PASSED")
     expect("desktop ready")
+    expect("[TEST] SYSCALL ABI PASS")
+    assert "[TEST] SYSCALL ABI FAIL" not in text, f"syscall ABI check failed in {log}"
+    assert text.count("[TEST] SYSCALL ABI PASS") >= 100, f"ABI query missed spawn cycles in {log}"
+    expect("[TEST] SOCKET OWNER PASS")
+    assert "[TEST] SOCKET OWNER FAIL" not in text, f"socket ownership leaked in {log}"
+    assert text.count("[TEST] SOCKET OWNER PASS") >= 100, f"socket cleanup missed spawn cycles in {log}"
     expect("addr=0x00000000 USER WRITE NOT_PRESENT")
     expect("addr=0x00100000 USER WRITE PROTECTION_VIOLATION")
     expect("[STACK_OVERFLOW_GUARD_PAGE]")

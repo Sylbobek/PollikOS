@@ -7,11 +7,14 @@ extern void free(void *);
 static int failed, allocations, frees, fail_after=-1, painting;
 static u64 clock_us;
 static u32 ui[680*410];
+static int capture_text, text_count;
+static struct { int x,y,w; } text_boxes[64];
 #define CHECK(x) do {if(!(x)){printf("FAIL %d: %s\n",__LINE__,#x);failed++;}}while(0)
 _Static_assert(sizeof(MarkResult)==15*4,"existing probe ABI");
 int framebuffer_width(void){return 1024;}
 int framebuffer_height(void){return 768;}
 int framebuffer_bpp(void){return 32;}
+int ui_is_dark(void){return 1;}
 u64 app_host_time_us(void){clock_us+=10;return clock_us;}
 void app_host_metrics(AppPerfView *v){*v=(AppPerfView){0};}
 u32 app_host_free_bytes(void){return 64*1048576;}
@@ -35,8 +38,15 @@ void ui_bridge_rect(int x,int y,int w,int h,u32 c){
     for(int j=y;j<y+h;j++)for(int i=x;i<x+w;i++)if(i>=0 && i<680 && j>=0 && j<410)ui[j*680+i]=c;
 }
 void ui_bridge_text(int x,int y,const char *s,u32 c,int scale){
+    if(capture_text&&text_count<(int)(sizeof(text_boxes)/sizeof(text_boxes[0]))) {
+        int width=0;for(const unsigned char *p=(const unsigned char *)s;*p;p++)width+=sys_get_glyph_advance(*p,scale);
+        text_boxes[text_count].x=x;text_boxes[text_count].y=y;text_boxes[text_count].w=width;text_count++;
+    }
     (void)scale;for(;*s;s++,x+=6)if(*s!=' ')ui_bridge_rect(x,y,5,16,c);
 }
+void ui_bridge_roundrect(int x,int y,int w,int h,int r,u32 c){(void)r;ui_bridge_rect(x,y,w,h,c);}
+void ui_bridge_roundrect_border(int x,int y,int w,int h,int r,int t,u32 c){(void)r;(void)t;ui_bridge_rect(x,y,w,h,c);}
+void ui_bridge_roundrect_stroke(int x,int y,int w,int h,int r,int t,u32 s,u32 f){(void)r;(void)t;(void)f;ui_bridge_rect(x,y,w,h,s);}
 void app_host_blit(int x,int y,const u32 *src,int w,int h,int stride,u32 capacity){
     CHECK(src && stride>=w && capacity>=(u32)(stride*h));ui_bridge_rect(x,y,w,h,1);
 }
@@ -120,7 +130,8 @@ static void resize_and_layout(void){
         pollikmark_test=test;pollikmark_level=0;
         for(int show=0;show<2;show++){
             info=show;painting=1;pollikmark_render(480,280,1);painting=0;
-            CHECK(ui[234*680+34]==0xd9e4f0 && ui[249*680+34]==0xd9e4f0);
+            u32 row_text=test==7?0xe8eefc:0x8595b0;
+            CHECK(ui[234*680+34]==row_text && ui[249*680+34]==row_text);
         }
     }
     info=0;pollikmark_click(40,240);CHECK(pollikmark_test==7 && pollikmark_running);
@@ -129,8 +140,25 @@ static void resize_and_layout(void){
     painting=1;pollikmark_render(680,410,1);painting=0;
     pollikmark_close();CHECK(allocations==frees && !target.color && !front && !mem_a && !mem_b);
 }
+static int same_text(const char *a,const char *b){while(*a&&*a==*b){a++;b++;}return *a==*b;}
+static void detailed_info_layout(void){
+    char number64[24];int n64=pm_put64(number64,0,0xffffffffffffffffull);number64[n64]=0;
+    CHECK(same_text(number64,"18446744073709551615"));
+    PmRect info_rect={394,76,278,282};
+    text_count=0;capture_text=1;
+    pm_draw_info(pm_theme(),info_rect);
+    capture_text=0;
+    CHECK(text_count>=25);
+    for(int i=0;i<text_count;i++) {
+        CHECK(text_boxes[i].x>=info_rect.x+10);
+        CHECK(text_boxes[i].x+text_boxes[i].w<=info_rect.x+info_rect.w-10);
+        for(int j=i+1;j<text_count;j++) if(text_boxes[i].y==text_boxes[j].y)
+            CHECK(text_boxes[i].x+text_boxes[i].w<=text_boxes[j].x ||
+                  text_boxes[j].x+text_boxes[j].w<=text_boxes[i].x);
+    }
+}
 int main(void){
-    shapes();pollikmark_init();pollikmark_open();rotation_and_counters();resize_and_layout();
-    printf("pollikmark native: %s (rotation, raster counters/ABI, mixed shapes, clipping, alpha, resize/failure/leaks, 480x280 eight rows)\n",failed?"FAIL":"PASS");
+    shapes();pollikmark_init();pollikmark_open();rotation_and_counters();resize_and_layout();detailed_info_layout();
+    printf("pollikmark native: %s (rotation, raster counters/ABI, mixed shapes, clipping, alpha, resize/failure/leaks, detailed info text bounds)\n",failed?"FAIL":"PASS");
     return !!failed;
 }

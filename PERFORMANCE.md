@@ -159,5 +159,12 @@ Poniższe PASS pochodzą z istniejących raportów, nie z uruchomienia testów p
 
 Raport `final-522560-tests.json` oznacza browser responsive 1920 jako NOT RUN w tamtym przebiegu (ówczesny skrypt bez argumentu rozdzielczości). Końcowy raport UI dokumentuje późniejsze rzeczywiste wykonanie obu rozdzielczości po rozszerzeniu skryptu; nie należy powielać wcześniejszego NOT RUN jako stanu końcowego.
 
-Raport UI zapisuje zmiany harnessów: parametr rozdzielczości browser responsive, snapshot obrazu w smoke i powyższą asercję WM. Raporty zachowują tożsamość jądra/ELF; nie traktujemy modyfikacji testu jako optymalizacji produkcyjnej. Metadane `PollikData.img` pozostały niezmienione według raportu, a testy UI używały dysków tymczasowych. To ograniczona obserwacja, nie globalny dowód braku wycieków lub uszkodzeń w każdej sytuacji.
+## 7. Optymalizacja podglądu powiększenia (Snap Preview) i renderowania zaokrąglonych kształtów
+
+W trakcie przeciągania okna do krawędzi ekranu w rozdzielczościach ultrawide/HD (1920×962, 1920×1080, 3440×1440) wcześniejszy kod wymuszał pełny redraw sceny (`full = 1`) przy każdej zmianie pozycji myszy ze względu na obecność `shell.snap_preview != SNAP_NONE`. Skutkowało to powtarzanym kopiowaniem wielomegabitowego framebuffera i ciągłym blendowaniem milionów pikseli na klatkę:
+
+- **Dirty-rect dla podglądu przyciągania:** Usunięto wymuszanie `full = 1` podczas trwania przeciągania. Pełne odrysowanie następuje jednokrotnie przy pojawieniu się lub zniknięciu podglądu (`prev_snap != shell.snap_preview`), natomiast ruch okna w strefie przyciągania korzysta ze ścieżki dirty-rect (`full = 2`), kompozytując i przesyłając wyłącznie obszar poruszającego się okna.
+- **Optymalizacja `rounded()` (`blend_precomputed`):** W module `kernel/graphics.c` wyciągnięto stałe składowe koloru i współczynnika przezroczystości (`inv`, `cr`, `cg`, `cb`) przed pętlę skanowania wierszy, redukując liczbę przesunięć i mnożeń per-piksel.
+- **Jakość wizualna:** Podgląd snap zachowuje pełne, gładkie zaokrąglenie rogów (promień 14 px) oraz charakterystyczne półprzezroczyste wypełnienie z subtelną ramką akcentującą.
+
 

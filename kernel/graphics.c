@@ -82,10 +82,21 @@ void rect(int x, int y, int w, int h, u32 c) {
         __asm__ volatile("cld; rep stosl" : "+D"(row), "+c"(count) : "a"(c) : "memory");
     }
 }
+static inline u32 blend_precomputed(u32 bg, int inv, int cr, int cg, int cb) {
+    int r = (((bg >> 16) & 255) * inv + cr) >> 8;
+    int g = (((bg >> 8) & 255) * inv + cg) >> 8;
+    int b = ((bg & 255) * inv + cb) >> 8;
+    return (u32)(r << 16 | g << 8 | b);
+}
 void rounded(int x, int y, int w, int h, int r, u32 c, int opacity) {
-    if (w <= 0 || h <= 0) return;
+    if (w <= 0 || h <= 0 || opacity <= 0) return;
+    if (opacity >= 256) { roundrect(x, y, w, h, r, c); return; }
     if (r > w / 2) r = w / 2;
     if (r > h / 2) r = h / 2;
+    int inv = 256 - opacity;
+    int cr = ((c >> 16) & 255) * opacity;
+    int cg = ((c >> 8) & 255) * opacity;
+    int cb = (c & 255) * opacity;
     if (r <= 0) {
         int first = y < draw_clip.y1 ? draw_clip.y1 - y : 0;
         int last = y + h > draw_clip.y2 ? draw_clip.y2 - y : h;
@@ -95,7 +106,7 @@ void rounded(int x, int y, int w, int h, int r, u32 c, int opacity) {
             int x2 = x + w > draw_clip.x2 ? draw_clip.x2 : x + w;
             for (int i = x1; i < x2; i++) {
                 u32 *p = &draw_target[yy * draw_target_stride + i];
-                *p = blend(*p, c, opacity);
+                *p = blend_precomputed(*p, inv, cr, cg, cb);
             }
         }
         return;
@@ -111,7 +122,7 @@ void rounded(int x, int y, int w, int h, int r, u32 c, int opacity) {
             int x2 = x + w > draw_clip.x2 ? draw_clip.x2 : x + w;
             for (int i = x1; i < x2; i++) {
                 u32 *p = &draw_target[yy * draw_target_stride + i];
-                *p = blend(*p, c, opacity);
+                *p = blend_precomputed(*p, inv, cr, cg, cb);
             }
             continue;
         }
@@ -129,7 +140,7 @@ void rounded(int x, int y, int w, int h, int r, u32 c, int opacity) {
         if (mid_end > draw_clip.x2) mid_end = draw_clip.x2;
         for (int i = mid_start; i < mid_end; i++) {
             u32 *p = &draw_target[yy * draw_target_stride + i];
-            *p = blend(*p, c, opacity);
+            *p = blend_precomputed(*p, inv, cr, cg, cb);
         }
         for (int i = w - r; i < w; i++) {
             int xx = x + i;
@@ -200,6 +211,49 @@ void roundrect_slice(int x, int y, int w, int h, int r, u32 c, int j_start, int 
     }
 }
 void roundrect(int x, int y, int w, int h, int r, u32 c) { roundrect_slice(x, y, w, h, r, c, 0, h); }
+void roundrect_stroke(int x, int y, int w, int h, int r, int t, u32 stroke, u32 fill) {
+    if (w <= 0 || h <= 0) return;
+    if (t < 1) t = 1;
+    if (r < t) r = t;
+    roundrect(x, y, w, h, r, stroke);
+    if (w - 2 * t > 0 && h - 2 * t > 0) roundrect(x + t, y + t, w - 2 * t, h - 2 * t, r - t, fill);
+}
+/* Coverage of a rounded rect for one interior pixel; 64 fully inside, 0 outside. */
+static int rrect_coverage(int w, int h, int r, int i, int j) {
+    if (i < 0 || j < 0 || i >= w || j >= h) return 0;
+    if (r > w / 2) r = w / 2;
+    if (r > h / 2) r = h / 2;
+    if (r <= 0) return 64;
+    int cx = i < r ? i : (i >= w - r ? w - 1 - i : r);
+    int cy = j < r ? j : (j >= h - r ? h - 1 - j : r);
+    return graphics_corner_coverage(r, cx, cy);
+}
+void roundrect_border(int x, int y, int w, int h, int r, int t, u32 c) {
+    if (w <= 0 || h <= 0 || t <= 0) return;
+    if (r > w / 2) r = w / 2;
+    if (r > h / 2) r = h / 2;
+    int iw = w - 2 * t, ih = h - 2 * t;
+    if (iw < 0) iw = 0;
+    if (ih < 0) ih = 0;
+    int ir = r - t; if (ir < 0) ir = 0;
+    /* Only the t-pixel perimeter interacts with the outline; skip interiors. */
+    for (int j = 0; j < h; j++) {
+        int yy = y + j;
+        if (yy < draw_clip.y1 || yy >= draw_clip.y2) continue;
+        int edge_row = j < t || j >= h - t;
+        u32 *row = &draw_target[yy * draw_target_stride];
+        for (int i = 0; i < w; i++) {
+            if (!edge_row && i >= t && i < w - t) { i = w - t - 1; continue; }
+            int xx = x + i;
+            if (xx < draw_clip.x1 || xx >= draw_clip.x2) continue;
+            int coverage = rrect_coverage(w, h, r, i, j) - rrect_coverage(iw, ih, ir, i - t, j - t);
+            if (coverage <= 0) continue;
+            u32 *p = &row[xx];
+            if (coverage >= 64) *p = c;
+            else *p = blend(*p, c, coverage * 4);
+        }
+    }
+}
 int text_width(const char *s, int scale) {
     int result = 0;
     if (scale < 1) scale = 1;
@@ -250,9 +304,49 @@ void app_draw_mono(int x, int y, const char *s, u32 color) {
         x += 12;
     }
 }
-void app_draw_letter(int x,int y,u8 c,u32 color,int scale) { letter(x,y,c,color,scale); }
-void ui_bridge_rect(int x,int y,int w,int h,u32 c) { rect(x,y,w,h,c); }
+void graphics_blit_rgba(int dx, int dy, int dw, int dh, const u8 *rgba, int sw, int sh) {
+    if (!rgba || !draw_target || dw <= 0 || dh <= 0 || sw <= 0 || sh <= 0) return;
+    for (int y = 0; y < dh; y++) {
+        int yy = dy + y;
+        if (yy < draw_clip.y1 || yy >= draw_clip.y2) continue;
+        int sy = (int)((long)y * sh / dh);
+        u32 *row = &draw_target[yy * draw_target_stride];
+        for (int x = 0; x < dw; x++) {
+            int xx = dx + x;
+            if (xx < draw_clip.x1 || xx >= draw_clip.x2) continue;
+            int sx = (int)((long)x * sw / dw);
+            const u8 *p = rgba + 4 * ((u32)sy * sw + sx);
+            int a = p[3];
+            if (!a) continue;
+            u32 c = ((u32)p[0] << 16) | ((u32)p[1] << 8) | p[2];
+            row[xx] = (a >= 255) ? c : blend(row[xx], c, a);
+        }
+    }
+}
+void sys_text_to_buffer(u32 *buffer,int width,int height,int stride,int x,int y,const char *s,u32 color,int scale) {
+    if (!buffer || !s) return;
+    u32 *ot = draw_target;
+    int ow = draw_target_w, oh = draw_target_h, os = draw_target_stride;
+    GraphicsClip oc = draw_clip;
+    draw_target = buffer; draw_target_w = width; draw_target_h = height; draw_target_stride = stride;
+    draw_clip = (GraphicsClip){0, 0, width, height};
+    if (scale < 1) scale = 1; else if (scale > 5) scale = 5;
+    while (*s) {
+        if (*s == '\n') { y += font_glyphs[scale - 1][0].height + 3; s++; continue; }
+        u8 ch = (u8)*s++;
+        if (ch >= 32 && ch < 127) {
+            letter(x, y, ch, color, scale);
+            x += font_glyphs[scale - 1][ch - 32].advance;
+        }
+    }
+    draw_target = ot; draw_target_w = ow; draw_target_h = oh; draw_target_stride = os; draw_clip = oc;
+}
+void app_draw_letter(int x,int y,u8 c,u32 color,int scale) { letter(x,y,c,color,scale); }void ui_bridge_rect(int x,int y,int w,int h,u32 c) { rect(x,y,w,h,c); }
 void ui_bridge_roundrect(int x,int y,int w,int h,int r,u32 c) { roundrect(x,y,w,h,r,c); }
+void ui_bridge_roundrect_border(int x,int y,int w,int h,int r,int t,u32 c) { roundrect_border(x,y,w,h,r,t,c); }
+void ui_bridge_roundrect_stroke(int x,int y,int w,int h,int r,int t,u32 s,u32 f) { roundrect_stroke(x,y,w,h,r,t,s,f); }
+void ui_bridge_blit_rgba(int x,int y,int w,int h,const u8 *rgba,int sw,int sh) { graphics_blit_rgba(x,y,w,h,rgba,sw,sh); }
+void ui_bridge_rounded(int x,int y,int w,int h,int r,u32 c,int op) { rounded(x,y,w,h,r,c,op); }
 void ui_bridge_text(int x,int y,const char *s,u32 c,int scale) { text(x,y,s,c,scale); }
 int ui_bridge_text_width(const char *s,int scale) { return text_width(s,scale); }
 u32 ui_bridge_blend(u32 a,u32 b,int t) { return blend(a,b,t); }
@@ -271,7 +365,64 @@ void sys_draw_rounded_clipped(int x,int y,int w,int h,int r,u32 c,int x1,int y1,
     if(x>=x1 && y>=y1 && x+w<=x2 && y+h<=y2) roundrect(x,y,w,h,r,c);
     else sys_draw_rect_clipped(x,y,w,h,c,x1,y1,x2,y2);
 }
-void sys_draw_window_bottom(int x,int y,int w,int h,int r,u32 c,int start_y) { roundrect_slice(x,y,w,h,r,c,start_y-y,h); }
+void sys_draw_window_bottom(int x,int y,int w,int h,int r,u32 c,int start_y) { roundrect_slice(x,y,w,h,r,c,start_y-y,h); }void sys_draw_roundrect_border_clipped(int x,int y,int w,int h,int r,int t,u32 c,int x1,int y1,int x2,int y2) {
+    GraphicsClip saved = draw_clip;
+    GraphicsClip cl = {x1, y1, x2, y2};
+    if (cl.x1 < saved.x1) cl.x1 = saved.x1;
+    if (cl.y1 < saved.y1) cl.y1 = saved.y1;
+    if (cl.x2 > saved.x2) cl.x2 = saved.x2;
+    if (cl.y2 > saved.y2) cl.y2 = saved.y2;
+    draw_clip = cl;
+    roundrect_border(x, y, w, h, r, t, c);
+    draw_clip = saved;
+}
+void sys_draw_roundrect_stroke_clipped(int x,int y,int w,int h,int r,int t,u32 stroke,u32 fill,int x1,int y1,int x2,int y2) {
+    GraphicsClip saved = draw_clip;
+    GraphicsClip cl = {x1, y1, x2, y2};
+    if (cl.x1 < saved.x1) cl.x1 = saved.x1;
+    if (cl.y1 < saved.y1) cl.y1 = saved.y1;
+    if (cl.x2 > saved.x2) cl.x2 = saved.x2;
+    if (cl.y2 > saved.y2) cl.y2 = saved.y2;
+    draw_clip = cl;
+    roundrect_stroke(x, y, w, h, r, t, stroke, fill);
+    draw_clip = saved;
+}
+void sys_draw_rgba_clipped(int x,int y,int w,int h,const u8 *rgba,int sw,int sh,int x1,int y1,int x2,int y2) {
+    GraphicsClip saved = draw_clip;
+    GraphicsClip cl = {x1, y1, x2, y2};
+    if (cl.x1 < saved.x1) cl.x1 = saved.x1;
+    if (cl.y1 < saved.y1) cl.y1 = saved.y1;
+    if (cl.x2 > saved.x2) cl.x2 = saved.x2;
+    if (cl.y2 > saved.y2) cl.y2 = saved.y2;
+    draw_clip = cl;
+    graphics_blit_rgba(x, y, w, h, rgba, sw, sh);
+    draw_clip = saved;
+}
+/* Opaque 0x00RRGGBB pixel buffer (PollikGL canvas) scaled nearest into target. */
+void sys_draw_canvas_clipped(int x,int y,int w,int h,const u32 *src,int sw,int sh,int x1,int y1,int x2,int y2) {
+    GraphicsClip saved = draw_clip;
+    GraphicsClip cl = {x1, y1, x2, y2};
+    if (cl.x1 < saved.x1) cl.x1 = saved.x1;
+    if (cl.y1 < saved.y1) cl.y1 = saved.y1;
+    if (cl.x2 > saved.x2) cl.x2 = saved.x2;
+    if (cl.y2 > saved.y2) cl.y2 = saved.y2;
+    draw_clip = cl;
+    if (src && w > 0 && h > 0 && sw > 0 && sh > 0) {
+        for (int j = 0; j < h; j++) {
+            int yy = y + j;
+            if (yy < draw_clip.y1 || yy >= draw_clip.y2) continue;
+            int sy = (int)((long)j * sh / h);
+            u32 *row = &draw_target[yy * draw_target_stride];
+            for (int i = 0; i < w; i++) {
+                int xx = x + i;
+                if (xx < draw_clip.x1 || xx >= draw_clip.x2) continue;
+                int sx = (int)((long)i * sw / w);
+                row[xx] = src[sy * sw + sx];
+            }
+        }
+    }
+    draw_clip = saved;
+}
 void sys_draw_letter_clipped(int x,int y,u8 c,u32 color,int scale,int x1,int y1,int x2,int y2) {
     if(c<32 || c>=127 || scale<1 || scale>5)return;
     const FontGlyph *g=&font_glyphs[scale-1][c-32];

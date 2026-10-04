@@ -69,6 +69,8 @@ does not override it. The verified image requires the explicit
 `-ImageName PollikOS-Surface.img` selection. Launcher refresh-rate settings and
 its “120 FPS” banner are not observed FPS or VSync guarantees.
 
+> Superseded checkpoint: the Surface 522,560-byte image and 512-KiB size result below predate the current 4-MiB `build.ps1` cap.
+
 ## Verification — final Surface 522560 (2026-09-18)
 
 This section reports **existing executions**, not new tests run during this

@@ -67,13 +67,7 @@ void br_x509_minimal_run(void *t0ctx);
 
 
 
-#include "inner.h"
-
-
-
-
-
-#include "inner.h"
+#include "inner.h" // IWYU pragma: keep
 
 /*
  * Implementation Notes

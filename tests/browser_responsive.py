@@ -72,8 +72,8 @@ def main():
     log = BUILD / f"{prefix}.log"
     data = BUILD / f"{prefix}-data.img"
     log.write_text("")
-    with data.open("wb") as disk:
-        disk.truncate(64 * 1024 * 1024)
+    from format_pollikfs2 import format_disk
+    format_disk(data, total_size_mb=64)
     with socket.socket() as reserve:
         reserve.bind(("127.0.0.1", 0))
         port = reserve.getsockname()[1]
@@ -152,6 +152,18 @@ def main():
         qmp("qmp_capabilities")
         wait(lambda: "desktop ready" in log.read_text(), "Desktop did not boot", 40)
         wait(lambda: "DHCP: Bound successfully" in log.read_text(), "DHCP did not bind", 20)
+        if "SETUP: first-run installer ready" in log.read_text():
+            key("ret")
+            for character in "browserresponsive": key(character)
+            key("ret")
+            for character in "test123": key(character)
+            key("ret")
+            for character in "test123": key(character)
+            key("ret")
+            wait(lambda: "AUTH: account created; installation complete" in log.read_text(),
+                 "First-run setup did not complete", 12)
+        else:
+            assert "AUTH: login required" in log.read_text(), "fresh responsive test disk was not detected"
         assert f"GFX resolution: {args.resolution}" in log.read_text()
         screen_width, screen_height = shot("desktop").size
         print(f"GUI validated: {screen_width}x{screen_height} (serial + QMP screenshot)", flush=True)

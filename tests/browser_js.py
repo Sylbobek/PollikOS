@@ -5,12 +5,22 @@ import os
 import http.server
 import threading
 import base64
-PAGE = b'<html><head><title>Before</title><link rel="stylesheet" href="/site.css"></head><body><h1 id="hello">Before</h1><img src="/pixel.png" style="width:24px;height:24px"><p>This document came over real HTTP.</p><script src="/app.js"></script></body></html>'
+import io
+from PIL import Image
+gif_stream = io.BytesIO()
+Image.new("RGB", (12, 12), (255, 0, 255)).save(
+    gif_stream, format="GIF", save_all=True,
+    append_images=[Image.new("RGB", (12, 12), (0, 255, 255))],
+    duration=[80, 80], loop=0, disposal=2)
+ANIMATED_GIF = gif_stream.getvalue()
+PAGE = b'<html><head><title>Before</title><link rel="stylesheet" href="/site.css"></head><body><img src="/animation.gif" style="width:32px;height:32px"><h1 id="hello">Before</h1><img src="/pixel.png" style="width:24px;height:24px"><p>This document came over real HTTP.</p><script src="/app.js"></script></body></html>'
 CSS = b'body {padding:20px;} #hello {color: blue;} h1 {font-size:26px;}'
 JS = b'let total=0; for(let i=0;i<4;i++){total+=i;}; if(total===6){document.title="JS PASS"; document.querySelector("#hello").textContent="JavaScript executed"; document.querySelector("#hello").style.color="red";}; document.querySelector("#hello").addEventListener("click",function(){document.title="CLICK PASS";});'
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mP4z8AAAAMBAQD3A0FDAAAAAElFTkSuQmCC")
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
+        if self.path == "/animation.gif":
+            self.send_response(200); self.send_header("Content-Type", "image/gif"); self.send_header("Content-Length", str(len(ANIMATED_GIF))); self.end_headers(); self.wfile.write(ANIMATED_GIF); return
         if self.path == "/pixel.png":
             self.send_response(200); self.send_header("Content-Type", "image/png"); self.send_header("Content-Length", str(len(PNG))); self.end_headers(); self.wfile.write(PNG); return
         if self.path == "/site.css":
@@ -38,7 +48,8 @@ with socket.socket() as reserve:
 log = BUILD / "browser-js.log"
 log.write_text("")
 data_disk = BUILD / "browser-js-data.img"
-data_disk.write_bytes(bytes(4 * 1024 * 1024))
+from format_pollikfs2 import format_disk
+format_disk(data_disk)
 process = subprocess.Popen([
     "qemu-system-x86_64", "-machine", "pc", "-cpu", "max", "-rtc", "base=utc", "-m", "2G", "-vga", "std",
     "-drive", f"format=raw,file={BUILD / os.environ.get('POLLIK_TEST_IMAGE', 'PollikOS-Alpha.img')},if=ide,index=0,snapshot=on",
@@ -87,11 +98,32 @@ try:
         if time.monotonic() > deadline:
             raise AssertionError("Kernel did not reach the desktop")
         time.sleep(.1)
+    if "SETUP: first-run installer ready" in log.read_text():
+        hmp("sendkey ret")
+        for character in "browserjs": key(character)
+        key("ret")
+        for character in "test123": key(character)
+        key("ret")
+        for character in "test123": key(character)
+        key("ret")
+        deadline = time.monotonic() + 10
+        while "AUTH: account created; installation complete" not in log.read_text():
+            if time.monotonic() > deadline:
+                raise AssertionError("First-run setup did not complete")
+            time.sleep(.1)
+    else:
+        assert "AUTH: login required" in log.read_text(), "fresh browser test disk was not detected"
     deadline = time.monotonic()+15
     while "DHCP: Bound successfully" not in log.read_text():
         assert time.monotonic()<deadline,log.read_text()
         time.sleep(.1)
     key("f6")
+    # Focus the visible address bar with the mouse so the smoke test exercises
+    # the same path as a desktop user, independent of host Ctrl-key synthesis.
+    for dx, dy in ((-120, -100), (-120, -100), (0, -100), (-20, -17)):
+        hmp(f"mouse_move {dx} {dy}")
+        time.sleep(.1)
+    hmp("mouse_button 1"); time.sleep(.1); hmp("mouse_button 0")
     key("ctrl-l")
     for c in "http://10.0.2.2:18080/": key({".":"dot",":":"shift-semicolon","/":"slash"}.get(c,c))
     key("ret")
@@ -103,15 +135,21 @@ try:
     rendered = shot("browser-js")
     assert rendered != loading, 'Page did not repaint after the request without user input'
     assert "BROWSER title: JS PASS" in log.read_text(),log.read_text()
-    assert "IMAGE: PNG/JPEG decoded" in log.read_text(),log.read_text()
+    assert "IMAGE: decoded" in log.read_text(),log.read_text()
+    assert "IMAGE: animated GIF decoded" in log.read_text(),log.read_text()
+    frame_a = shot("browser-gif-frame-a")
+    frame_b = shot("browser-gif-frame-b")
+    assert frame_a != frame_b, "Animated GIF did not repaint between frames"
     # HMP sends relative PS/2 packets.  Keep each delta in the signed-byte
     # range; larger deltas set the overflow bit and are intentionally ignored.
     # The system pointer starts at (760,500), heading at about (240,255).
-    hmp("mouse_move -250 -245")
+    hmp("mouse_move -120 50")
     time.sleep(.12)
-    hmp("mouse_move -250 0")
+    hmp("mouse_move -120 22")
     time.sleep(.12)
-    hmp("mouse_move -20 0")
+    # The animated image now occupies one line before the heading, so aim at
+    # the heading's updated vertical position.
+    hmp("mouse_move -20 28")
     time.sleep(.12)
     hmp("mouse_button 1"); time.sleep(.15); hmp("mouse_button 0")
     deadline=time.monotonic()+3

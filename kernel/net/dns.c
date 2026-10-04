@@ -17,6 +17,10 @@ static u16 dns_local_port = 53053;
 static volatile int dns_pending = 0;
 static u8 dns_resolved_ip[4];
 static char dns_pending_name[64];
+static NetworkInterface *dns_pending_iface;
+static u8 dns_query_packet[256];
+static int dns_query_length;
+static u32 dns_deadline_tick, dns_retry_tick;
 
 static void str_copy(char *dst, const char *src, int max) {
     int i = 0;
@@ -38,6 +42,7 @@ static int str_eq(const char *a, const char *b) {
 void dns_init(void) {
     memset(dns_cache, 0, sizeof(dns_cache));
     dns_pending = 0;
+    dns_pending_iface = 0;
 }
 
 static int dns_cache_lookup(const char *hostname, u8 *out_ip) {
@@ -78,8 +83,7 @@ static void dns_cache_insert(const char *hostname, const u8 *ip, u32 ttl_seconds
 }
 
 static void dns_on_udp(NetworkInterface *iface, const u8 *src_ip, u16 src_port, const u8 *data, int len) {
-    (void)iface;
-    if (src_port != 53 || !net_same(src_ip, iface->dns, 4)) return;
+    if (!iface || iface != dns_pending_iface || src_port != 53 || !net_same(src_ip, iface->dns, 4)) return;
 
     if (dns_pending != 1 || len < 12)
         return;
@@ -162,98 +166,92 @@ question_type:
     dns_pending = -1; /* No A record found */
 }
 
-int dns_resolve(NetworkInterface *iface, const char *hostname, u8 *out_ip, int timeout_ticks) {
-    if (!iface || !hostname || !out_ip)
-        return 0;
-
-    if (strlen(hostname) >= sizeof(dns_pending_name)) return 0;
-    /* 1. Direct dotted IP check */
-    if (net_parse_ip(hostname, out_ip))
-        return 1;
-
-    /* 2. Cache lookup */
+int dns_resolve_start(NetworkInterface *iface, const char *hostname, u8 *out_ip) {
+    if (!iface || !hostname || !out_ip || strlen(hostname) >= sizeof(dns_pending_name) || dns_pending == 1)
+        return -1;
+    if (net_parse_ip(hostname, out_ip)) return 1;
     if (dns_cache_lookup(hostname, out_ip)) {
-        serial("DNS: Cache hit for ");
-        serial(hostname);
-        serial("\n");
+        serial("DNS: Cache hit for "); serial(hostname); serial("\n");
         return 1;
     }
 
-    /* 3. Build DNS Query packet */
-    u8 packet[256];
-    memset(packet, 0, sizeof(packet));
-
+    u8 *packet = dns_query_packet;
+    memset(packet, 0, sizeof(dns_query_packet));
     dns_query_id++;
     net_put16(packet + 0, dns_query_id);
-    net_put16(packet + 2, 0x0100); /* Standard query, RD=1 */
-    net_put16(packet + 4, 1);      /* QDCOUNT = 1 */
-    net_put16(packet + 6, 0);      /* ANCOUNT = 0 */
-    net_put16(packet + 8, 0);      /* NSCOUNT = 0 */
-    net_put16(packet + 10, 0);     /* ARCOUNT = 0 */
-
+    net_put16(packet + 2, 0x0100);
+    net_put16(packet + 4, 1);
     int idx = 12;
     const char *p = hostname;
     while (*p) {
         const char *dot = p;
-        while (*dot && *dot != '.')
-            dot++;
+        while (*dot && *dot != '.') dot++;
         int label_len = (int)(dot - p);
-        if (label_len > 63)
-            return 0;
+        if (label_len <= 0 || label_len > 63 || idx + label_len + 6 >= (int)sizeof(dns_query_packet))
+            return -1;
         packet[idx++] = (u8)label_len;
-        for (int i = 0; i < label_len; i++)
-            packet[idx++] = (u8)p[i];
+        for (int i = 0; i < label_len; ++i) packet[idx++] = (u8)p[i];
         p = dot;
-        if (*p == '.')
-            p++;
+        if (*p == '.') p++;
     }
-    packet[idx++] = 0; /* Null terminator */
-
-    net_put16(packet + idx, 1);     /* QTYPE = A */
-    net_put16(packet + idx + 2, 1); /* QCLASS = IN */
+    packet[idx++] = 0;
+    net_put16(packet + idx, 1);
+    net_put16(packet + idx + 2, 1);
     idx += 4;
+    dns_query_length = idx;
 
-    /* Bind UDP port for reply */
     dns_local_port++;
-    if (dns_local_port < 50000 || dns_local_port > 60000)
-        dns_local_port = 50001;
-
+    if (dns_local_port < 50000 || dns_local_port > 60000) dns_local_port = 50001;
     udp_bind(dns_local_port, dns_on_udp);
     str_copy(dns_pending_name, hostname, sizeof(dns_pending_name));
+    dns_pending_iface = iface;
     dns_pending = 1;
+    dns_deadline_tick = ticks + 500;
+    dns_retry_tick = ticks;
 
-    serial("DNS: Querying ");
-    serial(hostname);
-    serial(" at ");
+    serial("DNS: Querying "); serial(hostname); serial(" at ");
     char dns_ip_str[20];
-    net_format_ip(iface->dns, dns_ip_str);
-    serial(dns_ip_str);
-    serial("\n");
+    net_format_ip(iface->dns, dns_ip_str); serial(dns_ip_str); serial("\n");
+    udp_send(iface, iface->dns, dns_local_port, 53, packet, dns_query_length);
+    dns_retry_tick = ticks;
+    return 0;
+}
 
-    udp_send(iface, iface->dns, dns_local_port, 53, packet, idx);
-
-    /* Poll network until resolved or timeout */
-    u32 start = ticks, retry = ticks;
-    while (dns_pending == 1 && (ticks - start < (u32)timeout_ticks)) {
-        if (iface->poll) iface->poll(iface);
-        if (ticks - retry >= 30) {
-            udp_send(iface, iface->dns, dns_local_port, 53, packet, idx);
-            retry = ticks;
-        }
-        net_service_wait();
+int dns_resolve_poll(u8 *out_ip) {
+    if (!out_ip || dns_pending == 0) return -1;
+    if (dns_pending == 1 && (u32)(ticks - dns_deadline_tick) < 0x80000000u) dns_pending = -1;
+    if (dns_pending == 1 && (u32)(ticks - dns_retry_tick) >= 30) {
+        if (dns_pending_iface)
+            udp_send(dns_pending_iface, dns_pending_iface->dns, dns_local_port, 53,
+                     dns_query_packet, dns_query_length);
+        dns_retry_tick = ticks;
     }
-
+    if (dns_pending == 1) return 0;
     udp_unbind(dns_local_port);
-
+    dns_pending_iface = 0;
     if (dns_pending == 2) {
         memcpy(out_ip, dns_resolved_ip, 4);
         dns_pending = 0;
         return 1;
     }
-
-    serial("DNS: Resolution failed/timeout for ");
-    serial(hostname);
-    serial("\n");
+    serial("DNS: Resolution failed/timeout for "); serial(dns_pending_name); serial("\n");
     dns_pending = 0;
-    return 0;
+    return -1;
+}
+
+int dns_resolve(NetworkInterface *iface, const char *hostname, u8 *out_ip, int timeout_ticks) {
+    int result = dns_resolve_start(iface, hostname, out_ip);
+    if (result != 0) return result > 0;
+    u32 start = ticks;
+    while ((result = dns_resolve_poll(out_ip)) == 0 && ticks - start < (u32)timeout_ticks) {
+        if (iface->poll) iface->poll(iface);
+        net_service_wait();
+    }
+    if (result == 0) {
+        /* Expire and unbind through the common completion path. */
+        dns_deadline_tick = ticks;
+        (void)dns_resolve_poll(out_ip);
+        return 0;
+    }
+    return result > 0;
 }

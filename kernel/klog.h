@@ -1,7 +1,11 @@
 #ifndef POLLIK_KLOG_H
 #define POLLIK_KLOG_H
 
+#ifdef POLLIK_X64
+#include "arch/x86_64/fs_platform.h"
+#else
 #include "system.h"
+#endif
 
 #define KLOG_CAT_BOOT "BOOT"
 #define KLOG_CAT_MEM  "MEM"

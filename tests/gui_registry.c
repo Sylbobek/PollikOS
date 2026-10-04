@@ -16,7 +16,7 @@ _Static_assert(APP_WELCOME == 0 && APP_FILES == 1 && APP_TERMINAL == 2 &&
                APP_NOTES == 3 && APP_SETTINGS == 4 && APP_BROWSER == 5 &&
                APP_POLLIKMARK == 6 && APP_COUNT == 7, "stable registry IDs");
 
-enum { INIT, RENDER, KEY, CLICK, OPEN, CLOSE, RESIZE, SCROLL, CURSOR, POLL, OPS };
+enum { INIT, RENDER, KEY, CLICK, DRAG, OPEN, CLOSE, RESIZE, SCROLL, CURSOR, POLL, OPS };
 static int calls[APP_COUNT][OPS], total, last_app, last_op;
 static int arg[4], cursor_result, poll_result;
 static int init_order[APP_COUNT];
@@ -67,11 +67,15 @@ int pollikmark_poll(void) {
 }
 #define CLICK_STUB(name, id) \
     void name(int x, int y) { record(id, CLICK, x, y, 0, 0); }
+CLICK_STUB(welcome_click, APP_WELCOME)
 CLICK_STUB(files_click, APP_FILES)
 CLICK_STUB(notes_click, APP_NOTES)
 CLICK_STUB(settings_click, APP_SETTINGS)
 CLICK_STUB(browser_handle_click, APP_BROWSER)
 CLICK_STUB(pollikmark_click, APP_POLLIKMARK)
+void files_key(u8 code) { record(APP_FILES, KEY, code, 0, 0, 0); }
+void files_close(void) { record(APP_FILES, CLOSE, 0, 0, 0, 0); }
+int files_poll(void) { record(APP_FILES, POLL, 0, 0, 0, 0); return poll_result; }
 void notes_init(void) {
     init_order[total] = APP_NOTES;
     record(APP_NOTES, INIT, 0, 0, 0, 0);
@@ -80,11 +84,21 @@ void browser_client_init(void) {
     init_order[total] = APP_BROWSER;
     record(APP_BROWSER, INIT, 0, 0, 0, 0);
 }
-void terminal_key(u8 code, char ch, int control) {
-    record(APP_TERMINAL, KEY, code, ch, control, 0);
+void terminal_key(u8 code, char ch, int shift, int control) {
+    record(APP_TERMINAL, KEY, code, ch, shift, control);
 }
+void terminal_click(int x, int y) { record(APP_TERMINAL, CLICK, x, y, 0, 0); }
+int terminal_drag(int x, int y, int active) { record(APP_TERMINAL, DRAG, x, y, active, 0); return 1; }
+void terminal_scroll(int delta) { record(APP_TERMINAL, SCROLL, delta, 0, 0, 0); }
 void notes_key(u8 code, char ch, int control) {
     record(APP_NOTES, KEY, code, ch, control, 0);
+}
+void notes_key_ex(u8 code, char ch, int shift, int control) {
+    record(APP_NOTES, KEY, code, ch, shift, control);
+}
+int notes_drag(int x, int y, int active) {
+    record(APP_NOTES, DRAG, x, y, active, 0);
+    return 1;
 }
 void notes_scroll(int delta) { record(APP_NOTES, SCROLL, delta, 0, 0, 0); }
 void files_scroll(int delta) { record(APP_FILES, SCROLL, delta, 0, 0, 0); }
@@ -98,6 +112,9 @@ void browser_client_render(int w, int h, int active) {
 }
 void browser_client_key(u8 code, char ch, int shift, int control) {
     record(APP_BROWSER, KEY, code, ch, shift, control);
+}
+int browser_client_drag(int x, int y, int active) {
+    record(APP_BROWSER, DRAG, x, y, active, 0); return 1;
 }
 void browser_open(void) { record(APP_BROWSER, OPEN, 0, 0, 0, 0); }
 void browser_close(void) { record(APP_BROWSER, CLOSE, 0, 0, 0, 0); }
@@ -118,11 +135,12 @@ static int text_equal(const char *a, const char *b) {
 }
 #define BIT(op) (1u << (op))
 static int metadata(void) {
-    static const char *names[] = {"Welcome", "Files", "Terminal", "Notes", "Settings", "Browser", "PollikMark3D"};
+    static const char *names[] = {"Welcome To pollikos", "Files", "Terminal", "Notes", "Settings", "Browser", "PollikMark3D"};
     static const unsigned callbacks[] = {
-        BIT(RENDER), BIT(RENDER) | BIT(CLICK) | BIT(SCROLL), BIT(RENDER) | BIT(KEY),
-        BIT(INIT) | BIT(RENDER) | BIT(KEY) | BIT(CLICK) | BIT(RESIZE) | BIT(SCROLL) | BIT(CURSOR),
-        BIT(RENDER) | BIT(CLICK), (1u << OPS) - 1,
+        BIT(RENDER) | BIT(CLICK), BIT(RENDER) | BIT(KEY) | BIT(CLICK) | BIT(CLOSE) | BIT(SCROLL) | BIT(POLL),
+        BIT(RENDER) | BIT(KEY) | BIT(CLICK) | BIT(DRAG) | BIT(SCROLL),
+        BIT(INIT) | BIT(RENDER) | BIT(KEY) | BIT(CLICK) | BIT(DRAG) | BIT(RESIZE) | BIT(SCROLL) | BIT(CURSOR),
+        BIT(RENDER) | BIT(CLICK), ((1u << OPS) - 1),
         BIT(INIT) | BIT(RENDER) | BIT(KEY) | BIT(CLICK) | BIT(OPEN) | BIT(CLOSE) | BIT(RESIZE) | BIT(POLL)
     };
     reset();
@@ -157,10 +175,11 @@ static int metadata(void) {
         CHECK(app->body_active == (id == APP_POLLIKMARK ? 0x202b40u : id == APP_TERMINAL ? 0x202331u : 0xfaf9fcu));
         CHECK(app->body_inactive == (id == APP_POLLIKMARK ? 0x202b40u : id == APP_TERMINAL ? 0x1a1c27u : 0xf4f2f7u));
         CHECK(app->bottom_inset == (id == APP_BROWSER ? 18 : 0));
-        CHECK(app->min_width == 480 && app->min_height == 280);
+        CHECK(app->min_width == (id == APP_SETTINGS ? 640 : 480) &&
+              app->min_height == (id == APP_SETTINGS ? 410 : 280));
         CHECK(GUI_CHROME_HEIGHT == 34);
         unsigned present = (!!app->init << INIT) | (!!app->render << RENDER) |
-            (!!app->key << KEY) | (!!app->click << CLICK) | (!!app->open << OPEN) |
+            (!!app->key << KEY) | (!!app->click << CLICK) | (!!app->drag << DRAG) | (!!app->open << OPEN) |
             (!!app->close << CLOSE) | (!!app->resize << RESIZE) |
             (!!app->scroll << SCROLL) | (!!app->cursor << CURSOR) | (!!app->poll << POLL);
         CHECK(present == callbacks[id]);
@@ -178,6 +197,7 @@ static int invalid_ids(void) {
         gui_app_render(id, 640, 480, 1);
         gui_app_key(id, 30, 1, 1);
         gui_app_click(id, 99, -4);
+        CHECK(gui_app_drag(id, 99, -4, 1) == -1);
         gui_app_scroll(id, -2);
         gui_app_opened(id);
         gui_app_closed(id);
@@ -225,6 +245,10 @@ static int keyboard(void) {
                 for (int control = 0; control <= 1; ++control) {
                     reset();
                     gui_app_key(id, (u8)code, shift, control);
+                    if (id == APP_FILES) {
+                        CHECK(only(id, KEY) && arg[0] == code);
+                        continue;
+                    }
                     if (id != APP_TERMINAL && id != APP_NOTES && id != APP_BROWSER && id != APP_POLLIKMARK) {
                         CHECK(total == 0);
                         continue;
@@ -234,7 +258,7 @@ static int keyboard(void) {
                         ch = (char)(ch - 'a' + 'A');
                     CHECK(only(id, KEY));
                     CHECK(arg[0] == code && arg[1] == ch);
-                    if (id == APP_BROWSER || id == APP_POLLIKMARK) {
+                    if (id == APP_BROWSER || id == APP_POLLIKMARK || id == APP_TERMINAL || id == APP_NOTES) {
                         CHECK(arg[2] == shift && arg[3] == control);
                     } else {
                         CHECK(arg[2] == control);
@@ -253,10 +277,16 @@ static int pointer_routing(void) {
             int x = points[p][0], y = points[p][1];
             reset();
             gui_app_click(id, x, y);
-            if (id == APP_FILES || id == APP_NOTES || id == APP_SETTINGS || id == APP_BROWSER || id == APP_POLLIKMARK) {
+            if (id == APP_WELCOME || id == APP_FILES || id == APP_TERMINAL || id == APP_NOTES || id == APP_SETTINGS || id == APP_BROWSER || id == APP_POLLIKMARK) {
                 CHECK(only(id, CLICK));
                 CHECK(arg[0] == x && arg[1] == y);
             } else CHECK(total == 0);
+            reset();
+            int dragged = gui_app_drag(id, x, y, 1);
+            if (id == APP_TERMINAL || id == APP_BROWSER || id == APP_NOTES) {
+                CHECK(dragged == 1 && only(id, DRAG));
+                CHECK(arg[0] == x && arg[1] == y && arg[2] == 1);
+            } else CHECK(dragged == -1 && total == 0);
             for (int result = -1; result <= 1; ++result) {
                 reset();
                 cursor_result = result;
@@ -273,9 +303,9 @@ static int pointer_routing(void) {
         for (unsigned d = 0; d < sizeof deltas / sizeof deltas[0]; ++d) {
             reset();
             gui_app_scroll(id, deltas[d]);
-            if (id == APP_NOTES || id == APP_BROWSER || id == APP_FILES) {
+            if (id == APP_NOTES || id == APP_BROWSER || id == APP_FILES || id == APP_TERMINAL) {
                 CHECK(only(id, SCROLL));
-                CHECK(arg[0] == deltas[d] * (id == APP_NOTES ? 3 : 1));
+                CHECK(arg[0] == deltas[d] * ((id == APP_NOTES || id == APP_TERMINAL) ? 3 : 1));
             } else CHECK(total == 0);
         }
     }
@@ -298,7 +328,7 @@ static int lifecycle(void) {
         for (int op = OPEN; op <= CLOSE; ++op) {
             reset();
             dispatch[op - OPEN](id);
-            if (id == APP_BROWSER || id == APP_POLLIKMARK) CHECK(only(id, op));
+            if (id == APP_BROWSER || id == APP_POLLIKMARK || (id == APP_FILES && op == CLOSE)) CHECK(only(id, op));
             else CHECK(total == 0); /* Includes persistent Terminal/Notes close. */
         }
         for (unsigned s = 0; s < sizeof sizes / sizeof sizes[0]; ++s) {
@@ -329,9 +359,32 @@ static int polling(void) {
         poll_result = results[i];
         mark_poll_result = results[j];
         u32 mask = gui_apps_poll();
-        CHECK(total == 2 && calls[APP_BROWSER][POLL] == 1 && calls[APP_POLLIKMARK][POLL] == 1);
+        CHECK(total == 3 && calls[APP_FILES][POLL] == 1 &&
+              calls[APP_BROWSER][POLL] == 1 && calls[APP_POLLIKMARK][POLL] == 1);
         CHECK(mask == ((results[i] ? (1u << APP_BROWSER) : 0u) |
+                       (results[i] ? (1u << APP_FILES) : 0u) |
                        (results[j] ? (1u << APP_POLLIKMARK) : 0u)));
+    }
+    /* Only apps whose bit is set in active_mask may run their poll callback;
+     * a closed/hidden app must never be polled in the background. */
+    static const u32 masks[] = {0, 1u << APP_FILES, 1u << APP_BROWSER,
+                                1u << APP_POLLIKMARK, (1u << APP_FILES) | (1u << APP_BROWSER)};
+    for (unsigned m = 0; m < sizeof masks / sizeof masks[0]; ++m) {
+        reset();
+        poll_result = 1;
+        mark_poll_result = 1;
+        u32 mask = gui_apps_poll_mask(masks[m]);
+        int expected_files = (masks[m] >> APP_FILES) & 1u;
+        int expected_browser = (masks[m] >> APP_BROWSER) & 1u;
+        int expected_mark = (masks[m] >> APP_POLLIKMARK) & 1u;
+        CHECK(calls[APP_FILES][POLL] == expected_files);
+        CHECK(calls[APP_BROWSER][POLL] == expected_browser);
+        CHECK(calls[APP_POLLIKMARK][POLL] == expected_mark);
+        CHECK(total == expected_files + expected_browser + expected_mark);
+        u32 expected_mask = (expected_files ? (1u << APP_FILES) : 0u) |
+                            (expected_browser ? (1u << APP_BROWSER) : 0u) |
+                            (expected_mark ? (1u << APP_POLLIKMARK) : 0u);
+        CHECK(mask == expected_mask);
     }
     return 1;
 }

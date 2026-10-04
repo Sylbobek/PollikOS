@@ -1,7 +1,9 @@
 #include "tcp.h"
 #include "ipv4.h"
 #include "net_util.h"
+#ifndef POLLIK_X64
 #include "../mem.h"
+#endif
 
 #define MAX_TCP_SOCKETS 4
 #define TCP_RX_BUFFER_SIZE 32768
@@ -49,6 +51,11 @@ struct TcpSocket {
 };
 
 static TcpSocket sockets[MAX_TCP_SOCKETS];
+#ifdef POLLIK_X64
+/* The x86_64 kernel has no general heap yet. Give each bounded TCP socket a
+ * fixed receive ring so packet paths never borrow userspace memory. */
+static u8 tcp_rx_pool[MAX_TCP_SOCKETS][TCP_RX_BUFFER_SIZE];
+#endif
 static u16 next_ephemeral_port = 49200;
 static u32 initial_seq = 0x20260913;
 
@@ -100,7 +107,7 @@ void tcp_init(void) {
     memset(sockets, 0, sizeof(sockets));
 }
 
-TcpSocket *tcp_connect(NetworkInterface *iface, const u8 *remote_ip, u16 remote_port, int timeout_ticks) {
+TcpSocket *tcp_connect_start(NetworkInterface *iface, const u8 *remote_ip, u16 remote_port) {
     if (!iface || !remote_ip)
         return 0;
 
@@ -136,7 +143,11 @@ TcpSocket *tcp_connect(NetworkInterface *iface, const u8 *remote_ip, u16 remote_
     s->state = TCP_STATE_SYN_SENT;
     s->retrans_count = 0;
 
+#ifdef POLLIK_X64
+    s->rx_buf = tcp_rx_pool[slot];
+#else
     s->rx_buf = (u8 *)kmalloc(TCP_RX_BUFFER_SIZE);
+#endif
     if (!s->rx_buf) {
         s->active = 0;
         return 0;
@@ -152,9 +163,16 @@ TcpSocket *tcp_connect(NetworkInterface *iface, const u8 *remote_ip, u16 remote_
     serial(pbuf);
     serial("...\n");
 
-    /* Send SYN */
+    /* Send SYN. The asynchronous API leaves polling to the kernel timer. */
     tcp_send_segment(s, TCP_FLAG_SYN, 0, 0);
     s->snd_nxt++; /* SYN consumes 1 sequence number */
+
+    return s;
+}
+
+TcpSocket *tcp_connect(NetworkInterface *iface, const u8 *remote_ip, u16 remote_port, int timeout_ticks) {
+    TcpSocket *s = tcp_connect_start(iface, remote_ip, remote_port);
+    if (!s) return 0;
 
     u32 start = ticks;
     while (s->state == TCP_STATE_SYN_SENT && (ticks - start < (u32)timeout_ticks)) {
@@ -201,6 +219,15 @@ int tcp_send(TcpSocket *s, const u8 *data, int len) {
     return sent;
 }
 
+int tcp_send_nonblocking(TcpSocket *s, const u8 *data, int len) {
+    if (!s || !s->active || s->state != TCP_STATE_ESTABLISHED || !data || len <= 0 ||
+        len > TCP_MSS || s->snd_una != s->snd_nxt)
+        return 0;
+    tcp_send_segment(s, TCP_FLAG_ACK | TCP_FLAG_PSH, data, len);
+    s->snd_nxt += (u32)len;
+    return len;
+}
+
 int tcp_read(TcpSocket *s, u8 *buf, int max_len) {
     if (!s || !s->active || !s->rx_buf || !buf || max_len <= 0)
         return 0;
@@ -223,6 +250,22 @@ int tcp_is_eof(TcpSocket *s) {
     return (s->eof || s->error) && (s->rx_tail == s->rx_head);
 }
 
+int tcp_has_error(TcpSocket *s) {
+    return !s || !s->active || s->error;
+}
+
+void tcp_abort(TcpSocket *s) {
+    if (!s || !s->active) return;
+    if (s->rx_buf) {
+#ifndef POLLIK_X64
+        kfree(s->rx_buf);
+#endif
+        s->rx_buf = 0;
+    }
+    s->active = 0;
+    s->state = TCP_STATE_CLOSED;
+}
+
 void tcp_close(TcpSocket *s) {
     if (!s || !s->active)
         return;
@@ -240,7 +283,9 @@ void tcp_close(TcpSocket *s) {
     }
 
     if (s->rx_buf) {
+#ifndef POLLIK_X64
         kfree(s->rx_buf);
+#endif
         s->rx_buf = 0;
     }
     s->active = 0;

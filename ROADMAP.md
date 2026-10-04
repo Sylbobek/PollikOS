@@ -7,11 +7,39 @@ Element jest oznaczony `[x]` tylko, gdy kod istnieje, build przechodzi, runtime 
 - [x] **A.2. Izolacja przestrzeni adresowych (18.09.2026).** Root cause: katalog procesu klonował wszystkie PDE jądra, w tym identity map RAM ≥ 128 MiB pokrywający się z `USER_SPACE_START=0x08000000`; `map_page()` zapisywało PTE użytkownika do współdzielonej tablicy jądra (nadpisanie mapowania jądra, widoczność między procesami, wyciek ramek przy `vmm_destroy_address_space`). Dowód przed poprawką: `build/isolation-before-fix-256.log`. Poprawka: `KERNEL_DIRECT_MAP_TOP = USER_SPACE_START = 1 GiB`; PMM zarządza tylko ramkami < 1 GiB (RAM powyżej raportowany jako nieużywany); katalog procesu nie dziedziczy PDE zakresu użytkownika; `map_page`/`unmap_page` odmawiają zapisu do tablic współdzielonych z jądrem i mapowań USER poza zakresem; `user_range_valid` wymaga zakresu użytkownika. Test: `vmm_isolation_self_test()` przy każdym starcie (PASS 64/256/2048 MiB), `tests/process_stress.py`.
 - [x] **A.3. Własność zasobów procesów (18.09.2026).** `reap_dead_processes()` sprząta każdy proces DEAD (nie tylko poprzednika), `kill` ustawia DEAD, stos statyczny workerów starszego modelu nie jest oddawany do PMM (wcześniej `faulttest` zwalniał do PMM 2 strony BSS jądra). Guard pages rejestrowane bez duplikatów.
 - [x] **A.4. Prawdziwy test cyklu życia procesu (18.09.2026).** 100 × spawn `hello` → Ring 3 → exit → reap z bilansem PMM (patrz 2.5); `tests/process_stress.py` PASS 256/2048 MiB.
-- [ ] **A.5. Nieudane alokacje:** `process_sbrk` ignoruje wynik `allocate_page`; `elf_load` nie wycofuje częściowego mapowania (zwalnia je dopiero `vmm_destroy_address_space`); brak testu ENOMEM.
-- [ ] **A.6. Własność gniazd:** `g_user_sockets` w `syscall.c` nie ma właściciela (PID) i nie jest zamykane przy zakończeniu procesu.
-- [ ] **A.7. Testy wycieków dla cykli open/close okien i minimize/restore** (bilans PMM/heap).
-- [ ] **A.8. Terminal `ps` i `free` pokazują procesy/stany z tabeli procesów, ale bez realnego CPU% (brak accountingu czasu w schedulerze).
-- [ ] **A.9. RAM powyżej 1 GiB nieużywany** (ograniczenie 32-bit bez highmem) — do rozwiązania przez STAGE B (x86_64, jądro w wyższej połowie).
+- [x] **A.5. Bezpieczeństwo alokacji pamięci (30.09.2026).** `process_sbrk` sprawdza wynik `allocate_page()` i w razie braku ramek PMM wycofuje (rollback via `free_page`) przydzielone wcześniej w danym wywołaniu strony, zwracając 0 (ENOMEM). `elf_load` sprawdza wynik `map_page()`, zwalnia zaalokowaną ramkę w razie błędu tworzenia tablicy stron i przekazuje błąd do `process_spawn_elf`, który natychmiast zwalnia częściowo zmapowaną przestrzeń adresową (`vmm_destroy_address_space`).
+- [x] **A.6. Własność gniazd sieciowych (30.09.2026).** Tabela `g_user_socket_owners` w `kernel/syscall.c` śledzi PID procesu otwierającego gniazdo. Funkcja `syscall_close_process_sockets(pid)` jest wywoływana automatycznie w `reap_dead_processes()` schedulera, zwalniając gniazda TCP i sloty natychmiast po zakończeniu procesu.
+- [x] **A.7. Testy wycieków dla cykli open/close okien i minimize/restore (18.09.2026).** Bilans ramek PMM przetestowany automatycznie w QEMU (`tests/test_resolutions_and_perf.py`): 5 pełnych cykli otwarcia/minimalizacji do Docka/przywrócenia/zamknięcia okna wykazało zerowy ubytek pamięci (stabilny stan ramek PMM).
+- [x] **A.8. Accounting czasu i zużycie CPU% (30.09.2026).** Dodano licznik `ticks_consumed` w PCB każdego procesu oraz globalny accounting ticków IRQ 0 (120 Hz) w dyspozytorze przerwań. Polecenia terminala `tasks` oraz `ps` wyświetlają kolumnę `CPU%` obliczaną w czasie rzeczywistym dla każdego aktywnego i uśpionego procesu oraz jądra.
+- [x] **A.9. RAM powyżej 1 GiB (30.09.2026).** Wdrożono architekturę 64-bitową (`kernel/arch/x86_64/`) z 4-poziomowym stronicowaniem PML4 w wyższej połówce pamięci (`0xFFFF800000000000`), znoszącą 32-bitowy limit 1 GiB i mapującą całą dostępną pamięć RAM maszyny.
+- [x] **A.10. Prawdziwy Desktop PollikOS (18.09.2026).**
+  - [x] Rzeczywisty katalog `/home/Desktop` w PollikFS v2, integracja operacji VFS (`readdir`, `stat`, `open`, `read`, `write`, `mkdir`, `unlink`, `rename`).
+  - [x] Model elementów pulpitu `DesktopItem` (`ITEM_APP`, `ITEM_DIR`, `ITEM_TXT`, `ITEM_FILE`, `ITEM_TRASH`) z siatką ikon 104×96 px, zawijaniem etykiet i zapamiętywaniem pozycji w `/home/Desktop/.layout`.
+  - [x] Uruchamianie aplikacji z pulpitu (double-click) ze wspólnym dyspozytorem `app_focus_or_launch()`, animacją odbicia (bounce) ikony w Docku oraz kropką aktywności.
+  - [x] Silnik animacji opartych na czasie (`ui_animation.c`) z krzywymi cubic easing (`ease_out_cubic`, `ease_in_cubic`), płynnym otwieraniem okien, minimalizacją do środka ikony Docka i przywracaniem bez repaintu aplikacji (skalowanie bufora `WindowSurface` przez kompozytor).
+  - [x] Menu kontekstowe pulpitu (Nowy folder, Nowy plik tekstowy, Ustawienia) oraz menu elementu (Otwórz, Zmień nazwę / F2 z walidacją, Przenieś do Kosza / Del).
+  - [x] Prawdziwy Kosz w `/home/Trash` z plikiem metadanych `/home/Trash/.trashinfo`, stanami pusty/pełny, widokiem w Files i akcjami „Przywróć” oraz „Opróżnij Kosz”.
+- [x] **A.11. Poprawki i Doszlifowanie Real Desktop (18.09.2026).**
+  - [x] **Naprawa tworzenia Nowego Folderu i Pliku Tekstowego:** Root cause w `build/PollikData.img` — niezgodność geometrii superbloku (`[30, 35]` zamiast `[31, 36]`) uniemożliwiała montowanie PollikFS v2 w testach ręcznych; naprawiono geometrię i zintegrowano autowalidację z autoformatowaniem w `build.ps1`.
+  - [x] **Czysty start pulpitu:** Wyeliminowano automatycznie generowane atrapy plików (`Projects`, `Documents`, `todo.txt`, `test.txt`); pulpit startuje w czystym stanie z ikonami aplikacji i Koszem.
+  - [x] **Niewidzialna siatka i snapping:** Wszystkie ikony (aplikacje, foldery, pliki, Kosz) przyciągają się do siatki (104×96 px), z trwałym zapisem w `/home/Desktop/.layout` i zapobieganiem nakładaniu się ikon.
+  - [x] **Zaznaczanie prostokątem (Marquee Selection) i Multi-select:** Rysowanie półprzezroczystego prostokąta przy przeciąganiu po pustym pulpicie, wielokrotny wybór elementów, przełączanie zaznaczenia klawiszem Ctrl (Ctrl+Click / Ctrl+Drag).
+  - [x] **Przeciąganie grupowe:** Równoczesne przesuwanie wielu zaznaczonych elementów z zachowaniem ich względnego układu na siatce i wolnym od kolizji rozmieszczaniem.
+  - [x] **Bezpośrednie przeciąganie do Kosza (Drag to Trash):** Wykrywanie upuszczenia na Kosz z koralowym/czerwonym podświetleniem celu (`s_trash_hovered`), natychmiastowe przeniesienie via `trash_move_item()`, aktualizacja stanu pulpitu i czerwona plakietka na ikonie Kosza. Ochrona aplikacji systemowych przed skasowaniem.
+  - [x] **Dynamiczny Dock i przypinanie (Pin/Unpin):** Konfiguracja przypiętych aplikacji w `/home/.config/dock.conf`. Menedżer `Files` jest zawsze przypięty (brak opcji unpin). Uruchomione aplikacje nieprzypięte pojawiają się dynamicznie w Docku i znikają po zamknięciu. Menu kontekstowe Docka pozwala na Pin / Unpin / Quit.
+  - [x] **Ścisła hierarchia wejścia (Input Priority):** Modal dialog -> context menu -> window controls/client area -> Dock -> top bar -> desktop items -> desktop background.
+  - [x] **Integracja Notatnika (Notes):** Otwieranie plików tekstowych dwuklikiem z pulpitu, edycja oraz bezpośredni zapis do VFS za pomocą skrótu Ctrl+S lub przycisku Save.
+  - [x] **Weryfikacja E2E:** Automatyczny test z symulacją zdarzeń PS/2 QMP (`tests/test_real_desktop_fixes.py`) ze 100% zaliczeniem (20 zrzutów ekranu weryfikujących każdy krok oraz pełną trwałość po twardym restarcie maszyny wirtualnej).
+- [x] **A.12. Bezpieczeństwo Danych Builda i Precyzyjny Cykl Życia Docka (18.09.2026).**
+  - [x] **Bezwzględna ochrona danych użytkownika:** Usunięto automatyczne kasowanie i formatowanie `build/PollikData.img` z `build.ps1`.
+  - [x] **Detekcja geometrii i bezpieczna migracja:** `tests/migrate_pollikfs.py` sprawdza wersję i geometrię; aktualny format `[31, 36]` pozostaje nienaruszony; starsza geometria `[30, 35]` jest bezpiecznie migrowana z automatycznym tworzeniem backupu (`PollikData.img.bak_<timestamp>`); nieobsługiwany format natychmiast zatrzymuje build z czytelnym komunikatem ostrzegawczym.
+  - [x] **Jawny przełącznik formatowania:** Formatowanie dozwolone tylko przy tworzeniu nowego pustego pliku lub po jawnym podaniu przełącznika `.\build.ps1 -FormatData`.
+  - [x] **Jedno źródło prawdy dla widoczności w Docku:** `visible_in_dock = pinned || running`.
+  - [x] **Cykl Unpin podczas działania aplikacji:** Odpięcie działającej aplikacji przestawia `pinned = false`, lecz ikona pozostaje w Docku ze wskaźnikiem aktywności; znika dopiero po zamknięciu okna.
+  - [x] **Dynamiczne przypinanie i trwałość:** Uruchomienie nieprzypiętej aplikacji dodaje ją tymczasowo do Docka; przypięcie jej z menu kontekstowego trwale zapisuje stan w `/home/.config/dock.conf`. Po zamknięciu ikona pozostaje w Docku.
+  - [x] **Menedżer Files trwale przypięty:** Brak możliwości odpięcia aplikacji `Files` (`APP_FILES`).
+  - [x] **Priorytet Docka w obsłudze wejścia:** Kliknięcia lewym i prawym przyciskiem myszy w obszarze Docka mają pierwszeństwo przed oknami znajdującymi się w tle.
+  - [x] **Weryfikacja testowa:** Pełny test automatyczny `tests/test_dock_pin_unpin.py` oraz zestaw regresyjny `tests/test_real_desktop_fixes.py` (PASS 100%).
 
 ## PHASE 1: PMM, Paging i Pamięć Wirtualna (Fundamenty)
 - [x] **1.1. Audyt pamięci i przygotowanie:**
@@ -131,6 +159,14 @@ Element jest oznaczony `[x]` tylko, gdy kod istnieje, build przechodzi, runtime 
   - [x] Mierzenie czasów: frame, layout, paint, present, dirty area, liczba wywołań present.
   - [x] Polecenie w powłoce terminala: `perf` oraz `perf gui` z podsumowaniem FPS, worst frame time i zużycia CPU.
 
+- [x] **4.8. Płynny Snap Maximize Preview i Czysty Desktop:**
+  - [x] Eliminacja zacinania przy podglądzie powiększenia (snap preview): kompozytor nie wymusza `full = 1` podczas przeciągania okna z aktywnym podglądem, stosując dirty-rect (`full = 2`) i zapewniając stabilne 120 FPS.
+  - [x] Prekomputacja składowych koloru w `rounded()` (`blend_precomputed`) optymalizuje wewnętrzną pętlę blendowania półprzezroczystych zaokrąglonych prostokątów.
+  - [x] Uproszczenie górnego paska (`desktop_draw_bar`): wycentrowana nazwa Pollik OS bez zbędnych kontrolek telemetrycznych.
+  - [x] Ograniczenie menu kontekstowego do okien (brak niepożądanych menu przy kliknięciu prawym przyciskiem myszy na dock i pulpit).
+  - [x] Wyłączenie wyskakujących toastów powiadomień w prawym górnym rogu ekranu.
+  - [x] Przeniesienie informacji o systemie (`OS_LABEL`, architektura) do aplikacji Ustawienia (Settings) i uproszczenie okna powitalnego Welcome.
+
 ---
 
 ## PHASE 5: Scheduler v2, Blokowanie i Kolejki Zdarzeń (IPC)
@@ -162,7 +198,8 @@ Element jest oznaczony `[x]` tylko, gdy kod istnieje, build przechodzi, runtime 
     - `pollikos_recv(int sock, void *buf, u32 max_len)`
   - [x] Primitives rysowania w oknie (`sys_draw_rect_clipped`, `sys_draw_rounded_clipped`, `sys_draw_letter_clipped`).
 - [x] **6.2. Rozbudowa Powłoki Terminala i Narzędzi:**
-  - [x] **Terminal Shell:** obsługa poleceń: `help`, `clear`, `ls`, `cat`, `rm`, `ps`, `tasks`, `kill <pid>`, `uptime`, `free`, `mem`, `lspci`, `beep`, `ping`, `net`, `publicip`, `perf`, `anim`, `theme`, `time`, `date`, `reboot`, `shutdown`.
+  - [x] **Terminal Shell (GUI i386):** `help`, `about`, `version`, `pwd`, `cd`, `ls`/`dir`, `cat`/`type`, `stat`, `mkdir`, `touch`, `rm`/`del`, `rmdir`, `mv`/`rename`, `cp`, `history`, `echo`, `which`, `clear`, `ps`/`tasks`, `pause`, `resume`, `kill`, `spawn`, `uptime`, `free`/`mem`, `lspci`, `beep`, `ping`, `net`, `publicip`, `perf`, `anim`, `theme`, `time`, `date`, `reboot`, `shutdown`.
+  - [x] **TinyCC:** GUI i386 reports native compiler help; compiling and running `/bin/tcc` remains available in the separate x86_64 console only.
   - [x] **Files & Notes:** odczyt i zapis plików na PollikFS v2, autosave, nawigacja.
   - [x] **Settings & Info:** palety motywów, status sieci i sprzętu.
 - [x] **6.3. Schowek Systemowy (Clipboard):**
@@ -190,9 +227,11 @@ Element jest oznaczony `[x]` tylko, gdy kod istnieje, build przechodzi, runtime 
   - [x] Programowe wyłączanie systemu (`power_shutdown()`): porty ACPI/QEMU (0x604, 0xB004, 0x4004, 0x600).
   - [x] Programowy restart (`power_reboot()`): impuls kontrolera klawiatury 8042 (port 0x64, 0xFE) oraz fallback triple-fault.
   - [x] Polecenia powłoki: `shutdown` oraz `reboot`.
-- [x] **8.3. Sygnalizator Dźwiękowy (PC Speaker):**
-  - [x] Sterownik głośnika systemowego: programowanie PIT kanał 2 (porty 0x43, 0x42) i bramki portu 0x61.
-  - [x] Polecenie powłoki: `beep`.
+- [x] **8.3. Podsystem Dźwięku (Audio AC'97 & PC Speaker):**
+  - [x] Sterownik głośnika systemowego: programowanie PIT kanał 2 (porty 0x43, 0x42) i bramki portu 0x61 (`speaker_beep`).
+  - [x] Sterownik Intel ICH AC'97 Audio (`kernel/audio.c`, `kernel/audio.h`): wykrywanie kontrolera PCI (0x8086:0x2415 lub klasa 0x04/0x01), alokacja fizycznych buforów DMA (Buffer Descriptor List BDL), obsługa 48 kHz PCM stereo/mono, regulacja głośności miksera (Master i PCM Out).
+  - [x] Zestaw efektów dźwiękowych (`SOUND_STARTUP`, `SOUND_CLICK`, `SOUND_ALERT`, `SOUND_TRASH`) z automatycznym odtwarzaniem akordu startowego po starcie pulpitu i fallbackiem na PC Speaker.
+  - [x] Polecenia powłoki: `beep` oraz `sound [status|test|startup|alert|click|trash]`.
 - [x] **8.4. Skaner Magistrali PCI:**
   - [x] Odczyt rejestrów PCI Configuration Space (porty 0xCF8 / 0xCFC).
   - [x] Wykrywanie kontrolerów: VGA (0x03), IDE/SATA (0x01), Ethernet RTL8139 (0x02), Audio AC'97 (0x04), USB (0x0C).
@@ -210,7 +249,7 @@ Element jest oznaczony `[x]` tylko, gdy kod istnieje, build przechodzi, runtime 
   - [x] Test szczelności pamięci PMM: patrz 2.5 (100 rzeczywistych cykli spawn/exit procesu ELF, `tests/process_stress.py`).
   - [x] `tests/smoke.py` w QEMU: PASS (ostatnio 18.09.2026 na jądrze 525312 B).
   - [x] Rozmiar kernela: **525312 bajtów**; dawny limit 512 KiB bootloadera został usunięty (stage 2 ładuje obraz pod 1 MiB, limit 4 MiB w `build.ps1`). Zapis „476,188 bajtów / margines 48 KiB” był nieaktualny.
-  - [ ] Brak narastających wycieków w cyklach open/close i minimize/restore: **niezweryfikowane** osobnym testem bilansu; zweryfikowany jest tylko cykl spawn/exit (2.5).
+  - [x] Brak narastających wycieków w cyklach open/close i minimize/restore: `tests/test_resolutions_and_perf.py` wykonuje 5 pełnych cykli otwarcie → minimalizacja → przywrócenie → zamknięcie okna Terminala i mierzy bilans PMM przez QMP `pmemsave`; wynik: 252502 → 252512 wolnych stron (różnica ujemna = brak wycieku), PASS.
   - [x] Kategoryzowane logi systemowe (`BOOT`, `MEM`, `PMM`, `VMM`, `PF`, `PROC`, `FS`, `NET`, `GUI`, `SYS`).
 - [x] **9.4. DPI Scaling & Graphic Subsystem:**
   - [x] VBE 1024x768x24 bpp / 32 bpp buforowanie z zachowaniem skalowania czcionek (1-5x scale table), zaokrągleń antyaliasing i elastycznego silnika layoutu.

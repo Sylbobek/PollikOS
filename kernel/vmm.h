@@ -71,8 +71,4 @@ void vmm_page_fault_handler(void *frame_ptr);
 int vmm_self_test(void);
 int vmm_isolation_self_test(void);
 
-static inline void invlpg(uintptr_t addr) {
-    __asm__ volatile("invlpg (%0)" :: "r"(addr) : "memory");
-}
-
 #endif
