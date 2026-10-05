@@ -17,19 +17,19 @@ static int launch(const char *path) {
     return 1;
 }
 
-static void draw(PollikCanvas *canvas,int files_x,int terminal_x,int demo_x,int browser_x,int notes_x,int dock_y) {
+static void draw(PollikCanvas *canvas,int files_x,int terminal_x,int demo_x,int browser_x,int notes_x,int calc_x,int dock_y) {
     pollik_ui_fill(canvas,0,0,(int)canvas->width,(int)canvas->height,0x111725);
     for (unsigned y=0;y<canvas->height/2;y+=3)
         pollik_ui_fill(canvas,0,(int)y,(int)canvas->width,1,0x161e30);
     pollik_ui_fill(canvas,0,0,(int)canvas->width,38,0x161c2a);
-    pollik_ui_text(canvas,22,10,"PollikOS",0xf0f2f7);
+    pollik_ui_text(canvas,22,10,"PollikOS x86-64",0xf0f2f7);
     pollik_ui_text(canvas,(int)canvas->width-150,10,"Desktop",0xa9b2c4);
     pollik_ui_text(canvas,48,104,"Your applications",0xf0f2f7);
     pollik_ui_text(canvas,48,131,"Open Files to browse .pol apps",0xa9b2c4);
-    pollik_ui_text(canvas,48,154,"Use F for Files, T for Terminal, D for Demo, B for Browser",0x8d9bb1);
+    pollik_ui_text(canvas,48,154,"Use F for Files, T for Terminal, B for Browser, C for Calculator",0x8d9bb1);
     pollik_ui_fill(canvas,48,196,4,72,0x64a9fa);
     pollik_ui_text(canvas,64,212,"Applications open in separate windows",0xb4bdcf);
-    pollik_ui_fill(canvas,files_x-14,dock_y-5,326,65,0x252d40);
+    pollik_ui_fill(canvas,files_x-14,dock_y-5,390,65,0x252d40);
     pollik_ui_fill(canvas,files_x,dock_y,42,42,0x35415b);
     pollik_ui_icon(canvas,files_x+8,dock_y+7,0x70c9ff,1);
     pollik_ui_text(canvas,files_x-1,dock_y+46,"Files",0xe8eaf1);
@@ -52,6 +52,9 @@ static void draw(PollikCanvas *canvas,int files_x,int terminal_x,int demo_x,int 
     pollik_ui_fill(canvas,notes_x+15,dock_y+20,12,2,0x6482ad);
     pollik_ui_fill(canvas,notes_x+15,dock_y+26,9,2,0x6482ad);
     pollik_ui_text(canvas,notes_x-2,dock_y+46,"Notes",0xe8eaf1);
+    pollik_ui_fill(canvas,calc_x,dock_y,42,42,0x7968d8);
+    pollik_ui_text(canvas,calc_x+11,dock_y+10,"+",0xffffff);
+    pollik_ui_text(canvas,calc_x-1,dock_y+46,"Calc",0xe8eaf1);
     pollik_ui_text(canvas,16,(int)canvas->height-18,"PollikOS .pol desktop",0x828da2);
 }
 
@@ -68,10 +71,10 @@ int main(void) {
     }
     if (mapped<0) { puts("[desktop] cannot create desktop window"); return 1; }
     PollikCanvas canvas={(uint32_t *)(uintptr_t)mapped,width,height};
-    int files_x=(int)width/2-118, terminal_x=files_x+64, demo_x=terminal_x+64;
-    int browser_x=demo_x+64, notes_x=browser_x+64;
+    int files_x=(int)width/2-182, terminal_x=files_x+64, demo_x=terminal_x+64;
+    int browser_x=demo_x+64, notes_x=browser_x+64, calc_x=notes_x+64;
     int dock_y=(int)height-72;
-    draw(&canvas,files_x,terminal_x,demo_x,browser_x,notes_x,dock_y);
+    draw(&canvas,files_x,terminal_x,demo_x,browser_x,notes_x,calc_x,dock_y);
     if (pollikos_window_present()<0) { pollikos_window_destroy(); return 2; }
     puts("[desktop] ready: Files is fixed left of the Dock separator");
     (void)launch("/bin/terminal.pol");
@@ -88,6 +91,7 @@ int main(void) {
                 else if (event.key=='d' || event.key=='D') (void)launch("/bin/windowdemo.pol");
                 else if (event.key=='b' || event.key=='B') (void)launch("/bin/browser.pol");
                 else if (event.key=='n' || event.key=='N') (void)launch("/bin/notes.pol");
+                else if (event.key=='c' || event.key=='C') (void)launch("/bin/calculator.pol");
                 else if (event.key==27) running=0;
             }
             if ((event.kind&POLLIKOS_INPUT_MOUSE_BUTTON) &&
@@ -101,6 +105,7 @@ int main(void) {
                         else if (x>=demo_x && x<demo_x+48) (void)launch("/bin/windowdemo.pol");
                         else if (x>=browser_x && x<browser_x+48) (void)launch("/bin/browser.pol");
                         else if (x>=notes_x && x<notes_x+48) (void)launch("/bin/notes.pol");
+                        else if (x>=calc_x && x<calc_x+48) (void)launch("/bin/calculator.pol");
                     }
                 }
             }

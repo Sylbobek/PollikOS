@@ -16,7 +16,7 @@ def main():
     command = [clang, '-std=c11', '-O0', '-g', '-fno-builtin', '-Wall', '-Wextra', '-Werror']
     if os.name == 'nt':
         command.append('-fuse-ld=lld')
-    command += ['tests/app_layout.c', '-o', str(executable)]
+    command += ['tests/app_layout.c', 'common/calc.c', '-fno-math-errno', '-o', str(executable)]
     print('Compile: ' + subprocess.list2cmdline(command), flush=True)
     subprocess.run(command, cwd=ROOT, check=True)
     subprocess.run([str(executable)], cwd=ROOT, check=True)

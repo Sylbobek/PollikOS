@@ -4,6 +4,7 @@
  * Clang from treating kernel memory declarations as host libc declarations.
  */
 #include "../kernel/gui/apps.h"
+#include "../kernel/gui/calculator_icon.h"
 #include "../kernel/browser/browser.h"
 #include "../kernel/ui_data.h"
 #include "../kernel/gui/pollikmark.h"
@@ -14,7 +15,7 @@ static int mark_poll_result;
 
 _Static_assert(APP_WELCOME == 0 && APP_FILES == 1 && APP_TERMINAL == 2 &&
                APP_NOTES == 3 && APP_SETTINGS == 4 && APP_BROWSER == 5 &&
-               APP_POLLIKMARK == 6 && APP_COUNT == 7, "stable registry IDs");
+               APP_POLLIKMARK == 6 && APP_CALCULATOR == 7 && APP_COUNT == 8, "stable registry IDs");
 
 enum { INIT, RENDER, KEY, CLICK, DRAG, OPEN, CLOSE, RESIZE, SCROLL, CURSOR, POLL, OPS };
 static int calls[APP_COUNT][OPS], total, last_app, last_op;
@@ -51,6 +52,9 @@ SIMPLE_RENDER(terminal, APP_TERMINAL)
 SIMPLE_RENDER(notes, APP_NOTES)
 SIMPLE_RENDER(settings, APP_SETTINGS)
 SIMPLE_RENDER(pollikmark, APP_POLLIKMARK)
+SIMPLE_RENDER(calculator, APP_CALCULATOR)
+void calculator_init(void) { init_order[total]=APP_CALCULATOR;record(APP_CALCULATOR,INIT,0,0,0,0); }
+void calculator_key(u8 code,char ch,int shift,int control) {record(APP_CALCULATOR,KEY,code,ch,shift,control); }
 void pollikmark_init(void) {
     init_order[total] = APP_POLLIKMARK;
     record(APP_POLLIKMARK, INIT, 0, 0, 0, 0);
@@ -73,6 +77,7 @@ CLICK_STUB(notes_click, APP_NOTES)
 CLICK_STUB(settings_click, APP_SETTINGS)
 CLICK_STUB(browser_handle_click, APP_BROWSER)
 CLICK_STUB(pollikmark_click, APP_POLLIKMARK)
+CLICK_STUB(calculator_click, APP_CALCULATOR)
 void files_key(u8 code) { record(APP_FILES, KEY, code, 0, 0, 0); }
 void files_close(void) { record(APP_FILES, CLOSE, 0, 0, 0, 0); }
 int files_poll(void) { record(APP_FILES, POLL, 0, 0, 0, 0); return poll_result; }
@@ -135,13 +140,14 @@ static int text_equal(const char *a, const char *b) {
 }
 #define BIT(op) (1u << (op))
 static int metadata(void) {
-    static const char *names[] = {"Welcome To pollikos", "Files", "Terminal", "Notes", "Settings", "Browser", "PollikMark3D"};
+    static const char *names[] = {"Welcome To pollikos", "Files", "Terminal", "Notes", "Settings", "Browser", "PollikMark3D", "Calculator"};
     static const unsigned callbacks[] = {
         BIT(RENDER) | BIT(CLICK), BIT(RENDER) | BIT(KEY) | BIT(CLICK) | BIT(CLOSE) | BIT(SCROLL) | BIT(POLL),
         BIT(RENDER) | BIT(KEY) | BIT(CLICK) | BIT(DRAG) | BIT(SCROLL),
         BIT(INIT) | BIT(RENDER) | BIT(KEY) | BIT(CLICK) | BIT(DRAG) | BIT(RESIZE) | BIT(SCROLL) | BIT(CURSOR),
         BIT(RENDER) | BIT(CLICK), ((1u << OPS) - 1),
-        BIT(INIT) | BIT(RENDER) | BIT(KEY) | BIT(CLICK) | BIT(OPEN) | BIT(CLOSE) | BIT(RESIZE) | BIT(POLL)
+        BIT(INIT) | BIT(RENDER) | BIT(KEY) | BIT(CLICK) | BIT(OPEN) | BIT(CLOSE) | BIT(RESIZE) | BIT(POLL),
+        BIT(INIT) | BIT(RENDER) | BIT(KEY) | BIT(CLICK)
     };
     reset();
     for (int id = 0; id < APP_COUNT; ++id) {
@@ -149,7 +155,7 @@ static int metadata(void) {
         CHECK(app != 0);
         CHECK(gui_app_get(id) == app);
         CHECK(text_equal(app->name, names[id]));
-        CHECK(app->icon.width == (id == APP_POLLIKMARK ? 16 : 72));
+        CHECK(app->icon.width == (id == APP_POLLIKMARK || id == APP_CALCULATOR ? 16 : 72));
         CHECK(app->icon.height == app->icon.width);
         CHECK(app->icon.indices && app->icon.alpha && app->icon.palette);
         if (id == APP_POLLIKMARK) {
@@ -162,6 +168,10 @@ static int metadata(void) {
                 CHECK(app->icon.alpha[i] == pollikmark_alpha[i]);
             for (unsigned i = 0; i < 4; ++i)
                 CHECK(app->icon.palette[i] == pollikmark_palette[i]);
+        } else if(id==APP_CALCULATOR) {
+            for(unsigned i=0;i<sizeof calculator_icon;i++) CHECK(app->icon.indices[i]==calculator_icon[i]);
+            for(unsigned i=0;i<sizeof calculator_alpha;i++) CHECK(app->icon.alpha[i]==calculator_alpha[i]);
+            for(unsigned i=0;i<4;i++) CHECK(app->icon.palette[i]==calculator_palette[i]);
         } else {
         /* ui_data.h contains static arrays, so compare contents, not addresses
          * across translation units. No generated assets or icon stubs needed. */
@@ -175,8 +185,8 @@ static int metadata(void) {
         CHECK(app->body_active == (id == APP_POLLIKMARK ? 0x202b40u : id == APP_TERMINAL ? 0x202331u : 0xfaf9fcu));
         CHECK(app->body_inactive == (id == APP_POLLIKMARK ? 0x202b40u : id == APP_TERMINAL ? 0x1a1c27u : 0xf4f2f7u));
         CHECK(app->bottom_inset == (id == APP_BROWSER ? 18 : 0));
-        CHECK(app->min_width == (id == APP_SETTINGS ? 640 : 480) &&
-              app->min_height == (id == APP_SETTINGS ? 520 : 280));
+        CHECK(app->min_width == (id == APP_SETTINGS ? 640 : id == APP_CALCULATOR ? 320 : 480) &&
+              app->min_height == (id == APP_SETTINGS ? 520 : id == APP_CALCULATOR ? 440 : 280));
         CHECK(GUI_CHROME_HEIGHT == 34);
         unsigned present = (!!app->init << INIT) | (!!app->render << RENDER) |
             (!!app->key << KEY) | (!!app->click << CLICK) | (!!app->drag << DRAG) | (!!app->open << OPEN) |
@@ -211,9 +221,9 @@ static int invalid_ids(void) {
 static int initialization(void) {
     reset();
     gui_apps_init();
-    CHECK(total == 3);
-    CHECK(calls[APP_NOTES][INIT] == 1 && calls[APP_BROWSER][INIT] == 1 && calls[APP_POLLIKMARK][INIT] == 1);
-    CHECK(init_order[0] == APP_NOTES && init_order[1] == APP_BROWSER && init_order[2] == APP_POLLIKMARK);
+    CHECK(total == 4);
+    CHECK(calls[APP_NOTES][INIT] == 1 && calls[APP_BROWSER][INIT] == 1 && calls[APP_POLLIKMARK][INIT] == 1 && calls[APP_CALCULATOR][INIT] == 1);
+    CHECK(init_order[0] == APP_NOTES && init_order[1] == APP_BROWSER && init_order[2] == APP_POLLIKMARK && init_order[3] == APP_CALCULATOR);
     return 1;
 }
 
@@ -249,7 +259,7 @@ static int keyboard(void) {
                         CHECK(only(id, KEY) && arg[0] == code);
                         continue;
                     }
-                    if (id != APP_TERMINAL && id != APP_NOTES && id != APP_BROWSER && id != APP_POLLIKMARK) {
+                    if (id != APP_TERMINAL && id != APP_NOTES && id != APP_BROWSER && id != APP_POLLIKMARK && id != APP_CALCULATOR) {
                         CHECK(total == 0);
                         continue;
                     }
@@ -258,7 +268,7 @@ static int keyboard(void) {
                         ch = (char)(ch - 'a' + 'A');
                     CHECK(only(id, KEY));
                     CHECK(arg[0] == code && arg[1] == ch);
-                    if (id == APP_BROWSER || id == APP_POLLIKMARK || id == APP_TERMINAL || id == APP_NOTES) {
+                    if (id == APP_BROWSER || id == APP_POLLIKMARK || id == APP_TERMINAL || id == APP_NOTES || id == APP_CALCULATOR) {
                         CHECK(arg[2] == shift && arg[3] == control);
                     } else {
                         CHECK(arg[2] == control);
@@ -277,7 +287,7 @@ static int pointer_routing(void) {
             int x = points[p][0], y = points[p][1];
             reset();
             gui_app_click(id, x, y);
-            if (id == APP_WELCOME || id == APP_FILES || id == APP_TERMINAL || id == APP_NOTES || id == APP_SETTINGS || id == APP_BROWSER || id == APP_POLLIKMARK) {
+            if (id == APP_WELCOME || id == APP_FILES || id == APP_TERMINAL || id == APP_NOTES || id == APP_SETTINGS || id == APP_BROWSER || id == APP_POLLIKMARK || id == APP_CALCULATOR) {
                 CHECK(only(id, CLICK));
                 CHECK(arg[0] == x && arg[1] == y);
             } else CHECK(total == 0);

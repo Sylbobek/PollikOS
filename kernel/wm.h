@@ -5,7 +5,11 @@
 
 /* Stable window slots 0..6; must match the GUI registry APP_COUNT
  * (including APP_POLLIKMARK in slot 6), asserted in desktop.c. */
+#ifdef POLLIK_INSTALL_MEDIA
 #define NUM_APPS 7
+#else
+#define NUM_APPS 8
+#endif
 
 typedef enum {
     WINDOW_STATE_NORMAL = 0,

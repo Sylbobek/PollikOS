@@ -1,3 +1,4 @@
+#include "../../common/calc.h"
 #include "app_internal.h"
 #include "../hw.h"
 #include "../audio.h"
@@ -362,7 +363,7 @@ static int gui_builtin_exists(const char *name) {
         "rmdir", "mv", "rename", "cp", "echo", "which", "history", "clear", "cls",
         "new", "open", "save", "ps", "tasks", "pause", "resume", "kill", "spawn",
         "faulttest", "net", "ping", "publicip", "time", "date", "uptime", "lspci",
-        "beep", "sound", "audio", "shutdown", "reboot", "theme", "anim", "animations", "perf", "tcc", "cc"
+        "beep", "sound", "audio", "shutdown", "reboot", "theme", "anim", "animations", "perf", "tcc", "cc", "calc", "calculator"
     };
     for (u32 i = 0; i < sizeof(commands) / sizeof(commands[0]); i++)
         if (eq(name, commands[i])) return 1;
@@ -400,10 +401,19 @@ static void execute(void) {
             "\033[1;32mNETWORK:\033[0m  net ping publicip\n"
             "\033[1;33mNOTES:\033[0m    new open save\n"
             "\033[1;36mSHELL:\033[0m    help history [-c] clear/cls which tcc theme anim perf\n"
+            "          calc EXPR | calculator\n"
             "\033[90m------------------------------------------------------------------------\033[0m\n"
             "\033[1;37mKeys:\033[0m     Up/Down: history | Left/Right: edit | Shift+arrows: select/scroll\n"
             "          Ctrl+A: select all | Ctrl+C: copy | Ctrl+V: paste | Ctrl+L: clear\n"
             "          PgUp/PgDn scroll | Ctrl+Home/End top/bottom | mouse drag selects text");
+    } else if (eq(command, "calc")) {
+        char result[96];
+        int ok=calc_evaluate(arg,result,sizeof result);
+        copy(output,ok?result:"Error: ");
+        if(!ok) append_str(output,result,sizeof output);
+        serial("[CALC] "); serial(output); serial("\n");
+    } else if (eq(command, "calculator")) {
+        app_host_open(APP_CALCULATOR); copy(output,"Calculator opened.");
     } else if (eq(command, "about"))
         copy(output,
              OS_LABEL "\nOwn kernel, PollikFS, RTL8139 + ARP/ICMP.\nTwo ring3 workers "
@@ -893,6 +903,11 @@ static int terminal_copy_selection(void) {
 }
 
 void terminal_key(u8 code, char ch, int shift, int control) {
+    if(shift && !control) {
+        const char *from="1234567890-=", *to="!@#$%^&*()_+";
+        for(int i=0;from[i];i++) if(ch==from[i]) {ch=to[i];break;}
+    }
+
     if (code == 28) { execute(); return; }
     if (control && code == 38) {
         transcript[0] = 0; scroll_lines = 0; terminal_clear_selection();

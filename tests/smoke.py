@@ -38,8 +38,10 @@ from sync_system_files import sync as install_wallpapers
 if not options.no_wallpapers:
     install_wallpapers(data_disk)
 if options.corrupt_wallpaper:
-    fixture_fs = PollikFsImage.load(data_disk)
-    fixture_fs.install_file('/usr/share/wallpapers/corrupt.png', b'not a valid PNG')
+    from sync_system_files import StagedImage
+    fixture_fs = StagedImage.load(data_disk)
+    fixture_fs.remove_system_file('/usr/share/wallpapers/light.png')
+    fixture_fs.install_file('/usr/share/wallpapers/light.png', b'not a valid PNG')
     fixture_fs.save(data_disk)
 qemu_args = [
     "qemu-system-x86_64", "-machine", "pc", "-m", "64M", "-vga", "std",
@@ -325,17 +327,16 @@ try:
             raise SystemExit(0)
         wallpaper_before = shot("settings-wallpaper-before")
         cache_count = log.read_text().count("[WALLPAPER] cache=ready")
-        move_mouse_precise(-220, 105 if not options.corrupt_wallpaper else 131)
+        path=BUILD/'smoke-settings-window.bin'
+        qmp('pmemsave',{'val':pointer_symbols['g_windows']+4*84,'size':84,'filename':str(path)})
+        settings_window=struct.unpack('<21I',path.read_bytes())
+        sx,sy=settings_window[2:4]
+        # New contract: wallpaper is selected by the theme; no independent rows.
+        move_mouse_to(sx+188+65, sy+142)  # Light theme tile
         hmp("mouse_button 1")
         time.sleep(.1)
         hmp("mouse_button 0")
-        # The first 1.6M-pixel scale is synchronous and TCG is much slower
-        # than the target machine; wait for its single cache fill to finish.
         deadline = time.monotonic() + 45
-        while (log.read_text().count("[WALLPAPER] cache=ready") <= cache_count and
-               "GFX wallpaper unavailable" not in log.read_text()):
-            assert process.poll() is None and time.monotonic() < deadline, "Wallpaper cache did not finish"
-            time.sleep(.1)
         before_pixels = wallpaper_before.split(b"255\n", 1)[1]
         while True:
             wallpaper_after = shot("settings-wallpaper-selected")
@@ -346,12 +347,13 @@ try:
             if changed > 1000: break
             assert time.monotonic()<deadline, f'Wallpaper cache ready but LFB not repainted ({changed} pixels)'
         print('RAW wallpaper LFB changed pixels',changed,flush=True)
-        assert changed > 1000, f"Selecting a wallpaper did not repaint the desktop ({changed} pixels)"
-        move_mouse_precise(-160, -267 if not options.corrupt_wallpaper else -293)  # Desktop & Dock tab
+        assert changed > 1000, f"Switching theme did not repaint the desktop ({changed} pixels)"
+        assert log.read_text().count("[WALLPAPER] cache=ready")==cache_count, "Theme switch redecoded a PNG"
+        move_mouse_to(sx+30,sy+130)  # Desktop & Dock tab
         hmp("mouse_button 1")
         time.sleep(.1)
         hmp("mouse_button 0")
-        move_mouse_precise(210, 262)  # Pointer Acceleration toggle
+        move_mouse_to(sx+188+50,sy+406)  # Pointer Acceleration toggle
         hmp("mouse_button 1")
         time.sleep(.1)
         hmp("mouse_button 0")
@@ -365,11 +367,11 @@ try:
         from pollikfs_install import PollikFsImage
         settings_fs = PollikFsImage.load(data_disk)
         appearance = settings_fs.read_file("/home/.config/appearance.conf").decode("ascii")
-        selected = "corrupt.png" if options.corrupt_wallpaper else "light.png"
-        assert f"wallpaper={selected}\n" in appearance, "Wallpaper choice was not persisted"
+        assert "theme=1\n" in appearance, "Light theme was not persisted"
+        assert "wallpaper=" not in appearance, "Independent wallpaper override persisted"
         assert "pointer_accel=0\n" in appearance, "Pointer acceleration off state was not persisted"
         print('PASS: focused GUI cursor, Terminal, Notes editing and wheel round trip')
-        print('PASS: Settings lists PollikFS wallpapers and persists the selected name')
+        print('PASS: theme selects matching PollikFS wallpaper, no repeated PNG decode, theme persists without override')
         print('PASS: pointer acceleration can be disabled and persists')
         raise SystemExit(0)
     key("f5")

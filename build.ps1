@@ -55,11 +55,12 @@ foreach ($m in $browserModules) {
     Invoke-Checked clang @('--target=i386-none-elf','-m32','-march=i386','-ffreestanding','-fno-pic','-fno-pie','-fno-stack-protector','-mno-sse','-mno-mmx','-Os','-Wall','-Wextra','-Werror','-Ikernel/include','-c',"kernel/browser/$m.c",'-o',"build/$m.o")
 }
 # Built-in GUI clients remain Ring0, but are independent translation units.
-$guiModules = @('apps','app_edit','welcome','files','notes','terminal','settings','browser_client','pollikmark')
+Invoke-Checked clang @('--target=i386-none-elf','-march=i386','-ffreestanding','-fno-pic','-fno-stack-protector','-mno-sse','-mno-mmx','-fno-math-errno','-Os','-Wall','-Wextra','-Werror','-c','common/calc.c','-o','build/calc.o')
+$guiModules = @('apps','app_edit','welcome','files','notes','terminal','settings','browser_client','pollikmark','calculator')
 foreach ($m in $guiModules) {
     Invoke-Checked clang @('--target=i386-none-elf','-m32','-march=i386','-ffreestanding','-fno-pic','-fno-pie','-fno-stack-protector','-mno-sse','-mno-mmx','-Os','-Wall','-Wextra','-Werror','-Ikernel/include','-c',"kernel/gui/$m.c",'-o',"build/gui_$m.o")
 }
-$guiObjs = @($guiModules | ForEach-Object { "build/gui_$_.o" })
+$guiObjs = @($guiModules | ForEach-Object { "build/gui_$_.o" }) + @('build/calc.o')
 Invoke-Checked clang @('--target=i386-none-elf','-march=i386','-ffreestanding','-fno-pic','-fno-stack-protector','-mno-sse','-mno-mmx','-Os','-DJS_OPT','-Ikernel/include','-c','third_party/elk/elk.c','-o','build/elk.o')
 # Build userspace applications
 $userApps = @('hello', 'fault_test', 'fault_kernel', 'fault_stack')
@@ -128,6 +129,7 @@ $commonCompile = @('--target=i386-none-elf','-m32','-march=i386','-ffreestanding
 Invoke-Checked clang ($commonCompile + @('-DPOLLIK_INSTALL_MEDIA=1','-c','kernel/auth.c','-o','build/install/auth.o'))
 Invoke-Checked clang ($commonCompile + @('-DPOLLIK_INSTALL_MEDIA=1','-c','kernel/desktop.c','-o','build/install/desktop.o'))
 Invoke-Checked clang ($commonCompile + @('-DPOLLIK_INSTALL_MEDIA=1','-c','kernel/installer.c','-o','build/install/installer.o'))
+Invoke-Checked clang ($commonCompile + @('-DPOLLIK_INSTALL_MEDIA=1','-c','kernel/gui/apps.c','-o','build/install/gui_apps.o'))
 foreach ($module in @('compositor','input_dispatch','wm')) {
     Invoke-Checked clang ($commonCompile + @('-DPOLLIK_INSTALL_MEDIA=1','-c',"kernel/$module.c","-o","build/install/$module.o"))
 }
@@ -138,6 +140,7 @@ for ($i = 0; $i -lt $linkArgs.Count; $i++) {
     if ($linkArgs[$i] -eq 'build/compositor.o') { $installerLinkArgs += 'build/install/compositor.o'; continue }
     if ($linkArgs[$i] -eq 'build/input_dispatch.o') { $installerLinkArgs += 'build/install/input_dispatch.o'; continue }
     if ($linkArgs[$i] -eq 'build/wm.o') { $installerLinkArgs += 'build/install/wm.o'; continue }
+    if ($linkArgs[$i] -eq 'build/gui_apps.o') { $installerLinkArgs += 'build/install/gui_apps.o'; continue }
     if ($linkArgs[$i] -eq '-o') { $i++; continue }
     $installerLinkArgs += $linkArgs[$i]
 }

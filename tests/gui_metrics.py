@@ -58,9 +58,10 @@ def history_samples(history, write_index, count):
 
 class Guest:
     def __init__(self, resolution, label='benchmark', data_image=None, boot_only=False,
-                 boot_timeout=None, headless=False, accel=None, cpu=None):
+                 boot_timeout=None, headless=False, accel=None, cpu=None, allow_reboot=False):
         self.data_image = pathlib.Path(data_image).resolve() if data_image else None
         self.boot_only = boot_only
+        self.allow_reboot = allow_reboot
         self.resolution = resolution
         self.width, self.height = map(int, resolution.split('x'))
         self.log = BUILD / f'{label}-{resolution}.log'
@@ -120,12 +121,12 @@ class Guest:
         self.log.write_text('')
         self.process = subprocess.Popen([
             'qemu-system-x86_64', '-machine', 'pc', '-accel', self.accel, '-cpu', self.cpu, '-m', '256M',
-            '-device', 'VGA,vgamem_mb=32', '-display', self.display, '-no-reboot',
+            '-device', 'VGA,vgamem_mb=32', '-display', self.display,
             '-fw_cfg', f'name=opt/pollikos/display,string={self.resolution}',
             '-drive', f'format=raw,file={self.image},if=ide,index=0,snapshot=on',
             '-drive', f'format=raw,file={data},if=ide,index=1{data_snapshot}', '-nic', 'none',
             '-serial', f'file:{self.log}', '-qmp', f'tcp:127.0.0.1:{port},server=on,wait=off',
-        ], cwd=ROOT, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        ] + ([] if self.allow_reboot else ['-no-reboot']), cwd=ROOT, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         try:
             end = time.monotonic() + 40
             while self.connection is None:

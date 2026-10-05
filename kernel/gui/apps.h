@@ -2,7 +2,13 @@
 #define POLLIK_GUI_APPS_H
 #include "../system.h"
 /* Stable IDs; PollikMark occupies slot 6. */
-enum { APP_WELCOME, APP_FILES, APP_TERMINAL, APP_NOTES, APP_SETTINGS, APP_BROWSER, APP_POLLIKMARK, APP_COUNT };
+enum { APP_WELCOME, APP_FILES, APP_TERMINAL, APP_NOTES, APP_SETTINGS, APP_BROWSER, APP_POLLIKMARK, APP_CALCULATOR,
+#ifdef POLLIK_INSTALL_MEDIA
+    APP_COUNT = APP_CALCULATOR /* Installer keeps its seven original slots. */
+#else
+    APP_COUNT
+#endif
+};
 enum { GUI_CHROME_HEIGHT = 34 };
 typedef struct { int width, height; } GuiAppSize;
 /* Last notified FULL WINDOW size; defaults to 680x410 before first resize. */
@@ -94,6 +100,10 @@ int terminal_drag(int x, int y, int active);
 void terminal_scroll(int delta);
 void settings_render(int width, int height, int active);
 void settings_click(int x, int y);
+void calculator_init(void);
+void calculator_render(int width,int height,int active);
+void calculator_key(u8 code,char ch,int shift,int control);
+void calculator_click(int x,int y);
 void browser_client_init(void);
 void browser_client_render(int width, int height, int active);
 void browser_client_key(u8 code, char ch, int shift, int control);

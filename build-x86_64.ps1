@@ -69,7 +69,8 @@ try {
         'big_elf_c'         = @{ Sources = @('sdk/tests/big_elf_c.c');         Optimization = '-O2' }
         'selfhost_driver_c' = @{ Sources = @('sdk/tests/selfhost_driver_c.c'); Optimization = '-O2' }
         # Interactive userspace shell (delivered as /bin/pollish).
-        'pollish'           = @{ Sources = @('sdk/apps/pollish.c');           Optimization = '-O2' }
+        'pollish'           = @{ Sources = @('sdk/apps/pollish.c','common/calc.c'); Optimization = '-O2' }
+        'calculator'        = @{ Sources = @('sdk/apps/calculator.c','common/calc.c'); Optimization = '-O2' }
         'pipe_nowait'       = @{ Sources = @('sdk/tests/pipe_nowait.c');       Optimization = '-O2' }
         'windowdemo'        = @{ Sources = @('sdk/tests/windowdemo.c');       Optimization = '-O2' }
         'terminal'          = @{ Sources = @('sdk/apps/terminal.c');            Optimization = '-O2' }

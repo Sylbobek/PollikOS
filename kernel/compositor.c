@@ -1223,10 +1223,15 @@ void compositor_prepare_wallpapers(void) {
     u32 pages = ((u32)shell.width * shell.height * sizeof(u32) + PMM_PAGE_SIZE - 1u) / PMM_PAGE_SIZE;
     theme_wallpapers[shell.theme] = wallpaper;
     theme_wallpapers[!shell.theme] = (u32 *)pmm_alloc_pages(pages);
-    desktop_paint_wallpaper_mode(wallpaper, !shell.theme);
-    if (theme_wallpapers[!shell.theme])
+    if (theme_wallpapers[!shell.theme]) {
+        desktop_paint_wallpaper_mode(wallpaper, !shell.theme);
         desktop_paint_wallpaper_mode(theme_wallpapers[!shell.theme], shell.theme);
-    else serial("[WALLPAPER] alternate cache unavailable; low-RAM gradient on switch\n");
+    } else {
+        /* A shared buffer cannot preserve either stock cache across a switch. */
+        theme_wallpapers[shell.theme] = 0;
+        desktop_paint_wallpaper_fallback(wallpaper, !shell.theme);
+        serial("[WALLPAPER] alternate cache unavailable; low-RAM gradient on switch\n");
+    }
     wallpaper_theme = shell.theme;
 }
 void compositor_wallpaper_changed(void) {

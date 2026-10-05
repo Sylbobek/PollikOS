@@ -17,6 +17,8 @@ with Guest(a.resolution,'theme-switch',data_image=a.data,boot_only=True,accel=a.
     g.wait(lambda:'AUTH: login accepted' in g.log.read_text(),'login',30)
     g.key('f5',lambda:g.words('g_focused_window')[0]==4,'Settings')
     g.wait(lambda:not g.words('g_window_anims',4)[0],'Settings settled')
+    # Boot's autonomous spawn/exit test owns transient PMM pages until reaped.
+    g.wait(lambda:'[TEST] PMM no leak' in g.log.read_text(),'boot process stress reaped',120)
     initial=g.log.read_text()
     counts=lambda s:tuple(s.count('[WALLPAPER] '+m) for m in ('path=','decode_ticks=','scale_ticks=','cache=ready'))
     baseline=g.words('pmm_free_page_count')[0]
@@ -39,8 +41,27 @@ with Guest(a.resolution,'theme-switch',data_image=a.data,boot_only=True,accel=a.
             print(f'PIXEL theme={theme} x={x} y={y} expected={expected:06x} actual={actual:06x}',flush=True)
             assert actual==expected,(theme,x,y,hex(actual),hex(expected))
         current=counts(g.log.read_text())
-        print(f'SWITCH {n} theme={theme} observer_ms={elapsed:.2f} PNG_counts={current} baseline_counts={counts(initial)} free_pages={g.words("pmm_free_page_count")[0]}',flush=True)
+        free=g.words('pmm_free_page_count')[0]
+        print(f'SWITCH {n} theme={theme} observer_ms={elapsed:.2f} PNG_counts={current} baseline_counts={counts(initial)} free_pages={free} baseline={baseline}',flush=True)
         assert current==counts(initial),'theme switch repeated disk/decode/scale work'
-        assert g.words('pmm_free_page_count')[0]==baseline,'theme cache leaked pages'
+        assert free==baseline,'theme cache leaked pages'
     print('PASS 6 theme switches: stock PNG pixels exact, no disk/decode/scale, PMM unchanged',flush=True)
+    for accent in range(5):
+        w=g.window(4)
+        g.move(w[2]+188+18+accent*38+13,w[3]+261)
+        g.button(True);g.button(False)
+        g.wait(lambda:g.words('g_current_accent')[0]==accent,'accent applied')
+        assert counts(g.log.read_text())==counts(initial),'accent change touched PNG cache'
+    # Clicking the former wallpaper rows must no longer select a separate file.
+    g.move(w[2]+188+80,w[3]+399);g.button(True);g.button(False)
+    assert g.words('shell')[4]==1 and g.words('g_current_accent')[0]==4
+    g.move(w[2]+30,w[3]+132);g.button(True);g.button(False)
+    g.move(w[2]+188+180,w[3]+146);g.button(True);g.button(False)
+    g.wait(lambda:g.words('shell')[5]==0,'animations disabled')
+    g.key('f3',lambda:g.window(2)[7]==1,'instant open')
+    assert not g.words('g_window_anims',2)[0],'Off still animated opening'
+    g.hmp('sendkey alt-f4 1');g.wait(lambda:g.window(2)[7]==0,'instant close')
+    assert not g.words('g_window_anims',2)[0],'Off still animated closing'
+    assert g.words('pmm_free_page_count')[0]==baseline
+    print('PASS five accent choices; former wallpaper row is inert; Animations Off opens/closes instantly; PMM unchanged',flush=True)
 

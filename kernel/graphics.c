@@ -243,14 +243,15 @@ void roundrect_border(int x, int y, int w, int h, int r, int t, u32 c) {
     if (iw < 0) iw = 0;
     if (ih < 0) ih = 0;
     int ir = r - t; if (ir < 0) ir = 0;
-    /* Only the t-pixel perimeter interacts with the outline; skip interiors. */
+    /* Corner arcs occupy radius-wide bands, not just t-pixel straight edges. */
     for (int j = 0; j < h; j++) {
         int yy = y + j;
         if (yy < draw_clip.y1 || yy >= draw_clip.y2) continue;
         int edge_row = j < t || j >= h - t;
+        int band = (j < r || j >= h - r) && r > t ? r : t;
         u32 *row = &draw_target[yy * draw_target_stride];
         for (int i = 0; i < w; i++) {
-            if (!edge_row && i >= t && i < w - t) { i = w - t - 1; continue; }
+            if (!edge_row && i >= band && i < w - band) { i = w - band - 1; continue; }
             int xx = x + i;
             if (xx < draw_clip.x1 || xx >= draw_clip.x2) continue;
             int coverage = rrect_coverage(w, h, r, i, j) - rrect_coverage(iw, ih, ir, i - t, j - t);

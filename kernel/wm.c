@@ -16,7 +16,10 @@ Window g_windows[NUM_APPS] = {
     {3, 0, 170, 125, 680, 410, WINDOW_STATE_NORMAL, 0, 0, 0, 0, 0, 480, 280, 1920, 1200, 170, 125, 680, 410, "Notes"},
     {4, 0, 170, 125, 680, 520, WINDOW_STATE_NORMAL, 0, 0, 0, 0, 0, 640, 520, 1920, 1200, 170, 125, 680, 520, "Settings"},
     {5, 0, 170, 125, 680, 410, WINDOW_STATE_NORMAL, 0, 0, 0, 0, 0, 480, 280, 1920, 1200, 170, 125, 680, 410, "Browser"},
-    {6, 0, 170, 125, 680, 410, WINDOW_STATE_NORMAL, 0, 0, 0, 0, 0, 480, 280, 1920, 1200, 170, 125, 680, 410, "PollikMark3D"}
+    {6, 0, 170, 125, 680, 410, WINDOW_STATE_NORMAL, 0, 0, 0, 0, 0, 480, 280, 1920, 1200, 170, 125, 680, 410, "PollikMark3D"},
+#ifndef POLLIK_INSTALL_MEDIA
+    {7, 0, 260, 100, 360, 500, WINDOW_STATE_NORMAL, 0, 0, 0, 0, 0, 320, 440, 1920, 1200, 260, 100, 360, 500, "Calculator"}
+#endif
 };
 
 /* Default geometry per slot; restored on close so reopening starts fresh. */
@@ -27,10 +30,17 @@ static const Window g_window_defaults[NUM_APPS] = {
     {3, 0, 170, 125, 680, 410, WINDOW_STATE_NORMAL, 0, 0, 0, 0, 0, 480, 280, 1920, 1200, 170, 125, 680, 410, "Notes"},
     {4, 0, 170, 125, 680, 520, WINDOW_STATE_NORMAL, 0, 0, 0, 0, 0, 640, 520, 1920, 1200, 170, 125, 680, 520, "Settings"},
     {5, 0, 170, 125, 680, 410, WINDOW_STATE_NORMAL, 0, 0, 0, 0, 0, 480, 280, 1920, 1200, 170, 125, 680, 410, "Browser"},
-    {6, 0, 170, 125, 680, 410, WINDOW_STATE_NORMAL, 0, 0, 0, 0, 0, 480, 280, 1920, 1200, 170, 125, 680, 410, "PollikMark3D"}
+    {6, 0, 170, 125, 680, 410, WINDOW_STATE_NORMAL, 0, 0, 0, 0, 0, 480, 280, 1920, 1200, 170, 125, 680, 410, "PollikMark3D"},
+#ifndef POLLIK_INSTALL_MEDIA
+    {7, 0, 260, 100, 360, 500, WINDOW_STATE_NORMAL, 0, 0, 0, 0, 0, 320, 440, 1920, 1200, 260, 100, 360, 500, "Calculator"}
+#endif
 };
 
-int g_z_order[NUM_APPS] = {1, 2, 3, 4, 5, 6, 0};
+int g_z_order[NUM_APPS] = {1, 2, 3, 4, 5, 6,
+#ifndef POLLIK_INSTALL_MEDIA
+    7,
+#endif
+    0};
 int g_focused_window = 0;
 int g_hovered_window = -1;
 int g_dragged_window = -1;

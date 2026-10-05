@@ -2,6 +2,7 @@
 #include "wm.h"
 
 static WindowAnim g_window_anims[APP_COUNT];
+static int g_start_alpha[APP_COUNT]; /* keep the existing WindowAnim layout */
 static int g_dock_launch_app = -1;
 static u32 g_dock_launch_start_ms = 0;
 
@@ -56,9 +57,24 @@ const WindowAnim *ui_anim_get(int app_id) {
     return 0;
 }
 
+/* Reversals continue from the last displayed frame, including its opacity. */
+static void continue_visual(WindowAnim *a, const WindowAnim *previous) {
+    if (previous->active) {
+        a->start_x = a->cur_x = previous->cur_x;
+        a->start_y = a->cur_y = previous->cur_y;
+        a->start_w = a->cur_w = previous->cur_w;
+        a->start_h = a->cur_h = previous->cur_h;
+        a->cur_alpha = previous->cur_alpha;
+    }
+    g_start_alpha[a->app_id] = a->cur_alpha;
+}
+
 void ui_anim_start_open(int app_id, int x, int y, int w, int h) {
     if (app_id < 0 || app_id >= APP_COUNT) return;
     WindowAnim *a = &g_window_anims[app_id];
+    if (a->active && a->type == WINDOW_ANIM_OPEN && a->end_x == x &&
+        a->end_y == y && a->end_w == w && a->end_h == h) return;
+    WindowAnim previous = *a;
     a->active = 1;
     a->type = WINDOW_ANIM_OPEN;
     a->app_id = app_id;
@@ -82,6 +98,7 @@ void ui_anim_start_open(int app_id, int x, int y, int w, int h) {
     a->cur_w = a->start_w;
     a->cur_h = a->start_h;
     a->cur_alpha = 110;
+    continue_visual(a, &previous);
 
     wm_invalidate_rect(x - 8, y - 8, w + 16, h + 16);
 }
@@ -97,6 +114,8 @@ void ui_anim_start_minimize(int app_id, int dock_cx, int dock_cy) {
     int start_w = current ? current->cur_w : w->width;
     int start_h = current ? current->cur_h : w->height;
     WindowAnim *a = &g_window_anims[app_id];
+    if (a->active && a->type == WINDOW_ANIM_MINIMIZE) return;
+    WindowAnim previous = *a;
     a->active = 1;
     a->type = WINDOW_ANIM_MINIMIZE;
     a->app_id = app_id;
@@ -118,6 +137,7 @@ void ui_anim_start_minimize(int app_id, int dock_cx, int dock_cy) {
     a->cur_w = start_w;
     a->cur_h = start_h;
     a->cur_alpha = 256;
+    continue_visual(a, &previous);
 
     wm_invalidate_rect(start_x - 8, start_y - 8, start_w + 16, start_h + 16);
 }
@@ -125,6 +145,8 @@ void ui_anim_start_minimize(int app_id, int dock_cx, int dock_cy) {
 void ui_anim_start_restore(int app_id, int dock_cx, int dock_cy, int target_x, int target_y, int target_w, int target_h) {
     if (app_id < 0 || app_id >= APP_COUNT) return;
     WindowAnim *a = &g_window_anims[app_id];
+    if (a->active && a->type == WINDOW_ANIM_RESTORE) return;
+    WindowAnim previous = *a;
     a->active = 1;
     a->type = WINDOW_ANIM_RESTORE;
     a->app_id = app_id;
@@ -146,6 +168,7 @@ void ui_anim_start_restore(int app_id, int dock_cx, int dock_cy, int target_x, i
     a->cur_w = a->start_w;
     a->cur_h = a->start_h;
     a->cur_alpha = 90;
+    continue_visual(a, &previous);
 
     wm_invalidate_rect(target_x - 8, target_y - 8, target_w + 16, target_h + 16);
 }
@@ -156,6 +179,8 @@ void ui_anim_start_close(int app_id) {
     if (!w) return;
 
     WindowAnim *a = &g_window_anims[app_id];
+    if (a->active && a->type == WINDOW_ANIM_CLOSE) return;
+    WindowAnim previous = *a;
     a->active = 1;
     a->type = WINDOW_ANIM_CLOSE;
     a->app_id = app_id;
@@ -179,6 +204,7 @@ void ui_anim_start_close(int app_id) {
     a->cur_w = a->start_w;
     a->cur_h = a->start_h;
     a->cur_alpha = 256;
+    continue_visual(a, &previous);
 
     wm_invalidate_rect(w->x - 8, w->y - 8, w->width + 16, w->height + 16);
 }
@@ -210,13 +236,10 @@ void ui_anim_update(u32 now_ms) {
         if (a->cur_w < 1) a->cur_w = 1;
         if (a->cur_h < 1) a->cur_h = 1;
 
-        if (a->type == WINDOW_ANIM_OPEN || a->type == WINDOW_ANIM_RESTORE) {
-            a->cur_alpha = 140 + ((116 * factor) >> 8);
-        } else if (a->type == WINDOW_ANIM_MINIMIZE) {
-            a->cur_alpha = 256 - ((166 * factor) >> 8);
-        } else if (a->type == WINDOW_ANIM_CLOSE) {
-            a->cur_alpha = 256 - ((256 * factor) >> 8);
-        }
+        int end_alpha = a->type == WINDOW_ANIM_CLOSE ? 0 :
+                        a->type == WINDOW_ANIM_MINIMIZE ? 90 : 256;
+        a->cur_alpha = g_start_alpha[i] +
+            (((end_alpha - g_start_alpha[i]) * factor) >> 8);
 
         /* Invalidate bounding box union */
         int min_x = old_x < a->cur_x ? old_x : a->cur_x;

@@ -37,7 +37,7 @@ static const u32 ACCENT_COLORS[5] = {
 };
 
 static const char *ACCENT_NAMES[5] = {
-    "Ocean Blue", "Violet Indigo", "Emerald Green", "Amber Orange", "Rose Pink"
+    "Blue", "Violet", "Green", "Amber", "Rose"
 };
 
 static int g_settings_tab = TAB_APPEARANCE;
@@ -129,12 +129,12 @@ void settings_render(int width, int height, int active) {
     /* 3. Tab-specific Cards */
     if (g_settings_tab == TAB_APPEARANCE) {
         /* Subtitle */
-        text(cx, 68, "Customize the appearance of windows, accents and materials.", l.text_muted, 1);
+        app_label(cx, 68, cw, "Choose a theme and your highlight color.", l.text_muted, 1);
 
         /* Theme Card */
         AppRect card1 = {cx, 90, cw, 106};
         draw_card(card1, l.bg_card, l.border_card, 12);
-        text(cx + 14, 98, "Theme Mode", l.text_head, 1);
+        text(cx + 14, 98, "Theme & Wallpaper", l.text_head, 1);
 
         /* Light Preview Tile */
         int t1_x = cx + 24, t_y = 118;
@@ -161,48 +161,28 @@ void settings_render(int width, int height, int active) {
         centered(t2_x, t_y + 40, 96, "Dark", 0xe2e8f0, 1);
 
         /* Accent Color Card */
-        AppRect card2 = {cx, 206, cw, 78};
+        AppRect card2 = {cx, 206, cw, 106};
         draw_card(card2, l.bg_card, l.border_card, 12);
         text(cx + 14, 214, "Accent Color", l.text_head, 1);
-        text(cx + 14, 230, "Choose your primary tint for buttons, active tabs and highlights:", l.text_muted, 1);
+        app_label(cx + 14, 230, cw - 28, "Buttons, selected tabs and highlights", l.text_muted, 1);
 
         int cur_accent = app_host_accent();
         for (int a = 0; a < 5; a++) {
             int ax = cx + 18 + a * 38;
-            roundrect(ax, 248, 26, 26, 13, ACCENT_COLORS[a]);
             if (a == cur_accent) {
-                roundrect(ax + 7, 255, 12, 12, 6, 0xffffff);
+                roundrect(ax - 3, 245, 32, 32, 16, l.text_head);
+                roundrect(ax - 1, 247, 28, 28, 14, l.bg_card);
             }
+            roundrect(ax, 248, 26, 26, 13, ACCENT_COLORS[a]);
         }
-        app_label(cx + 220, 253, cw - 230, ACCENT_NAMES[cur_accent], ACCENT_COLORS[cur_accent], 1);
+        app_label(cx + 14, 290, cw - 28, ACCENT_NAMES[cur_accent], l.text_body, 1);
 
-        /* Visual Materials Card */
-        AppRect card3 = {cx, 294, cw, 68};
+        AppRect card3 = {cx, 326, cw, 90};
         draw_card(card3, l.bg_card, l.border_card, 12);
-        text(cx + 14, 302, "Window Materials & Shadows", l.text_head, 1);
-        app_label(cx + 14, 320, cw - 150,
-                  "Frosted acrylic material with soft ambient shadow.", l.text_body, 1);
-        roundrect(cx + cw - 120, 314, 104, 24, 6, dark ? 0x223046 : 0xe9e2f2);
-        centered(cx + cw - 120, 319, 104, "Hardware 32bpp", dark ? 0x93c5fd : 0x5a4878, 1);
-
-        AppRect card4 = {cx, 370, cw, 128};
-        draw_card(card4, l.bg_card, l.border_card, 12);
-        text(cx + 14, 378, "Wallpaper", l.text_head, 1);
-        int wallpaper_count = app_host_wallpaper_count();
-        const char *selected_wallpaper = app_host_selected_wallpaper();
-        if (!wallpaper_count) text(cx + 16, 398, "No PNG files found; using the built-in gradient.", l.text_muted, 1);
-        for (int i = 0; i < wallpaper_count; i++) {
-            const char *name = app_host_wallpaper_name(i);
-            if (!name) continue;
-            int selected = 1, j = 0;
-            while (name[j] || selected_wallpaper[j]) {
-                if (name[j] != selected_wallpaper[j]) { selected = 0; break; }
-                ++j;
-            }
-            int row_y = 396 + i * 13;
-            if (selected) roundrect(cx + 10, row_y - 1, cw - 20, 12, 4, acc);
-            text(cx + 18, row_y, name, selected ? 0xffffff : l.text_body, 1);
-        }
+        text(cx + 14, 338, "A matching desktop", l.text_head, 1);
+        app_label(cx + 14, 358, cw - 28, "The wallpaper changes together with the theme.", l.text_body, 1);
+        app_label(cx + 14, 382, cw - 28,
+                  dark ? "Dark windows + dark wallpaper" : "Light windows + light wallpaper", l.text_muted, 1);
 
     } else if (g_settings_tab == TAB_DESKTOP_DOCK) {
         text(cx, 68, "Control dock behavior, magnification and desktop item snapping.", l.text_muted, 1);
@@ -211,15 +191,15 @@ void settings_render(int width, int height, int active) {
         AppRect card1 = {cx, 90, cw, 80};
         draw_card(card1, l.bg_card, l.border_card, 12);
         text(cx + 14, 98, "Window Motion & Minimize Effects", l.text_head, 1);
-        text(cx + 14, 114, "Enable buttery smooth 120 FPS window transitions and animations.", l.text_muted, 1);
+        app_label(cx + 14, 114, cw - 28, "Animate opening, closing and minimizing windows.", l.text_muted, 1);
 
         int anim_on = app_host_animations();
         /* Smooth button */
         roundrect(cx + 14, 134, 130, 26, 8, anim_on ? acc : (dark ? 0x161a26 : 0xe9e1f3));
-        centered(cx + 14, 140, 130, "Smooth (120 FPS)", anim_on ? 0xffffff : l.text_body, 1);
+        centered(cx + 14, 140, 130, "Animations: On", anim_on ? 0xffffff : l.text_body, 1);
         /* Fast button */
         roundrect(cx + 152, 134, 110, 26, 8, !anim_on ? acc : (dark ? 0x161a26 : 0xe9e1f3));
-        centered(cx + 152, 140, 110, "Fast (Instant)", !anim_on ? 0xffffff : l.text_body, 1);
+        centered(cx + 152, 140, 110, "Off", !anim_on ? 0xffffff : l.text_body, 1);
 
         /* Dock Magnification Card */
         AppRect card2 = {cx, 180, cw, 80};
@@ -451,7 +431,6 @@ void settings_click(int x, int y) {
     }
 
     int cx = l.content.x;
-    int cw = l.content.w;
 
     /* 2. Tab content clicks */
     if (g_settings_tab == TAB_APPEARANCE) {
@@ -470,15 +449,6 @@ void settings_click(int x, int y) {
             int ax = cx + 18 + a * 38;
             if (x >= ax && x <= ax + 26 && y >= 248 && y <= 274) {
                 app_host_set_accent(a);
-                app_host_invalidate(APP_SETTINGS);
-                break;
-            }
-        }
-        int wallpaper_count = app_host_wallpaper_count();
-        for (int i = 0; i < wallpaper_count; i++) {
-            int row_y = 396 + i * 13;
-            if (x >= cx + 10 && x < cx + cw - 10 && y >= row_y - 1 && y < row_y + 11) {
-                app_host_set_wallpaper(i);
                 app_host_invalidate(APP_SETTINGS);
                 break;
             }

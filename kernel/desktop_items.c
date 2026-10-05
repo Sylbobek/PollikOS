@@ -179,6 +179,7 @@ void desktop_items_scan(void) {
     add_item(ITEM_APP, "Web", "/bin/browser", APP_BROWSER);
     add_item(ITEM_APP, "Settings", "/bin/settings", APP_SETTINGS);
     add_item(ITEM_APP, "PollikMark", "/bin/pollikmark", APP_POLLIKMARK);
+    add_item(ITEM_APP, "Calculator", "/bin/calculator", APP_CALCULATOR);
 
     /* 2. Read /home/Desktop real items via VFS */
     int fd = vfs_open("/home/Desktop", O_RDONLY);

@@ -19,7 +19,6 @@
 #include "media.h"
 
 static int desktop_ready;
-static char g_wallpaper_choice[56];
 static char g_wallpaper_names[8][56];
 static int g_wallpaper_count;
 static int g_wallpaper_scan_done;
@@ -94,22 +93,12 @@ const char *app_host_wallpaper_name(int index) {
     return index >= 0 && index < g_wallpaper_count ? g_wallpaper_names[index] : 0;
 }
 const char *app_host_selected_wallpaper(void) {
-    if (g_wallpaper_choice[0]) return g_wallpaper_choice;
     return shell.theme ? "light.png" : "dark.png";
 }
 int app_host_set_wallpaper(int index) {
-    const char *name = app_host_wallpaper_name(index);
-    if (!name) return 0;
-    int i = 0;
-    while (name[i] && i < (int)sizeof(g_wallpaper_choice) - 1) {
-        g_wallpaper_choice[i] = name[i];
-        ++i;
-    }
-    if (name[i]) return 0;
-    g_wallpaper_choice[i] = 0;
-    app_host_save_settings();
-    compositor_wallpaper_changed();
-    return 1;
+    /* Wallpaper is part of the theme, never an independent override. */
+    (void)index;
+    return 0;
 }
 int app_host_pointer_acceleration(void) { return input_get_pointer_acceleration(); }
 void app_host_set_pointer_acceleration(int enabled) {
@@ -140,12 +129,6 @@ void app_host_save_settings(void) {
         buf[len++] = '\n'; \
     } while(0)
 
-    #define WRITE_TEXT_SETTING(k, v) do { \
-        const char *ks = (k); while (*ks) buf[len++] = *ks++; \
-        const char *vs = (v); while (*vs) buf[len++] = *vs++; \
-        buf[len++] = '\n'; \
-    } while(0)
-
     WRITE_SETTING("theme=", shell.theme);
     WRITE_SETTING("accent=", ui_get_accent_index());
     WRITE_SETTING("animations=", shell.animations_mode);
@@ -153,12 +136,10 @@ void app_host_save_settings(void) {
     WRITE_SETTING("target_fps=", wm_get_target_fps());
     WRITE_SETTING("sound_freq=", sound_get_freq());
     WRITE_SETTING("sound_muted=", sound_is_muted());
-    if (g_wallpaper_choice[0]) WRITE_TEXT_SETTING("wallpaper=", g_wallpaper_choice);
     WRITE_SETTING("pointer_accel=", input_get_pointer_acceleration());
     WRITE_SETTING("cursor_size=", compositor_cursor_size());
 
     #undef WRITE_SETTING
-    #undef WRITE_TEXT_SETTING
 
     vfs_write(fd, buf, len);
     vfs_close(fd);
@@ -188,8 +169,8 @@ static void desktop_load_settings(void) {
 
         if (memcmp(line, "theme=", 6) == 0) {
             int val = line[6] - '0';
-            shell.theme = val;
-            ui_set_theme_mode(val ? THEME_LIGHT : THEME_DARK);
+            shell.theme = val == 1;
+            ui_set_theme_mode(shell.theme ? THEME_LIGHT : THEME_DARK);
         } else if (memcmp(line, "accent=", 7) == 0) {
             int val = line[7] - '0';
             ui_set_accent_index(val);
@@ -212,19 +193,6 @@ static void desktop_load_settings(void) {
         } else if (memcmp(line, "sound_muted=", 12) == 0) {
             int val = line[12] - '0';
             sound_set_muted(val);
-        } else if (memcmp(line, "wallpaper=", 10) == 0) {
-            int n = 0;
-            while (line[10+n] && n < (int)sizeof(g_wallpaper_choice)-1) {
-                char c = line[10+n];
-                if (c == '/' || c == '\\' || c == ':' || c == '.') {
-                    if (c == '.' && n > 0) { g_wallpaper_choice[n++] = c; continue; }
-                    break;
-                }
-                if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                      (c >= '0' && c <= '9') || c == '_' || c == '-')) break;
-                g_wallpaper_choice[n++] = c;
-            }
-            g_wallpaper_choice[n] = 0;
         } else if (memcmp(line, "pointer_accel=", 14) == 0) {
             input_set_pointer_acceleration(line[14] == '1');
         } else if (memcmp(line, "cursor_size=", 12) == 0) {
@@ -365,25 +333,32 @@ void open_app(int id) {
         int cx, cy;
         dock_get_app_center(id, &cx, &cy);
         wm_unminimize(id);
-        ui_anim_start_restore(id, cx, cy, w->x, w->y, w->width, w->height);
+        if (shell.animations_mode)
+            ui_anim_start_restore(id, cx, cy, w->x, w->y, w->width, w->height);
         focus_app(id);
         request_scene_redraw();
         return;
     }
     if (w->open) {
+        const WindowAnim *a = ui_anim_get(id);
+        if (a && a->type == WINDOW_ANIM_MINIMIZE)
+            ui_anim_start_open(id, w->x, w->y, w->width, w->height);
         focus_app(id);
         return;
     }
-    ui_anim_dock_launch(id);
+    if (shell.animations_mode) ui_anim_dock_launch(id);
     wm_open(id);
     gui_app_resized(id, window_width(id), window_height(id));
     gui_app_opened(id);
     compositor_invalidate(id);
-    ui_anim_start_open(id, w->x, w->y, w->width, w->height);
+    if (shell.animations_mode)
+        ui_anim_start_open(id, w->x, w->y, w->width, w->height);
     request_scene_redraw();
 }
 void dock_activate_app(int id) {
     Window *w = wm_get_window(id);
+    const WindowAnim *a = ui_anim_get(id);
+    if (a && a->type == WINDOW_ANIM_MINIMIZE) { open_app(id); return; }
     if (w && w->open && !w->minimized && active_app() == id) {
         minimize_app(id);
         return;
@@ -404,6 +379,11 @@ void minimize_app(int id) {
     Window *w = wm_get_window(id);
     if (!w || !w->open || !w->visible || w->minimized) return;
     cancel_interaction(id);
+    if (!shell.animations_mode) {
+        wm_minimize(id);
+        request_scene_redraw();
+        return;
+    }
     int cx, cy;
     dock_get_app_center(id, &cx, &cy);
     ui_anim_start_minimize(id, cx, cy);
@@ -411,9 +391,10 @@ void minimize_app(int id) {
 }
 void close_app(int id) {
     Window *w = wm_get_window(id);
-    if (!w) return;
+    if (!w || !w->open) return;
     cancel_interaction(id);
-    ui_anim_start_close(id);
+    if (shell.animations_mode) ui_anim_start_close(id);
+    else ui_anim_cancel(id);
     int was_open = w->open;
     wm_close(id);
     if (was_open) gui_app_closed(id);
@@ -442,6 +423,7 @@ void request_partial_redraw(int x, int y, int w, int h) {
 }
 int app_host_theme(void) { return shell.theme; }
 void app_host_set_theme(int value) {
+    value = value == 1;
     if (shell.theme == value) return;
     shell.theme = value;
     ui_set_theme_mode(value ? THEME_LIGHT : THEME_DARK);
@@ -454,6 +436,7 @@ void app_host_set_theme(int value) {
 }
 int app_host_accent(void) { return ui_get_accent_index(); }
 void app_host_set_accent(int index) {
+    if (index < 0 || index >= 5 || index == ui_get_accent_index()) return;
     ui_set_accent_index(index);
     compositor_invalidate_all_surfaces();
     wm_invalidate_all();
@@ -466,7 +449,18 @@ u32 app_host_accent_color(void) { return ui_theme()->accent; }
 u32 app_host_accent_hover(void) { return ui_theme()->accent_hover; }
 int app_host_animations(void) { return shell.animations_mode; }
 void app_host_set_animations(int enabled) {
+    enabled = !!enabled;
+    if (shell.animations_mode == enabled) return;
     shell.animations_mode = enabled;
+    if (!enabled) {
+        for (int id = 0; id < APP_COUNT; ++id) {
+            const WindowAnim *a = ui_anim_get(id);
+            int minimizing = a && a->type == WINDOW_ANIM_MINIMIZE;
+            ui_anim_cancel(id);
+            if (minimizing) wm_minimize(id);
+        }
+        request_scene_redraw();
+    }
     shell.dirty = 1;
     app_host_save_settings();
 }
@@ -1226,9 +1220,7 @@ static void desktop_wallpaper_timing(const char *phase, u32 start) {
 }
 
 static u8 *desktop_decode_theme_wallpaper(int dark, int *width, int *height) {
-    (void)dark;
-    desktop_scan_wallpapers();
-    const char *name = app_host_selected_wallpaper();
+    const char *name = dark ? "dark.png" : "light.png";
     char path[VFS_MAX_PATH];
     const char *prefix = "/usr/share/wallpapers/";
     u32 length = 0;
@@ -1379,7 +1371,7 @@ static void desktop_paint_procedural_wallpaper(u32 *wallpaper, int width, int he
     }
 }
 
-static void desktop_paint_wallpaper_for_mode(u32 *wallpaper, int dark) {
+void desktop_paint_wallpaper_mode(u32 *wallpaper, int dark) {
     int width = shell.width, height = shell.height;
     if (!wallpaper || width <= 0 || height <= 0) return;
     int image_width = 0, image_height = 0;
@@ -1401,11 +1393,11 @@ static void desktop_paint_wallpaper_for_mode(u32 *wallpaper, int dark) {
 
 void desktop_prepare_theme_wallpapers(u32 *buffer, u16 *unused, int unused_width, int unused_height) {
     (void)unused; (void)unused_width; (void)unused_height;
-    if (buffer) desktop_paint_wallpaper_for_mode(buffer, ui_is_dark());
+    if (buffer) desktop_paint_wallpaper_mode(buffer, ui_is_dark());
 }
 
 void desktop_paint_wallpaper(u32 *wallpaper) {
-    desktop_paint_wallpaper_for_mode(wallpaper, ui_is_dark());
+    desktop_paint_wallpaper_mode(wallpaper, ui_is_dark());
 }
 
 void desktop_paint_wallpaper_fallback(u32 *wallpaper, int dark) {
@@ -1424,10 +1416,11 @@ void desktop_start(void) {
     ui_anim_init();
     desktop_items_init();
     dock_load_config();
-    compositor_splash("Loading wallpaper", 94);
-    compositor_prepare_wallpapers();
-    compositor_splash("Preparing desktop", 98);
+    /* Reserve required client surfaces before the optional second cache. */
+    compositor_splash("Preparing desktop", 94);
     wm_init(shell.width, shell.height);
+    compositor_splash("Loading themes", 98);
+    compositor_prepare_wallpapers();
     if (!welcome_is_first_boot()) {
         close_app(APP_WELCOME);
     }

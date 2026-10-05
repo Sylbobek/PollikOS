@@ -1,6 +1,7 @@
 #include "apps.h"
 
 #include "pollikmark.h"
+#include "calculator_icon.h"
 #include "../browser/browser.h"
 #include "../ui_data.h"
 
@@ -54,7 +55,12 @@ static const GuiApp registry[APP_COUNT] = {
         MIN_SIZE, .body_active = 0x202b40, .body_inactive = 0x202b40,
         .init = pollikmark_init, .render = pollikmark_render, .resize = pollikmark_resize,
         .open = pollikmark_open, .close = pollikmark_close, .key = pollikmark_key,
-        .click = pollikmark_click, .poll = pollikmark_poll }
+        .click = pollikmark_click, .poll = pollikmark_poll },
+#ifndef POLLIK_INSTALL_MEDIA
+    [APP_CALCULATOR] = { .name = "Calculator", .icon = {calculator_icon,calculator_alpha,calculator_palette,16,16},
+        .min_width=320,.min_height=440,LIGHT_BODY,.init=calculator_init,
+        .render=calculator_render,.key=calculator_key,.click=calculator_click }
+#endif
 };
 
 const GuiApp *gui_app_get(int id) { return id >= 0 && id < APP_COUNT ? &registry[id] : 0; }

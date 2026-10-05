@@ -1,3 +1,4 @@
+#include "../../common/calc.h"
 /* pollish: the PollikOS interactive shell.
  *
  * Runs as a normal Ring 3 process with stdin/stdout/stderr connected to the
@@ -179,6 +180,22 @@ static int builtin_echo(int argc, const char *const *argv) {
     out("\n");
     return 0;
 }
+static int builtin_calc(int argc, const char *const *argv) {
+    char expression[128]={0}, result[96];
+    unsigned used=0;
+    for(int i=1;i<argc;i++) {
+        if(i>1) {if(used>=sizeof expression-1) goto too_long;expression[used++]=' ';}
+        for(const char *p=argv[i];*p;p++) {
+            if(used>=sizeof expression-1) goto too_long;
+            expression[used++]=*p;
+        }
+    }
+    expression[used]=0;
+    if(!calc_evaluate(expression,result,sizeof result)) {out("Error: ");line_out(result);return 1;}
+    line_out(result);return 0;
+too_long:
+    line_out("Error: expression too long");return 1;
+}
 static int builtin_clear(int argc, const char *const *argv) {
     (void)argc; (void)argv;
     out(ESC "[2J" ESC "[3J" ESC "[H");
@@ -206,6 +223,7 @@ static int builtin_help(int argc, const char *const *argv) {
     line_out("  mv | rename A B rename or move a path");
     line_out("  touch FILE      create an empty file");
     line_out("  echo ARGS       print arguments ($? and $NAME expand)");
+    line_out("  calc EXPR       arithmetic, parentheses, sqrt/abs/min/max, ^ and %");
     line_out("  history [-c]    list or clear session history");
     line_out("  env | set       list the environment; set NAME=VALUE adds one");
     line_out("  status          print the last command exit status");
@@ -364,6 +382,7 @@ static int run_external(const char *const *argv) {
 typedef int (*builtin_fn)(int argc, const char *const *argv);
 typedef struct { const char *name; builtin_fn function; } Builtin;
 static const Builtin builtins[] = {
+    {"calc", builtin_calc},
     {"cd", builtin_cd}, {"pwd", builtin_pwd}, {"echo", builtin_echo},
     {"clear", builtin_clear}, {"cls", builtin_clear},
     {"history", builtin_history}, {"help", builtin_help},
