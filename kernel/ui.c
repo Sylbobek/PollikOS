@@ -455,7 +455,11 @@ void ui_draw_button(int x, int y, int w, int h, const char *label, IconKind icon
     u32 border_color = th->border;
     u32 text_color = th->text;
 
-    if (is_danger) {
+    if (state == UI_BTN_DISABLED) {
+        bg_color = th->surface;
+        border_color = th->border_subtle;
+        text_color = th->text_muted;
+    } else if (is_danger) {
         bg_color = (state == UI_BTN_HOVER) ? th->danger_hover : th->danger;
         border_color = th->danger;
         text_color = 0xffffff;
@@ -470,15 +474,20 @@ void ui_draw_button(int x, int y, int w, int h, const char *label, IconKind icon
         } else if (state == UI_BTN_PRESSED) {
             bg_color = th->selection;
             border_color = th->accent;
-        } else if (state == UI_BTN_DISABLED) {
-            bg_color = th->surface;
-            border_color = th->border_subtle;
-            text_color = th->text_muted;
         }
     }
+    if (state == UI_BTN_PRESSED && (is_default || is_danger))
+        bg_color = ui_bridge_blend(bg_color, 0x000000, 38);
 
     /* Full rounded stroke (ring colour + interior) so corners never fade. */
     ui_bridge_roundrect_stroke(x, y, w, h, UI_RADIUS_SMALL, 1, border_color, bg_color);
+    /* A single inset highlight gives raised controls depth without a blur or
+     * per-pixel gradient. Pressed/disabled controls deliberately stay flat. */
+    if (state != UI_BTN_PRESSED && state != UI_BTN_DISABLED &&
+        w > UI_RADIUS_SMALL * 2 + 2 && h > 4)
+        ui_bridge_rect(x + UI_RADIUS_SMALL + 1, y + 1,
+                       w - UI_RADIUS_SMALL * 2 - 2, 1,
+                       ui_bridge_blend(bg_color, 0xffffff, ui_is_dark() ? 30 : 100));
 
     /* Content placement (nudged down when pressed). */
     int press = (state == UI_BTN_PRESSED) ? 1 : 0;
@@ -489,7 +498,9 @@ void ui_draw_button(int x, int y, int w, int h, const char *label, IconKind icon
     int text_y = y + (h - 14) / 2 + press;
 
     if (icon != ICON_NONE) {
-        ui_draw_icon(icon, start_x, y + (h - icon_sz) / 2 + press, icon_sz, is_default || is_danger ? 0xffffff : th->accent, text_color);
+        ui_draw_icon(icon, start_x, y + (h - icon_sz) / 2 + press, icon_sz,
+                     state == UI_BTN_DISABLED ? th->text_muted :
+                     is_default || is_danger ? 0xffffff : th->accent, text_color);
         start_x += icon_sz + 6;
     }
     if (label && label[0]) {

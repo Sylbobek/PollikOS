@@ -36,20 +36,31 @@ COUNTERS = ('frame_count full_redraw_count damage_rects_count cursor_frames dock
 
 def distribution(values):
     if not values:
-        return dict(count=0, mean_us=0, min_us=0, max_us=0, p95_us=0, p99_us=0, low_1pct_fps=0)
+        return dict(count=0, mean_us=0, min_us=0, max_us=0, p50_us=0, p95_us=0, p99_us=0, low_1pct_fps=0)
     v = sorted(values)
     n = len(v)
     slow = v[-((n + 99) // 100):]
     return dict(count=n, mean_us=sum(v) / n, min_us=v[0], max_us=v[-1],
+                p50_us=v[(n * 50 + 99) // 100 - 1],
                 p95_us=v[(n * 95 + 99) // 100 - 1], p99_us=v[(n * 99 + 99) // 100 - 1],
                 low_1pct_fps=1e6 * len(slow) / sum(slow) if sum(slow) else 0)
 
 
+def history_samples(history, write_index, count):
+    """Return the newest count samples in chronological order from a ring."""
+    capacity = len(history)
+    n = min(max(0, count), capacity)
+    if not n:
+        return []
+    start = (write_index - n) % capacity
+    return [history[(start + i) % capacity] for i in range(n)]
+
+
 class Guest:
-    def __init__(self, resolution, label='benchmark', data_image=None, boot_only=False, boot_timeout=40):
+    def __init__(self, resolution, label='benchmark', data_image=None, boot_only=False,
+                 boot_timeout=None, headless=False, accel=None, cpu=None):
         self.data_image = pathlib.Path(data_image).resolve() if data_image else None
         self.boot_only = boot_only
-        self.boot_timeout = boot_timeout
         self.resolution = resolution
         self.width, self.height = map(int, resolution.split('x'))
         self.log = BUILD / f'{label}-{resolution}.log'
@@ -58,8 +69,9 @@ class Guest:
         self.folder = pathlib.Path(self.temp.name)
         self.symbols = {}
         image_name = os.environ.get('POLLIK_GUI_IMAGE', 'PollikOS-Alpha.img')
-        accel = os.environ.get('POLLIK_GUI_ACCEL', 'tcg').lower()
-        cpu = os.environ.get('POLLIK_GUI_CPU', 'max')
+        accel = (accel or os.environ.get('POLLIK_GUI_ACCEL', 'tcg')).lower()
+        cpu = cpu or os.environ.get('POLLIK_GUI_CPU') or ('qemu64' if accel == 'whpx' else 'max')
+        self.boot_timeout = boot_timeout if boot_timeout is not None else (180 if accel == 'whpx' else 40)
         if accel not in ('tcg', 'whpx'):
             raise ValueError(f'unsupported POLLIK_GUI_ACCEL: {accel}')
         image, elf = BUILD / image_name, BUILD / 'kernel.elf'
@@ -86,8 +98,11 @@ class Guest:
             self.symbol(name)
         self.accel = accel
         self.cpu = cpu
+        self.headless = bool(headless or os.environ.get('POLLIK_GUI_HEADLESS', '').lower() in ('1', 'true', 'yes'))
+        self.display = 'none' if self.headless else os.environ.get('POLLIK_GUI_DISPLAY', 'none')
         self.environment = dict(resolution=resolution, memory_mib=256, cpu=cpu, nic='none',
-                                accelerator=accel, host=platform.platform(), python=platform.python_version(),
+                                accelerator=accel, headless=self.headless, display=self.display,
+                                host=platform.platform(), python=platform.python_version(),
                                 qemu=subprocess.check_output(['qemu-system-x86_64', '--version'], text=True).splitlines()[0],
                                 kernel_sha256=hashlib.sha256(blob).hexdigest(), kernel_bytes=len(blob),
                                 elf_sha256=hashlib.sha256(elf.read_bytes()).hexdigest(),
@@ -105,7 +120,7 @@ class Guest:
         self.log.write_text('')
         self.process = subprocess.Popen([
             'qemu-system-x86_64', '-machine', 'pc', '-accel', self.accel, '-cpu', self.cpu, '-m', '256M',
-            '-device', 'VGA,vgamem_mb=32', '-display', 'none', '-no-reboot',
+            '-device', 'VGA,vgamem_mb=32', '-display', self.display, '-no-reboot',
             '-fw_cfg', f'name=opt/pollikos/display,string={self.resolution}',
             '-drive', f'format=raw,file={self.image},if=ide,index=0,snapshot=on',
             '-drive', f'format=raw,file={data},if=ide,index=1{data_snapshot}', '-nic', 'none',
@@ -175,6 +190,12 @@ class Guest:
             assert 'error' not in r, r
             if 'return' in r:
                 return r['return']
+
+    def screendump(self, path):
+        path = pathlib.Path(path).resolve()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.qmp('screendump', {'filename': str(path)})
+        return path
 
     def hmp(self, command):
         return self.qmp('human-monitor-command', {'command-line': command})
@@ -265,6 +286,7 @@ class Guest:
             s = self.stats()
             s['frame_write_index'] = self.words('g_frame_time_idx')[0]
             s['interval_write_index'] = self.words('g_interval_idx')[0]
+            s['guest_ticks'] = self.words('ticks')[0]
             s['duration_history'] = list(self.words('g_frame_time_history'))
             s['interval_history'] = list(self.words('g_frame_interval_history'))
             return s
@@ -289,17 +311,28 @@ class Guest:
 def stage_result(name, before, after, started, operations):
     elapsed = after['elapsed_us'] - before['elapsed_us']
     counts = {k: after[k] - before[k] for k in COUNTERS}
-    assert counts['frame_count'] > 0, f'{name}: no completed presents'
+    if name.startswith('idle'):
+        guest_ticks = (after['guest_ticks'] - before['guest_ticks']) & 0xffffffff
+        elapsed = guest_ticks * 9943000000 // 1193180
+        assert elapsed > 0, f'{name}: guest PIT did not advance'
+    if counts['frame_count'] == 0:
+        assert name.startswith('idle'), f'{name}: no completed presents'
+        return dict(name=name, duration_host_s=time.monotonic() - started,
+                    duration_guest_s=elapsed / 1e6, operations=operations, counts=counts,
+                    actual_fps=0, render_throughput_fps=0, mean_paint_us=0,
+                    mean_compose_us=0, mean_present_us=0,
+                    mean_composed_pixels_per_frame=0,
+                    phase_us=dict(input=0, app_update=0, layout=0, draw=0, composition=0, present=0),
+                    frame_history=distribution([]), interval_history=distribution([]),
+                    history_scope='no presents occurred during idle; no frame intervals exist', stats=after)
     assert elapsed > 0 and all(v >= 0 for v in counts.values()), (name, counts)
     assert counts['total_time_us'] >= counts['paint_time_us'] + counts['present_time_us']
     assert counts['total_time_us'] == counts['paint_time_us'] + counts['compose_time_us'] + counts['present_time_us']
-    frame_samples = [after['duration_history'][(before['frame_write_index'] + i) % len(after['duration_history'])]
-                     for i in range(min(counts['frame_count'], len(after['duration_history'])))]
+    frame_samples = history_samples(after['duration_history'], after['frame_write_index'], counts['frame_count'])
     # interval_count is a capped occupancy value, not a cumulative counter.
     # Each completed frame after boot also records one presentation interval.
     sample_count = min(counts['frame_count'], len(after['interval_history']))
-    interval_samples = [after['interval_history'][(before['interval_write_index'] + i) % len(after['interval_history'])]
-                        for i in range(sample_count)]
+    interval_samples = history_samples(after['interval_history'], after['interval_write_index'], sample_count)
     return dict(name=name, duration_host_s=time.monotonic() - started,
                 duration_guest_s=elapsed / 1e6, operations=operations, counts=counts,
                 actual_fps=counts['frame_count'] * 1e6 / elapsed,
@@ -313,5 +346,5 @@ def stage_result(name, before, after, started, operations):
                               composition=after['compose_us'], present=after['present_us']),
                 frame_history=distribution(frame_samples),
                 interval_history=distribution(interval_samples),
-                history_scope='only samples written between the two stage snapshots, capped at 128',
+                history_scope='latest guest samples in stage; capped at 128; ordered by ring write index',
                 stats=after)

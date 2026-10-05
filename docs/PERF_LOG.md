@@ -560,8 +560,11 @@ FullName                                                                       L
 C:\Users\syltu\AppData\Local\Temp\PollikOS-perfbuild-ogiluhwn\build\kernel.bin 819592 10/5/2026 1:36:14 PM
 ```
 
-This is a +1296-byte i386 kernel delta in that copy. No rectangle-specific
-performance result is claimed; the APIs are not integrated into the compositor.
+> Superseded below by the rectangle primitive integration follow-up.
+
+This is a +1296-byte i386 kernel delta in that copy. At that checkpoint no
+rectangle-specific performance result was claimed; the APIs were not yet
+integrated into the compositor.
 Full PollikOS regression suites and QEMU visual goldens are NOT RUN in this
 follow-up. The attempted Windows sanitizer commands and their environment
 failures were:
@@ -579,3 +582,213 @@ clang: error: linker command failed with exit code 1 (use -v to see invocation)
 The combined sanitizer binary could not load the Windows sanitizer runtime;
 the standalone UBSan link lacks Windows runtime symbols. Sanitizer validation
 is NOT RUN.
+
+## Rectangle primitive integration follow-up (2026-10-05)
+
+The compositor `rect()` path now uses `gfx_fill_rect()` by default; the old
+assembly path remains selectable with `-DGFX_RECT_LEGACY=1`. Rounded-rectangle
+coverage keeps the exact 8x8 sample rule but computes only four corner patches
+and fills the center directly. Aligned x86 rows use `rep stosl`; rectangle
+blits reuse the row blitter only when corresponding row ranges are disjoint.
+
+The before/after native benchmark used the same harness against saved
+`3fa58eb` primitive source and the current source:
+
+```text
+$ & .\build\gfx_rect_before.exe | Select-String '^BENCH gfx_rect'
+mask_ms=13.408
+mask_ms=12.836
+mask_ms=10.460
+$ & .\build\gfx_primitives_native.exe | Select-String '^BENCH gfx_rect'
+mask_ms=0.109
+mask_ms=0.127
+mask_ms=0.109
+```
+
+Median time for four 320x200 masks moved from 12.836 ms to 0.109 ms (about
+118x in this native run). Fill and copy rates varied substantially and showed
+no consistent gain, so no general rectangle-throughput improvement is claimed.
+
+```text
+$ python tests\gfx_primitives_native.py
+PASS gfx correctness: fill/blit lengths 0..257; blend multipliers 65536; seeded pixels 100000 seed=0x6d2b79f5
+PASS gfx rectangle fuzz: 100000 cases seed=0x6d2b79f5 pitch=148..159 align=0..3 overlap=all guards=checked
+PASS gfx rounded-mask fuzz: 10000 cases seed=0xc001d00d coverage=8x8 guards=checked
+$ python tests\held_drag.py
+PIXEL_HASH scene=29cdb7eb565afb73 hardware=b7f00ff433c10c0c
+PIXEL_HASH scene=29cdb7eb565afb73 hardware=b7f00ff433c10c0c
+PASS rect legacy/primitive pixel parity scene=29cdb7eb565afb73 hardware=b7f00ff433c10c0c
+```
+
+Latest-source isolated i386 build and GUI checks (`build.ps1 -NoSync` in a
+temporary repository copy; the persistent data image was not changed):
+
+```text
+PollikOS built: build/PollikOS-Alpha.img (819656 kernel bytes, 1601 sectors loaded at 1 MiB)
+Length LastWriteTimeUtc
+------ ----------------
+819656 10/5/2026 2:00:27 PM
+PASS: cursor visible at four corners; stationary-cursor scene repaint
+PASS: focused GUI cursor, Terminal, Notes editing and wheel round trip
+PASS: Settings lists PollikFS wallpapers and persists the selected name
+PASS: pointer acceleration can be disabled and persists
+PASS registry FULL WINDOW resize dimensions track maximize/restore; no guard corruption
+PASS: boot, rounded UI, input, shell, note editing, PS/2 mouse, dock
+PASS: durable files + reboot + deletion, ring3 scheduling/pause/fault/restart, ARP + ICMP ping
+```
+
+The prior isolated build measured 819592 bytes; this update adds 64 bytes to
+`kernel.bin`. Freestanding i386, x86_64, SDK, and native compiles all exited 0;
+`llvm-nm -u` printed only object headings and no undefined symbols. PollikMark
+under TCG/WHPX, frame pacing, and the broader GUI/browser regression matrix are
+NOT RUN in this follow-up.
+
+## Phase 5c.1 profile completion after WHPX headless gate (2026-10-05)
+
+No rasterizer source changes were made for this profile. The supplied PollikMark screenshot is a separate user observation (`Compositor`, Grade B, 38 fps); its accelerator and resolution are not recorded, so it is not a comparable before/after number.
+
+Native reference/golden coverage and current timings:
+
+```text
+$ python tests\soft3d_bench.py
+GOLDEN res=1024x768 scene=triangle writes=335826 sha256=8008a1c1d787cc84f03b475d30ef74f1191d0a3a6d21d8e92460f97c59c9cbf0
+BENCH mode=current res=1024x768 scene=triangle rounds=8 ms=12.042,11.855,12.054
+GOLDEN res=1024x768 scene=perspective_texture writes=335826 sha256=22beb925133fca077179b9081d0b9ce7b82403e60dc6f3d370de0e2145287112
+BENCH mode=current res=1024x768 scene=perspective_texture rounds=8 ms=14.438,13.619,12.143
+GOLDEN res=1920x1080 scene=triangle writes=886465 sha256=42d3106651618ccb3cd0554e2c9297a32929da848ac774956dd7e81ef6fcdf89
+BENCH mode=current res=1920x1080 scene=triangle rounds=8 ms=32.738,37.984,48.251
+GOLDEN res=1920x1080 scene=perspective_texture writes=886465 sha256=9a88176a8dac74a6faf0f001d165c82767d188ee72b6212641ae743a63423a6a
+BENCH mode=current res=1920x1080 scene=perspective_texture rounds=8 ms=32.540,32.789,46.165
+```
+
+These one-triangle scenes write 335,826 of 786,432 pixels (42.7%) at 1024x768 and 886,465 of 2,073,600 pixels (42.7%) at 1920x1080. These are coverage counts for the native test scenes, not a per-triangle rate extrapolated from PollikMark.
+
+For code generation, `soft3d.c` was compiled into a temporary object for the same scalar i386 target and `-Os` options as `build.ps1`:
+
+```text
+$ clang --target=i386-none-elf -m32 -march=i386 -ffreestanding -fno-pic -fno-pie -fno-stack-protector -mno-sse -mno-mmx -Os -Wall -Wextra -Werror -Ikernel/include -Ikernel/gfx -c kernel/soft3d.c -o %TEMP%\pollikos-soft3d-prof\soft3d-i386.o
+$ llvm-nm -u %TEMP%\pollikos-soft3d-prof\soft3d-i386.o
+         U gfx_target_valid
+HOT_PIXEL_LOOP symbol=clip_and_raster range=0x0f9e..0x172c static_instructions_inclusive=511
+fdiv count=2 addresses=1125,1131
+fmul count=22 addresses=1042,1048,1050,1072,107f,108b,109f,10b2,10c4,10d7,10e4,10ea,10f8,110b,1111,115b,1266,12b8,14fc,1568,15c4,162e
+fild count=1 addresses=114e
+fist count=9 addresses=11e2,1230,128e,12d8,151e,158a,15e4,164f,1692
+NO_LIBCALLS unresolved: U gfx_target_valid
+```
+
+The 511 count is the static instruction footprint between the pixel-loop head and back edge, including mutually exclusive flat/color, nearest-sample, and bilinear-sample paths; it is not a dynamic instruction count for one pixel. The perspective-texture path executes two x87 divisions per covered pixel, plus float/integer conversions for texture coordinates. The raster loop limits writes to the clipped triangle bounding box and performs no full-target copy or clear. PollikMark's caller does perform one full color-target clear before each triangle/frame, in 2,048-pixel chunks through `gfx_clear`; that cost is part of measured frame time and is outside the triangle raster loop.
+
+The unchanged native regression passed:
+
+```text
+$ python tests\soft3d_native.py
+soft3d native: PASS (matrices, depth, culling, clipping, bounds, texture)
+```
+
+## Phase 5c.2 raster optimization decision (2026-10-05)
+
+Three perspective-interpolation approaches were measured: the prior 8-pixel and 4-pixel linear blocks (above), and a shared-reciprocal experiment. The float reciprocal version failed the unchanged golden: at 1024x768 perspective texture it changed one pixel, two channels, with maximum RGB error 3; the 1920x1080 vector happened to match. Replacing it with a double reciprocal restored exact bytes, but did not improve native throughput. The experiment remained behind `SOFT3D_RECIPROCAL_EXPERIMENT` and was removed; production `soft3d.c` is unchanged.
+
+Float-reciprocal mismatch evidence:
+
+```text
+$ python tests\soft3d_bench.py
+1024x768 perspective_texture: baseline golden mismatch writes=335826 sha256=16aa7e95fd45f87b8f2d9484d93d477c6006ab13dad69d572f17c09cb816a2da
+RECIPROCAL res=1024x768 scene=perspective_texture ref_writes=335826 candidate_writes=335826 differing_pixels=1 differing_channels=2 max_rgb_error=3 ref_sha256=22beb925133fca077179b9081d0b9ce7b82403e60dc6f3d370de0e2145287112 candidate_sha256=16aa7e95fd45f87b8f2d9484d93d477c6006ab13dad69d572f17c09cb816a2da
+RECIPROCAL res=1920x1080 scene=perspective_texture ref_writes=886465 candidate_writes=886465 differing_pixels=0 differing_channels=0 max_rgb_error=0 ref_sha256=9a88176a8dac74a6faf0f001d165c82767d188ee72b6212641ae743a63423a6a candidate_sha256=9a88176a8dac74a6faf0f001d165c82767d188ee72b6212641ae743a63423a6a
+```
+
+Double-reciprocal candidate evidence (native host, 3 batches of 8 renders):
+
+```text
+RECIPROCAL res=1024x768 scene=triangle ref_writes=335826 candidate_writes=335826 differing_pixels=0 differing_channels=0 max_rgb_error=0 ref_sha256=8008a1c1d787cc84f03b475d30ef74f1191d0a3a6d21d8e92460f97c59c9cbf0 candidate_sha256=8008a1c1d787cc84f03b475d30ef74f1191d0a3a6d21d8e92460f97c59c9cbf0
+RECIPROCAL_BENCH res=1024x768 scene=triangle rounds=8 reference_ms=12.415,13.146,14.250 candidate_ms=12.123,12.373,25.416
+RECIPROCAL res=1024x768 scene=perspective_texture ref_writes=335826 candidate_writes=335826 differing_pixels=0 differing_channels=0 max_rgb_error=0 ref_sha256=22beb925133fca077179b9081d0b9ce7b82403e60dc6f3d370de0e2145287112 candidate_sha256=22beb925133fca077179b9081d0b9ce7b82403e60dc6f3d370de0e2145287112
+RECIPROCAL_BENCH res=1024x768 scene=perspective_texture rounds=8 reference_ms=12.970,13.978,15.236 candidate_ms=16.488,18.052,16.627
+RECIPROCAL res=1920x1080 scene=triangle ref_writes=886465 candidate_writes=886465 differing_pixels=0 differing_channels=0 max_rgb_error=0 ref_sha256=42d3106651618ccb3cd0554e2c9297a32929da848ac774956dd7e81ef6fcdf89 candidate_sha256=42d3106651618ccb3cd0554e2c9297a32929da848ac774956dd7e81ef6fcdf89
+RECIPROCAL_BENCH res=1920x1080 scene=triangle rounds=8 reference_ms=37.166,38.907,38.222 candidate_ms=44.176,41.880,35.284
+RECIPROCAL res=1920x1080 scene=perspective_texture ref_writes=886465 candidate_writes=886465 differing_pixels=0 differing_channels=0 max_rgb_error=0 ref_sha256=9a88176a8dac74a6faf0f001d165c82767d188ee72b6212641ae743a63423a6a candidate_sha256=9a88176a8dac74a6faf0f001d165c82767d188ee72b6212641ae743a63423a6a
+RECIPROCAL_BENCH res=1920x1080 scene=perspective_texture rounds=8 reference_ms=36.035,39.960,33.259 candidate_ms=41.208,38.899,39.283
+```
+
+The perspective-texture medians were 13.978 ms reference versus 16.627 ms candidate at 1024x768 and 36.035 ms reference versus 39.283 ms candidate at 1920x1080. The exact variant was slower in both. No QEMU run was made for a native candidate that failed the required performance gate. After removing the experiment, focused baseline checks returned to their stored checksums:
+
+```text
+$ python tests\soft3d_bench.py
+GOLDEN res=1024x768 scene=perspective_texture writes=335826 sha256=22beb925133fca077179b9081d0b9ce7b82403e60dc6f3d370de0e2145287112
+GOLDEN res=1920x1080 scene=perspective_texture writes=886465 sha256=9a88176a8dac74a6faf0f001d165c82767d188ee72b6212641ae743a63423a6a
+$ python tests\soft3d_native.py
+soft3d native: PASS (matrices, depth, culling, clipping, bounds, texture)
+```
+
+Decision: stop the 5c.2 interpolation experiment after three approaches. The existing fixed-point rasterizer/top-left-rule design remains NOT DONE. Continue with the independent 5d damage-accounting work; no performance claim is made for the rejected reciprocal experiment.
+
+## Phase 5d.2 focused damage accounting (2026-10-05)
+
+Added `tests/damage_accounting.py`. It uses the existing QMP-only disposable GUI fixture, reads guest compositor counters, verifies the Notes caret pixel, and checks the dock hover path. It does not alter the compositor. Builds and guests ran in `C:\Users\syltu\AppData\Local\Temp\PollikOS-damage-cee1731d354f4148a4ccc74d9dfc01ab`; `build\PollikData.img` in the workspace was not opened by the test run. The temporary build used a newly created sparse PollikFS disk and `-NoSync`.
+
+The isolated build and final TCG runs printed:
+
+```text
+PollikOS built: build/PollikOS-Alpha.img (820000 kernel bytes, 1602 sectors loaded at 1 MiB)
+$ python tests/damage_accounting.py --resolution 1024x768
+DAMAGE res=1024x768 stage=clock_minute_tick duration_s=32.30 frames=1 full=0 partial=1 dock=0 rects=1 composed_px=32768 lfb_px=32768
+DAMAGE_CLOCK res=1024x768 old=17:51 new=17:52 partial_frames=1 full_redraws=0
+DAMAGE res=1024x768 stage=idle_no_input_4s duration_s=4.00 frames=0 full=0 partial=0 dock=0 rects=0 composed_px=0 lfb_px=0
+DAMAGE_NOTES_STATE res=1024x768 overlay=0 active_animations=[] pointer=(760, 500)
+DAMAGE res=1024x768 stage=notes_static_caret_3s duration_s=3.00 frames=0 full=0 partial=0 dock=0 rects=0 composed_px=0 lfb_px=0
+DAMAGE_CARET res=1024x768 pixel=(562, 278) row=3 x=328 pixel_before=0x9470bd pixel_after=0x9470bd clock_before=17:52 clock_after=17:52
+DAMAGE res=1024x768 stage=dock_hover duration_s=1.50 frames=53 full=0 partial=0 dock=40 rects=93 composed_px=3650272 lfb_px=3663584
+PASS damage accounting: zero-work idle, Notes caret, Dock hover; RTC minute
+$ python tests/damage_accounting.py --resolution 1920x1080
+DAMAGE res=1920x1080 stage=clock_minute_tick duration_s=47.73 frames=1 full=0 partial=1 dock=0 rects=1 composed_px=61440 lfb_px=61440
+DAMAGE_CLOCK res=1920x1080 old=17:50 new=17:51 partial_frames=1 full_redraws=0
+DAMAGE res=1920x1080 stage=idle_no_input_4s duration_s=4.00 frames=0 full=0 partial=0 dock=0 rects=0 composed_px=0 lfb_px=0
+DAMAGE_NOTES_STATE res=1920x1080 overlay=0 active_animations=[] pointer=(760, 500)
+DAMAGE res=1920x1080 stage=notes_static_caret_3s duration_s=3.00 frames=0 full=0 partial=0 dock=0 rects=0 composed_px=0 lfb_px=0
+DAMAGE_CARET res=1920x1080 pixel=(562, 278) row=3 x=328 pixel_before=0x9470bd pixel_after=0x9470bd clock_before=17:51 clock_after=17:51
+DAMAGE res=1920x1080 stage=dock_hover duration_s=1.45 frames=52 full=0 partial=0 dock=39 rects=91 composed_px=3559348 lfb_px=3572660
+PASS damage accounting: zero-work idle, Notes caret, Dock hover; RTC minute
+```
+
+The clock's sole partial frame was exactly `width * 32` composed and presented pixels at both sizes (32,768 and 61,440). Four seconds of no input and three seconds with the stationary Notes caret both recorded zero frames and zero LFB pixels. The caret remained `0x9470bd` at its data-derived coordinate. Dock hover stayed partial (`full=0`); its measured totals include cursor damage and changing icon bounds. The dock stage is an interaction sample, not a steady per-frame throughput number.
+
+The harness was corrected before accepting the caret result. A probe taken immediately after opening Notes counted five partial frames and 773,120 pixels; each frame was 154,624 pixels (`1024 * 151`), consistent with the Dock launch bounce. The code starts a Dock launch animation when opening the app (`ui_anim_dock_launch`) and `ui_anim_has_active()` includes that animation even when the per-window animation array is inactive. The final harness waits for `g_dock_launch_app == 0xffffffff` before starting the Notes-caret interval. An initial non-warmed clock interval also included one one-shot full redraw; adding a two-second desktop-settle period produced the single-partial-frame readings above. These were fixture timing errors, not compositor fixes.
+
+Scope remains TCG with `-display none`; WHPX/SDL accounting and the full-screen damage-path audit are NOT RUN. No optimization or visual change was made in this phase.
+
+## Phase 5d.3 open-animation current baseline (2026-10-05)
+
+Before changing the animation compositor, reran the complete GUI benchmark against the same isolated 820,000-byte i386 kernel, TCG, qemu64, and `-display none`. Both benchmark reports ended with `status=PASS`; this is an emulator baseline, not a WHPX target result. The screenshot supplied by the user shows PollikMark's separate Compositor workload at 38 fps, but gives no accelerator/resolution and is not mixed into these measurements.
+
+```text
+$ python tests/benchmark_gui.py --headless --accel tcg --cpu qemu64 --resolution 1024x768
+1024x768 window_open_animation: 1 verified operations; 9.33 actual fps; 9.61 render/s
+1024x768 window_open_animation detail: dirty=540708 px/frame; phase_us input/app/layout/draw/compose/LFB=2/2/5/0/89978/780; frame mean/p95/max=104049/135032/135032 us; guest interval p50/p95/max=90792/147447/147447 us (4 samples; WM TSC presentation intervals)
+$ python tests/benchmark_gui.py --headless --accel tcg --cpu qemu64 --resolution 1920x1080
+1920x1080 window_open_animation: 1 verified operations; 19.09 actual fps; 20.88 render/s
+1920x1080 window_open_animation detail: dirty=753888 px/frame; phase_us input/app/layout/draw/compose/LFB=4/3/12/0/32486/1128; frame mean/p95/max=47900/93722/93722 us; guest interval p50/p95/max=34388/108568/108568 us (6 samples; WM TSC presentation intervals)
+$ Get-Content benchmark-1024x768.json -Raw | ConvertFrom-Json | Select-Object status
+status
+------
+PASS
+$ Get-Content benchmark-1920x1080.json -Raw | ConvertFrom-Json | Select-Object status
+status
+------
+PASS
+```
+
+At 1024x768, the mean composed area is 68.7% of the screen; at 1920x1080, it is 36.4%. The measured bottleneck phase was composition (89.978 ms and 32.486 ms per completed animation frame, respectively). This is the baseline for the next experiment. Cached transform changes, pixel-identical window-region goldens, and before/after results are NOT RUN; no compositor optimization is claimed here.
+
+A candidate packed constant-alpha blend was tested in isolation against the exact current per-channel formula before any production integration. It matched 514,000 seeded vectors over alpha 0..256, but native throughput was noisy and slower by median, so it was rejected without changing the compositor:
+
+```text
+$ python tests/anim_blend_native.py
+PASS animation blend exact parity: alpha=0..256 vectors=514000 seed=0x5d3
+BENCH animation_blend pixels=2073600 repeat=1 reference_ms=2.454 packed_ms=3.734 exact=1 sink=00e5f000
+BENCH animation_blend pixels=2073600 repeat=2 reference_ms=2.912 packed_ms=2.743 exact=1 sink=00000000
+BENCH animation_blend pixels=2073600 repeat=3 reference_ms=2.883 packed_ms=4.292 exact=1 sink=00e5f000
+```
+
+Reference median: 2.883 ms; candidate median: 3.734 ms. It is NOT integrated.

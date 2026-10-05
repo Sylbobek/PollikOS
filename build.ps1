@@ -3,6 +3,7 @@ param(
     [switch]$FormatData = $false,
     [switch]$LegacyTsc = $false,
     [switch]$LegacyDamage = $false,
+    [switch]$LegacyAtaRead = $false,
     [switch]$GfxReference = $false,
     [switch]$NoSync = $false
 )
@@ -39,6 +40,7 @@ foreach ($module in @('kernel','desktop','compositor','graphics','gfx_device','s
     $optimization = if ($module -eq 'wm') { '-Oz' } else { '-Os' }
     $moduleFlags = @()
     if ($module -eq 'compositor' -and $LegacyDamage) { $moduleFlags += '-DPOLLIK_COMPOSITOR_LEGACY_DAMAGE=1' }
+    if ($module -eq 'storage' -and $LegacyAtaRead) { $moduleFlags += '-DPOLLIK_ATA_SCALAR_READ=1' }
     Invoke-Checked clang (@('--target=i386-none-elf','-m32','-march=i386','-ffreestanding','-fno-pic','-fno-pie','-fno-stack-protector','-mno-sse','-mno-mmx',$optimization,'-Wall','-Wextra','-Werror') + $tscCompileFlags + $moduleFlags + @('-Ikernel/include','-Ikernel/gfx','-c',"kernel/$module.c",'-o',"build/$module.o"))
 }
 $gfxFlags = @()

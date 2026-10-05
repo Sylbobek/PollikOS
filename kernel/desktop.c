@@ -1111,6 +1111,8 @@ void dock_draw_pill(void) {
         rounded(x - 3, y + 5, width + 6, 88, 29, 0x514566, 28);
     }
     rounded(x, y, width, 84, radius, ui_theme()->surface, 112);
+    roundrect_border(x, y, width, 84, radius, 1,
+                     ui_is_dark() ? 0x3d465c : 0xf4f5ff);
 }
 
 void dock_draw_content(void) {
@@ -1216,6 +1218,13 @@ void desktop_draw_overlays(void) {
     }
 }
 
+static void desktop_wallpaper_timing(const char *phase, u32 start) {
+    char value[16];
+    number(value, ticks - start);
+    serial("[WALLPAPER] "); serial(phase); serial("_ticks=");
+    serial(value); serial("\n");
+}
+
 static u8 *desktop_decode_theme_wallpaper(int dark, int *width, int *height) {
     (void)dark;
     desktop_scan_wallpapers();
@@ -1255,10 +1264,14 @@ static u8 *desktop_decode_theme_wallpaper(int dark, int *width, int *height) {
     if (fd < 0) { serial("[WALLPAPER] open failed decoder=not-run\n"); return 0; }
     u8 *encoded = (u8 *)kmalloc(st.size);
     if (!encoded) { vfs_close(fd); serial("[WALLPAPER] allocation failed decoder=not-run\n"); return 0; }
+    u32 read_start = ticks;
     int got = vfs_read(fd, encoded, st.size);
     vfs_close(fd);
+    desktop_wallpaper_timing("read", read_start);
     if (got != (int)st.size) { kfree(encoded); serial("[WALLPAPER] short read decoder=not-run\n"); return 0; }
+    u32 decode_start = ticks;
     u8 *decoded = media_decode(encoded, st.size, width, height);
+    desktop_wallpaper_timing("decode", decode_start);
     kfree(encoded);
     if (!decoded || *width <= 0 || *height <= 0 ||
         (u64)(u32)*width * (u32)*height > 16u * 1024u * 1024u) {
@@ -1372,7 +1385,9 @@ static void desktop_paint_wallpaper_for_mode(u32 *wallpaper, int dark) {
     int image_width = 0, image_height = 0;
     u8 *image = desktop_decode_theme_wallpaper(dark, &image_width, &image_height);
     if (image) {
+        u32 scale_start = ticks;
         desktop_paint_theme_wallpaper(wallpaper, image, image_width, image_height, 256, dark);
+        desktop_wallpaper_timing("scale", scale_start);
         media_free(image);
         serial("[WALLPAPER] cache=ready\n");
         return;
@@ -1409,7 +1424,9 @@ void desktop_start(void) {
     ui_anim_init();
     desktop_items_init();
     dock_load_config();
+    compositor_splash("Loading wallpaper", 94);
     compositor_prepare_wallpapers();
+    compositor_splash("Preparing desktop", 98);
     wm_init(shell.width, shell.height);
     if (!welcome_is_first_boot()) {
         close_app(APP_WELCOME);

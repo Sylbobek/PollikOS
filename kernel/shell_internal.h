@@ -57,6 +57,7 @@ int desktop_bar_handle_click(int mx, int my);
 int desktop_bar_handle_pointer(int mx, int my);
 void desktop_draw_overlays(void);
 void desktop_paint_wallpaper(u32 *buffer);
+void desktop_paint_wallpaper_mode(u32 *buffer, int dark);
 void desktop_paint_wallpaper_fallback(u32 *buffer, int dark);
 void desktop_prepare_theme_wallpapers(u32 *dark_buffer, u16 *light_buffer,
                                      int light_width, int light_height);

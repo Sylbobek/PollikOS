@@ -3,12 +3,17 @@ No synthetic guest calls/memory writes; retain screenshot and raw results.
 """
 import argparse
 import json
+import os
+import re
 import struct
+import time
 from gui_metrics import Guest, BUILD, distribution
 
 
-def run(resolution, full_run=False):
-    with Guest(resolution, 'pollikmark') as g:
+def run(resolution, full_run=False, headless=False, accel=None, cpu=None):
+    whpx = (accel or os.environ.get('POLLIK_GUI_ACCEL', 'tcg')).lower() == 'whpx'
+    with Guest(resolution, 'pollikmark', headless=headless, accel=accel, cpu=cpu,
+               boot_timeout=180 if whpx else 40) as g:
         assert g.apps == 7
         scalar = lambda name: g.words(name)[0]
         def guards():
@@ -39,10 +44,11 @@ def run(resolution, full_run=False):
         g.wait(lambda: scalar('g_focused_window') == 6 and g.presented(6), 'F7 painted')
         assert g.window(6)[4:6] == (680,410)
         if full_run:
+            full_started = time.monotonic()
             key('ret')
-            g.wait(lambda: scalar('pollikmark_running') == 0 and
-                   scalar('pollikmark_test') == 7 and scalar('pollikmark_level') == 29,
-                   'all eight PollikMark workloads complete', 300)
+            g.wait(lambda: scalar('pollikmark_running') == 1, 'full PollikMark start', 20)
+            g.wait(lambda: scalar('pollikmark_running') == 0,
+                   'PollikMark full run ended within the 10-minute harness deadline', 600)
             levels = (1,4,1,3,5,3,1,30)
             raw = [[result(t, level) for level in range(levels[t])] for t in range(8)]
             compositor_frames = list(g.words('pollikmark_compositor_frame_stats'))
@@ -65,9 +71,25 @@ def run(resolution, full_run=False):
                       f"({len(completed)}/{levels[test]} levels; statuses={states})",flush=True)
             assert scalar('memory_bytes') == 0
             all_levels_completed = all(row[0] == 1 for test_rows in raw for row in test_rows)
+            full_elapsed = time.monotonic() - full_started
+            serial_text = g.log.read_text(errors='replace')
+            serial_rows = {}
+            pattern = r'^POLLIKMARK_RESULT test=(\d+) rate=(\d+) unit=([^ ]+) completed=(\d+) levels=(\d+)$'
+            for match in re.finditer(pattern, serial_text, flags=re.MULTILINE):
+                serial_rows[int(match.group(1))] = dict(rate=int(match.group(2)), unit=match.group(3),
+                    completed=int(match.group(4)), levels=int(match.group(5)))
+            assert set(serial_rows) == set(range(8)), f'guest serial summary missing: {serial_rows}'
+            for test, host_row in enumerate(rates):
+                assert serial_rows[test]['rate'] == host_row['rate'], (test, serial_rows[test], host_row)
+                print(f"GUEST_SERIAL {names[test]}: {serial_rows[test]['rate']} {serial_rows[test]['unit']} "
+                      f"({serial_rows[test]['completed']}/{serial_rows[test]['levels']} levels)", flush=True)
+            screenshot = g.screendump(BUILD / f'pollikmark-full-{resolution}-{g.accel}.ppm')
+            print(f'{resolution} QMP_SCREENSHOT path={screenshot} bytes={screenshot.stat().st_size}', flush=True)
             report = dict(status='PASS' if all_levels_completed else 'PARTIAL',
                           environment=g.environment,workloads=rates,raw_results=raw,
                           compositor_frame_us=compositor_frames,
+                          guest_serial_summary=serial_rows,
+                          full_run_host_seconds=full_elapsed,
                           timer=dict(clock_source=timer['clock_source'],
                                      clock_resolution_us=timer['clock_resolution_us'],
                                      tsc_khz=timer['tsc_khz']))
@@ -75,6 +97,7 @@ def run(resolution, full_run=False):
             (BUILD / f'pollikmark-full-{resolution}-{safe}.json').write_text(json.dumps(report,indent=2))
             state = 'PASS' if all_levels_completed else 'PARTIAL (not every level completed)'
             print(f'{resolution} full PollikMark {state}: accel={g.accel} cpu={g.cpu}',flush=True)
+            print(f'{resolution} FULL_RUN_SECONDS={full_elapsed:.1f} (limit=600)', flush=True)
             return
         # Real registry icon uses opaque packed-nibble alpha; verify the generated
         # palette indexes and source alpha, plus actual dock hit/focus behavior.
@@ -157,6 +180,9 @@ if __name__ == '__main__':
     p = argparse.ArgumentParser()
     p.add_argument('--resolution', choices=['1024x768','1920x1080'])
     p.add_argument('--full-run', action='store_true', help='run and report all eight PollikMark workloads')
+    p.add_argument('--headless', action='store_true', help='use display=none and capture the LFB with QMP')
+    p.add_argument('--accel', choices=('tcg','whpx'))
+    p.add_argument('--cpu', choices=('max','qemu64'))
     args = p.parse_args()
     for resolution in ([args.resolution] if args.resolution else ['1024x768','1920x1080']):
-        run(resolution,args.full_run)
+        run(resolution,args.full_run,args.headless,args.accel,args.cpu)

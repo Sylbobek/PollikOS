@@ -78,11 +78,16 @@ void rect(int x, int y, int w, int h, u32 c) {
     if (x + w > draw_clip.x2) w = draw_clip.x2 - x;
     if (y + h > draw_clip.y2) h = draw_clip.y2 - y;
     if (w <= 0 || h <= 0) return;
+#if defined(GFX_RECT_LEGACY)
     for (int j = y; j < y + h; j++) {
         u32 *row = &draw_target[j * draw_target_stride + x];
         u32 count = (u32)w;
         __asm__ volatile("cld; rep stosl" : "+D"(row), "+c"(count) : "a"(c) : "memory");
     }
+#else
+    gfx_fill_rect((gfx_u8 *)draw_target, (gfx_size_t)draw_target_stride * sizeof(u32),
+                  (gfx_size_t)x, (gfx_size_t)y, (gfx_size_t)w, (gfx_size_t)h, c);
+#endif
 }
 static inline u32 blend_precomputed(u32 bg, int inv, int cr, int cg, int cb) {
     int r = (((bg >> 16) & 255) * inv + cr) >> 8;

@@ -671,6 +671,11 @@ int pollikfs_read(vfs_file_t *file, void *buf, u32 count) {
 
     u32 total_read = 0;
     u8 *dest = (u8 *)buf;
+    /* Pointer blocks are immutable for this synchronous read. Keep one local
+     * block of pointers across data blocks; the data scratch buffer is reused
+     * below. No persistent cache: a later call observes writes/unlink normally. */
+    u8 pointer_buf[POLLIK2_BLOCK_SIZE];
+    u32 cached_pointer = 0, cached_outer = 0xffffffffu, cached_middle = 0;
 
     while (total_read < count) {
         u32 blk_idx = (file->offset + total_read) / POLLIK2_BLOCK_SIZE;
@@ -684,8 +689,11 @@ int pollikfs_read(vfs_file_t *file, void *buf, u32 count) {
             phys_blk = node.direct[blk_idx];
         } else if (blk_idx < POLLIK2_DIRECT_BLOCKS + POLLIK2_INDIRECT_ENTRIES) {
             if (node.indirect) {
-                if (!read_block(node.indirect, g_block_buf2)) return -1;
-                phys_blk = le32(g_block_buf2+(blk_idx-POLLIK2_DIRECT_BLOCKS)*4);
+                if (cached_pointer != node.indirect) {
+                    if (!read_block(node.indirect, pointer_buf)) return -1;
+                    cached_pointer = node.indirect;
+                }
+                phys_blk = le32(pointer_buf+(blk_idx-POLLIK2_DIRECT_BLOCKS)*4);
             }
         } else {
             u32 rest = blk_idx - POLLIK2_DIRECT_BLOCKS - POLLIK2_INDIRECT_ENTRIES;
@@ -693,11 +701,17 @@ int pollikfs_read(vfs_file_t *file, void *buf, u32 count) {
             u32 inner = rest % POLLIK2_INDIRECT_ENTRIES;
             if (outer >= POLLIK2_INDIRECT_ENTRIES) { corrupt(); return -1; }
             if (node.double_indirect) {
-                if (!read_block(node.double_indirect, g_block_buf)) return -1;
-                u32 middle = le32(g_block_buf+outer*4);
-                if (middle) {
-                    if (!read_block(middle, g_block_buf2)) return -1;
-                    phys_blk = le32(g_block_buf2+inner*4);
+                if (cached_outer != outer) {
+                    if (!read_block(node.double_indirect, g_block_buf)) return -1;
+                    cached_middle = le32(g_block_buf+outer*4);
+                    cached_outer = outer;
+                }
+                if (cached_middle) {
+                    if (cached_pointer != cached_middle) {
+                        if (!read_block(cached_middle, pointer_buf)) return -1;
+                        cached_pointer = cached_middle;
+                    }
+                    phys_blk = le32(pointer_buf+inner*4);
                 }
             }
         }

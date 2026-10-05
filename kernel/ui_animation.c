@@ -230,17 +230,12 @@ void ui_anim_update(u32 now_ms) {
             Window *w = wm_get_window(a->app_id);
             if (w) {
                 if (a->type == WINDOW_ANIM_MINIMIZE) {
-                    w->state = WINDOW_STATE_MINIMIZED;
-                    w->minimized = 1;
-                    w->visible = 0;
+                    /* WM owns the saved rectangle/state and focus handoff. */
+                    wm_minimize(a->app_id);
                 } else if (a->type == WINDOW_ANIM_OPEN || a->type == WINDOW_ANIM_RESTORE) {
-                    w->state = WINDOW_STATE_NORMAL;
-                    w->minimized = 0;
-                    w->visible = 1;
-                    w->x = a->end_x;
-                    w->y = a->end_y;
-                    w->width = a->end_w;
-                    w->height = a->end_h;
+                    /* wm_open/wm_unminimize already established authoritative
+                     * geometry. Finishing a visual animation must not demote
+                     * a restored maximized window or undo a user action. */
                 } else if (a->type == WINDOW_ANIM_CLOSE) {
                     w->open = 0;
                     w->visible = 0;

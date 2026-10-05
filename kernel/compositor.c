@@ -13,6 +13,7 @@
 
 static u32 *pixels, *wallpaper;
 static int wallpaper_theme = -1;
+static u32 *theme_wallpapers[2]; /* scaled once at boot; theme switch is a pointer swap */
 #define DOCK_CACHE_WIDTH (NUM_APPS * 68 + 144)
 static u32 dock_background[DOCK_CACHE_WIDTH * 145];
 static int dock_background_valid;
@@ -389,13 +390,16 @@ static int render_window_to_surface(int id, int is_active, const GraphicsClip *r
      * Geometry alpha is applied exactly once over the real scene below. */
     rect(wx, wy, ww, wh, body);
     rect(wx, wy, ww, 34, tb_bg);
+    if (is_active && ww > 24)
+        rect(wx + 12, wy + 1, ww - 24, 1,
+             blend(tb_bg, 0xffffff, is_dark ? 22 : 130));
     rect(wx + 1, wy + 33, ww - 2, 1, sep_col);
     u32 c_close = is_active ? 0xef4444 : (is_dark ? 0x483e44 : 0xb8adb5);
     u32 c_min   = is_active ? 0xf59e0b : (is_dark ? 0x48423e : 0xb8b2ad);
     u32 c_max   = is_active ? 0x10b981 : (is_dark ? 0x3e4842 : 0xadb8b2);
-    roundrect(wx + 12, wy + 11, 12, 12, 3, c_close);
-    roundrect(wx + 30, wy + 11, 12, 12, 3, c_min);
-    roundrect(wx + 48, wy + 11, 12, 12, 3, c_max);
+    roundrect(wx + 12, wy + 11, 12, 12, 6, c_close);
+    roundrect(wx + 30, wy + 11, 12, 12, 6, c_min);
+    roundrect(wx + 48, wy + 11, 12, 12, 6, c_max);
     if (is_active && g_hovered_window == id && shell.hovered_btn > 0) {
         if (shell.hovered_btn == 1) {
             u32 x_col = 0x5a0003;
@@ -1031,12 +1035,8 @@ void compositor_paint(int full) {
     }
     if (!full) full = 1;
     if (wallpaper_theme != shell.theme) {
-        /* Re-render the active theme once into the full-resolution u32 buffer.
-         * Light previously existed only as a half-res RGB565 cache that was
-         * bilinearly expanded per pixel on every repaint; dark simply memcpy'd
-         * a pre-rendered u32 wallpaper. That per-pixel expansion on each damage
-         * frame (drag, animation, clock tick) was the light-theme lag. */
-        desktop_paint_wallpaper(wallpaper);
+        if (theme_wallpapers[shell.theme]) wallpaper = theme_wallpapers[shell.theme];
+        else desktop_paint_wallpaper_fallback(wallpaper, !shell.theme);
         wallpaper_theme = shell.theme;
         full = 1;
     }
@@ -1220,7 +1220,13 @@ void compositor_init(void) {
              scene_pages * PMM_PAGE_SIZE * 2u);
 }
 void compositor_prepare_wallpapers(void) {
-    desktop_paint_wallpaper(wallpaper);
+    u32 pages = ((u32)shell.width * shell.height * sizeof(u32) + PMM_PAGE_SIZE - 1u) / PMM_PAGE_SIZE;
+    theme_wallpapers[shell.theme] = wallpaper;
+    theme_wallpapers[!shell.theme] = (u32 *)pmm_alloc_pages(pages);
+    desktop_paint_wallpaper_mode(wallpaper, !shell.theme);
+    if (theme_wallpapers[!shell.theme])
+        desktop_paint_wallpaper_mode(theme_wallpapers[!shell.theme], shell.theme);
+    else serial("[WALLPAPER] alternate cache unavailable; low-RAM gradient on switch\n");
     wallpaper_theme = shell.theme;
 }
 void compositor_wallpaper_changed(void) {

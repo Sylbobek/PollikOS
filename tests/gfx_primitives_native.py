@@ -21,4 +21,6 @@ for mode, define in [('reference', '-DGFX_REFERENCE=1'), ('fast', None)]:
         raise SystemExit(f'{mode} rectangle fuzz output missing: {result.stdout}{result.stderr}')
     if not any(line.startswith('BENCH gfx ') and f'mode={mode}' in line for line in lines):
         raise SystemExit(f'{mode} benchmark output missing: {result.stdout}{result.stderr}')
+    if not any(line.startswith('BENCH gfx_rect ') and f'mode={mode}' in line for line in lines):
+        raise SystemExit(f'{mode} rectangle benchmark output missing: {result.stdout}{result.stderr}')
     print('\n'.join(lines))

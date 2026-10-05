@@ -217,6 +217,26 @@ static double monotonic_ms(void) {
 #endif
 }
 
+static void row_fill_legacy(uint32_t *dst, size_t stride, size_t width,
+                            size_t height, uint32_t color) {
+    for (size_t y = 0; y < height; ++y)
+        gfx_fill_span(dst + y * stride, width, color);
+}
+
+static void row_blit_legacy(uint32_t *dst, size_t dst_stride,
+                            const uint32_t *src, size_t src_stride,
+                            size_t width, size_t height) {
+    for (size_t y = 0; y < height; ++y)
+        gfx_blit_row(dst + y * dst_stride, src + y * src_stride, width);
+}
+
+static void row_blend_legacy(uint32_t *dst, size_t dst_stride,
+                             const uint32_t *src, size_t src_stride,
+                             size_t width, size_t height) {
+    for (size_t y = 0; y < height; ++y)
+        gfx_blend_premul_span(dst + y * dst_stride, src + y * src_stride, width);
+}
+
 static int correctness(void) {
     uint32_t src_buf[264], dst_buf[264], expected[264];
     for (size_t n = 0; n <= 257; ++n) {
@@ -296,6 +316,117 @@ static int benchmark(void) {
            blend_ms, operations_mpx / blend_ms, blend_mb / blend_ms,
            (unsigned)bench_sink);
     }
+
+    enum { RW = 1920, RH = 1080, FILL_ROUNDS = 32, COPY_ROUNDS = 16,
+           BLEND_ROUNDS = 4, SMALL_W = 320, SMALL_H = 200, SMALL_ROUNDS = 8,
+           MASK_ROUNDS = 4 };
+    const size_t pitch = RW * sizeof(uint32_t);
+    uint8_t *mask = (uint8_t *)malloc(SMALL_W * SMALL_H);
+    if (!mask) { free(a); free(b); free(c); return 1; }
+    for (size_t i = 0; i < SMALL_W * SMALL_H; ++i) mask[i] = (uint8_t)(i * 37u + 11u);
+
+    for (unsigned repeat = 0; repeat < BENCH_REPEATS; ++repeat) {
+        double t0, rect_fill_ms, row_fill_ms, rect_copy_ms, row_copy_ms;
+        double rect_blend_ms, row_blend_ms;
+        if (repeat & 1u) {
+            t0 = monotonic_ms();
+            for (unsigned i = 0; i < FILL_ROUNDS; ++i)
+                row_fill_legacy(a, RW, RW, RH, 0x00123456u + i);
+            row_fill_ms = monotonic_ms() - t0;
+            t0 = monotonic_ms();
+            for (unsigned i = 0; i < FILL_ROUNDS; ++i)
+                gfx_fill_rect((gfx_u8 *)a, pitch, 0, 0, RW, RH, 0x00123456u + i);
+            rect_fill_ms = monotonic_ms() - t0;
+        } else {
+            t0 = monotonic_ms();
+            for (unsigned i = 0; i < FILL_ROUNDS; ++i)
+                gfx_fill_rect((gfx_u8 *)a, pitch, 0, 0, RW, RH, 0x00123456u + i);
+            rect_fill_ms = monotonic_ms() - t0;
+            t0 = monotonic_ms();
+            for (unsigned i = 0; i < FILL_ROUNDS; ++i)
+                row_fill_legacy(a, RW, RW, RH, 0x00123456u + i);
+            row_fill_ms = monotonic_ms() - t0;
+        }
+
+        if (repeat & 1u) {
+            t0 = monotonic_ms();
+            for (unsigned i = 0; i < COPY_ROUNDS; ++i)
+                row_blit_legacy(a, RW, c, RW, RW, RH);
+            row_copy_ms = monotonic_ms() - t0;
+            t0 = monotonic_ms();
+            for (unsigned i = 0; i < COPY_ROUNDS; ++i)
+                gfx_blit_rect((gfx_u8 *)a, pitch, 0, 0, (const gfx_u8 *)c, pitch,
+                              0, 0, RW, RH);
+            rect_copy_ms = monotonic_ms() - t0;
+        } else {
+            t0 = monotonic_ms();
+            for (unsigned i = 0; i < COPY_ROUNDS; ++i)
+                gfx_blit_rect((gfx_u8 *)a, pitch, 0, 0, (const gfx_u8 *)c, pitch,
+                              0, 0, RW, RH);
+            rect_copy_ms = monotonic_ms() - t0;
+            t0 = monotonic_ms();
+            for (unsigned i = 0; i < COPY_ROUNDS; ++i)
+                row_blit_legacy(a, RW, c, RW, RW, RH);
+            row_copy_ms = monotonic_ms() - t0;
+        }
+
+        if (repeat & 1u) {
+            t0 = monotonic_ms();
+            for (unsigned i = 0; i < BLEND_ROUNDS; ++i)
+                row_blend_legacy(a, RW, b, RW, RW, RH);
+            row_blend_ms = monotonic_ms() - t0;
+            t0 = monotonic_ms();
+            for (unsigned i = 0; i < BLEND_ROUNDS; ++i)
+                gfx_blend_premul_rect((gfx_u8 *)a, pitch, 0, 0, (const gfx_u8 *)b,
+                                      pitch, 0, 0, RW, RH);
+            rect_blend_ms = monotonic_ms() - t0;
+        } else {
+            t0 = monotonic_ms();
+            for (unsigned i = 0; i < BLEND_ROUNDS; ++i)
+                gfx_blend_premul_rect((gfx_u8 *)a, pitch, 0, 0, (const gfx_u8 *)b,
+                                      pitch, 0, 0, RW, RH);
+            rect_blend_ms = monotonic_ms() - t0;
+            t0 = monotonic_ms();
+            for (unsigned i = 0; i < BLEND_ROUNDS; ++i)
+                row_blend_legacy(a, RW, b, RW, RW, RH);
+            row_blend_ms = monotonic_ms() - t0;
+        }
+
+        t0 = monotonic_ms();
+        for (unsigned i = 0; i < SMALL_ROUNDS; ++i)
+            gfx_fill_rect_alpha((gfx_u8 *)a, pitch, 100, 100, SMALL_W, SMALL_H,
+                                0x00a060d0u, 151u);
+        double alpha_fill_ms = monotonic_ms() - t0;
+
+        t0 = monotonic_ms();
+        for (unsigned i = 0; i < MASK_ROUNDS; ++i)
+            gfx_rounded_rect_mask(mask, SMALL_W, SMALL_W, SMALL_H, 28u);
+        double mask_ms = monotonic_ms() - t0;
+        t0 = monotonic_ms();
+        for (unsigned i = 0; i < SMALL_ROUNDS; ++i)
+            gfx_fill_rect_masked((gfx_u8 *)a, pitch, 100, 100, SMALL_W, SMALL_H,
+                                 0x00a060d0u, 151u, mask, SMALL_W);
+        double masked_fill_ms = monotonic_ms() - t0;
+        bench_sink = a[(RH / 2u) * RW + RW / 2u] ^ mask[SMALL_W * SMALL_H / 2u];
+
+        double fill_mpx = (double)RW * RH * FILL_ROUNDS / 1000000.0;
+        double copy_mpx = (double)RW * RH * COPY_ROUNDS / 1000000.0;
+        double blend_mpx = (double)RW * RH * BLEND_ROUNDS / 1000000.0;
+        double small_mpx = (double)SMALL_W * SMALL_H * SMALL_ROUNDS / 1000000.0;
+        double mask_mpx = (double)SMALL_W * SMALL_H * MASK_ROUNDS / 1000000.0;
+        printf("BENCH gfx_rect mode=%s fill_Mpx_s=%.1f row_fill_Mpx_s=%.1f copy_Mpx_s=%.1f row_copy_Mpx_s=%.1f blend_Mpx_s=%.1f row_blend_Mpx_s=%.1f alpha_fill_Mpx_s=%.2f mask_Mpx_s=%.3f mask_ms=%.3f masked_fill_Mpx_s=%.2f sink=%08x\n",
+#if defined(GFX_REFERENCE)
+               "reference",
+#else
+               "fast",
+#endif
+               1000.0 * fill_mpx / rect_fill_ms, 1000.0 * fill_mpx / row_fill_ms,
+               1000.0 * copy_mpx / rect_copy_ms, 1000.0 * copy_mpx / row_copy_ms,
+               1000.0 * blend_mpx / rect_blend_ms, 1000.0 * blend_mpx / row_blend_ms,
+               1000.0 * small_mpx / alpha_fill_ms, 1000.0 * mask_mpx / mask_ms, mask_ms,
+               1000.0 * small_mpx / masked_fill_ms, (unsigned)bench_sink);
+    }
+    free(mask);
     free(a); free(b); free(c);
     return 0;
 }

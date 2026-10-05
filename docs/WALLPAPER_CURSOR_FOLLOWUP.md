@@ -259,3 +259,127 @@ pollikfs_install.PollikFsError: bitmap/references/free-block counter mismatch
 ```
 
 User clarification: "Yes, I was using it" in response to the normal QEMU/Settings question for 20:37:44. The whole-session hash change coincides with confirmed normal use; individual changed bytes were not fully attributed. Snapshot-probe preservation and refused sync are separate observations.
+
+## Runtime sync follow-up (2026-10-05)
+
+Superseded by the authorized persistent-disk repair and verification below.
+
+The normal launcher previously skipped `build.ps1` when both disk images already
+existed, so it also skipped the only system-file sync. `run.ps1` now validates
+and syncs the two stock files before a normal GUI launch. The sync tool still
+refuses unsupported, locked, corrupt or truncated images without changing them;
+the launcher reports the refusal and continues, allowing the guest's existing
+procedural fallback to work. Headless snapshot runs skip host-side sync and leave
+the source disk unchanged. `-DataImagePath` permits isolated launcher tests.
+
+A fresh build and the end-to-end check ran in a temporary repository copy. On a
+copy of the valid old-layout fixture, launcher sync printed `installed=2`, then
+the guest mounted PollikFS, selected `/usr/share/wallpapers/dark.png`, decoded
+1672x941, and matched five cache/scene pixels plus three QMP screendump pixels.
+The copied source image hash stayed identical during its snapshot boot. A
+damaged-tail copy printed `System sync REFUSED: damaged/truncated tail` and the
+launcher still printed its QEMU command. A fresh-build payload check confirmed
+the main kernel excludes both PNGs and the installer payload includes them.
+
+The real data disk was not opened or modified in this follow-up. The 2026-10-04
+evidence above records it as truncated to 16,777,216 bytes against the
+33,587,200-byte PollikFS minimum; if it is still in that state, safe sync will
+refuse and that disk will continue using the procedural fallback until a valid
+data image is restored. No repair, migration or format is attempted here.
+
+## Authorized persistent-disk repair (2026-10-05)
+
+After the user closed QEMU and requested the repair, the actual
+`build/PollikData.img` was examined under an exclusive lock. Its 16,777,216-byte
+length was shorter than the declared v2 geometry (33,587,200 bytes), and both
+free counters were stale. All referenced blocks existed; bitmap ownership was
+exact, with no duplicate or missing allocated blocks. The missing tail was
+entirely unallocated. This explains why strict system-file sync refused the
+image and the desktop used its procedural fallback.
+
+`tools/repair_pollikfs_tail.py` is an explicit repair tool, never invoked
+automatically by build or run. It validates the existing geometry, references,
+directory tree and bitmap before writing, refuses missing allocated data, saves
+an exact original backup, extends only the unallocated tail with zeros and
+corrects the eight counter bytes. No format or migration is performed.
+The repair was first tested on a copy. After repair and wallpaper installation,
+all 10 original regular-file hashes, all 20 original live inode records and
+all 19 populated directory entries were unchanged. The original user account
+and appearance settings were preserved.
+
+Actual commands and output:
+
+```text
+python tools\repair_pollikfs_tail.py build\PollikData.img --backup build\wallpaper-fix-evidence\PollikData-original-20261005.img
+REPAIR original_bytes=16777216 repaired_bytes=33587200 allocated_blocks=74 missing_allocated_blocks=0
+REPAIR free_blocks=32700->32694 free_inodes=498->492
+BACKUP build\wallpaper-fix-evidence\PollikData-original-20261005.img bytes=16777216 SHA256=8d8f4c664f9e95ee28a007af35f4e93107f90dd519053ef6f3782e0021ac3221
+PRESERVED all_original_file_hashes=10; original_bytes_except_8_counter_bytes=identical
+python tools\sync_system_files.py build\PollikData.img
+System sync: installed=2 changed_blocks=2387 image_bytes=33587200; tail untouched
+SYNC /usr/share/wallpapers/light.png 1294630 0507c25b6d8eba6f6668f573f7c17580acb8e9fde40c9e57efe2d32eebfb01a2
+SYNC /usr/share/wallpapers/dark.png 1145014 0bf776a2cdb347ec4c92730df143590091249049b24d95e046d5af15c6b8ff3d
+PASS actual PollikData: original_files=10 live_inodes_unchanged=20 populated_entries_unchanged=19 backup_byte_identical=True
+ACTUAL_IMAGE bytes=33587200 free_blocks=30295 free_inodes=487
+```
+
+Fresh build and focused verification in the current repository:
+
+```text
+.\build.ps1 -NoSync
+PollikOS built: build/PollikOS-Alpha.img (820000 kernel bytes, 1602 sectors loaded at 1 MiB)
+python tests\pollikfs_tail_repair.py
+PASS tail repair: original backup exact; all file hashes and live metadata preserved; zero tail; exact counters
+PASS missing-allocated: original byte-identical
+PASS orphan-bitmap: original byte-identical
+PASS wrong-geometry: original byte-identical
+PASS existing backup: not overwritten; source unchanged
+python tests\wallpaper_payload.py
+PASS: main kernel excludes PNGs; installer payload includes both (2439656 bytes)
+python tests\system_file_sync.py
+PASS system-file sync preservation and refusal cases
+python tests\smoke.py --notes-only
+RAW wallpaper LFB changed pixels 33480
+PASS: focused GUI cursor, Terminal, Notes editing and wheel round trip
+PASS: Settings lists PollikFS wallpapers and persists the selected name
+PASS: pointer acceleration can be disabled and persists
+```
+
+Both stock wallpapers were checked with the freshly built current kernel on
+disposable copies of the repaired disk at 1920x1080. Only these copies received
+the known fixture account; the actual user account was untouched. The probe
+uses the original five exact cache/scene assertions and three exact LFB
+samples, without skipping mismatched candidates.
+
+```text
+python tests\wallpaper_probe.py --data C:\Users\syltu\AppData\Local\Temp\pollikos-wallpaper-repair-u3do0z55\boot-light.img --resolution 1920x1080
+PASS synced wallpaper light.png: five independent cache/scene pixel samples; three LFB samples; fallback absent
+python tests\wallpaper_probe.py --data C:\Users\syltu\AppData\Local\Temp\pollikos-wallpaper-repair-u3do0z55\boot-dark.img --resolution 1920x1080
+PASS synced wallpaper dark.png: five independent cache/scene pixel samples; three LFB samples; fallback absent
+```
+
+The actual repaired user disk was also booted with snapshot mode. Its login
+screen stayed active because the user's password was not entered. This run
+proved mount, decoder and five exact cache pixels, not an unlocked user desktop:
+
+```text
+[BOOT:INFO] PollikFS v2 superblock mounted successfully
+[WALLPAPER] path=/usr/share/wallpapers/light.png mount=ready
+[WALLPAPER] /usr/share: wallpapers
+[WALLPAPER] decoder=ok dimensions=1672x941
+[WALLPAPER] cache=ready
+ACTUAL_CACHE_PIXEL 25,100 expected=88b2e0 actual=88b2e0
+ACTUAL_CACHE_PIXEL 1895,110 expected=e2e8f2 actual=e2e8f2
+ACTUAL_CACHE_PIXEL 25,540 expected=88a9d2 actual=88a9d2
+ACTUAL_CACHE_PIXEL 1895,540 expected=fff1d5 actual=fff1d5
+ACTUAL_CACHE_PIXEL 1895,890 expected=dfdce3 actual=dfdce3
+PASS actual PollikData snapshot boot: mounted, PNG decoded, five cache pixels exact, account untouched
+ACTUAL_SNAPSHOT_SHA256 before=7abe4cc5f8ca2fdd45668bcc562809bf7bc4369ca2ed9cb1e01b39a32a805514 after=7abe4cc5f8ca2fdd45668bcc562809bf7bc4369ca2ed9cb1e01b39a32a805514
+```
+
+Evidence is in `build/wallpaper-fix-evidence/`: original image backup,
+before/after file manifests, actual-boot serial log, and light/dark desktop
+screenshots. Kernel size before this repair was NOT MEASURED; current
+`build/kernel.bin` is 820,000 bytes. Full unrelated regression suites,
+x86_64 suites and a fresh installer end-to-end run are NOT RUN in this repair.
+The installer payload inclusion test above was run.

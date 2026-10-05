@@ -27,8 +27,8 @@ startup. TCG measurements below therefore use the test harness's QMP,
 | 5c.4 generated-code gate | Partial | `llvm-nm -u build/soft3d.o` showed no `__divdi3`, `__muldi3`, or `__udivdi3` | `397c43b` | x87 divide count per hot pixel loop |
 | 5c.5 PollikMark 3D | Not done | TCG full run logged `AssertionError: all eight PollikMark workloads complete` after its 300-second deadline | `1ce299e` | Triangle/Cube/Geometry/Texture before/after scores at both resolutions and accelerators |
 | 5d.1 guest timing histories | Partial | `tests/test_perf.py` passed both sizes; drag/open-animation intervals are in `PERF_LOG.md` | `3f13c63` | WHPX/SDL histories and guest idle histogram |
-| 5d.2 damage accounting | Partial | TCG drag dirty pixels were 157,646 at 1024x768 and 157,659 at 1920x1080; compositor probe dirty pixels 322,905 and 342,466 | `3f13c63` | Notes caret, clock, dock-hover and idle zero-copy matrix; full-screen damage-path audit |
-| 5d.3 open-animation reduction | Not done | Current TCG dirty pixels/frame: 537,946 at 1024x768 and 835,272 at 1920x1080 | `3f13c63` | Cached transform, pixel-identical end-state comparison |
+| 5d.2 damage accounting | Partial | `tests/damage_accounting.py` records RTC, idle, Notes caret and Dock at both resolutions under TCG; raw output in `PERF_LOG.md` | `3f13c63` + this follow-up | WHPX/SDL matrix and full-screen damage-path audit |
+| 5d.3 open-animation reduction | Not done | Fresh TCG headless baseline: 540,708 pixels/frame and 104.049 ms mean at 1024x768; 753,888 and 47.900 ms at 1920x1080 | `3f13c63` + this follow-up | Cached transform, pixel-identical end-state comparison |
 | 5d.4 frame pacing | Not done | Existing timer reports `source=1 resolution_us=1`; measured TCG open-animation interval max was 122.669 ms / 82.186 ms | `3f13c63` | Fixed 16.67 ms deadlines, WHPX p50/p95/max, idle `hlt` verification |
 | 5d.5 PollikMark compositor metric | Done for explanation; measurements partial | Source uses `frames * 1,000,000 / elapsed_us`; single-workload TCG probes completed at both sizes below | `3f13c63` | WHPX/SDL measurement; no score or denominator change was needed |
 | 5d.6 PollikMark memory rate | Done before this session | `docs/MILESTONE5_FOLLOWUP.md`: `RAW Memory accel=whpx ... rate=93597604855 B/s`; native 64-bit test also passes | Prior 5a commit | Full eight-workload PollikMark suite under either accelerator in this phase |
@@ -89,8 +89,7 @@ instead measured 11.391 ms mean frame duration and 42 fps at 1920x1080 TCG.
   after comparisons.
 - Integer fixed-point rasterizer, its expanded edge/texture tests, full x87
   hot-loop instruction count, and measured WHPX 3D scores.
-- Idle desktop zero-frame/zero-LFB-copy test; per-scenario idle histogram;
-  Notes caret, clock and dock damage matrix.
+- WHPX/SDL damage accounting matrix and full-screen damage-path audit.
 - Window-open animation optimization and golden/screendump end-state compare.
 - 60-Hz/25-ms WHPX frame-pacing target. SDL/WHPX measurements are blocked by
   QEMU startup termination, and the measured TCG open-animation maxima exceed
@@ -103,3 +102,25 @@ The final report itself is documentation-only and is committed separately.
 The pre-existing `add1308` commit groups the 5b primitive library, its initial
 native tests and production row-blit integration; those substeps do not have
 separate commit IDs in the preserved history.
+
+## Rectangle primitive integration follow-up (2026-10-05)
+
+The i386 compositor `rect()` path now calls `gfx_fill_rect()` by default, with
+the old assembly path retained behind `-DGFX_RECT_LEGACY=1`. The 8x8 rounded
+corner coverage output remains exact while only corner patches are calculated.
+Native legacy-versus-primitive scene and hardware hashes match:
+
+```text
+PASS rect legacy/primitive pixel parity scene=29cdb7eb565afb73 hardware=b7f00ff433c10c0c
+```
+
+In the same native harness, the median time for four 320x200 masks fell from
+12.836 ms to 0.109 ms (about 118x). Fill and blit rate measurements were noisy
+and showed no consistent improvement, so no broader speedup is claimed.
+
+The latest isolated i386 build was 819656 bytes (`build\kernel.bin`), compared
+with 819592 bytes before this integration (+64 bytes). `gfx_primitives_native.py`,
+`held_drag.py`, `smoke.py --notes-only`, full `smoke.py`, and
+`corners_guards.py` passed in the isolated copy. Broader PollikMark TCG/WHPX
+measurements and the remaining requested regression matrix were NOT RUN in
+this follow-up.

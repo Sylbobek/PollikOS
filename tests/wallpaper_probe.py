@@ -19,11 +19,25 @@ def digest(path):
 before = digest(args.data) if args.data else None
 with Guest(args.resolution, 'wallpaper-persistent-probe' if args.data else 'wallpaper-probe',
            data_image=args.data, boot_only=bool(args.data)) as g:
+    if args.data and 'AUTH: login required' in g.log.read_text():
+        for key in 'test123':
+            g.hmp('sendkey ' + key)
+        g.hmp('sendkey ret')
+        g.wait(lambda: 'AUTH: login accepted' in g.log.read_text(), 'snapshot desktop login', 60)
     for line in g.log.read_text().splitlines():
         if 'WALLPAPER' in line or 'wallpaper unavailable' in line or 'superblock mounted' in line:
             print(line, flush=True)
-    if not args.data:
-        image = Image.open(ROOT / 'assets/Background_LightTheme.png').convert('RGBA')
+    log_text = g.log.read_text()
+    path_line = next((line for line in log_text.splitlines()
+                      if line.startswith('[WALLPAPER] path=')), None)
+    assert path_line, 'wallpaper loader did not report the selected path'
+    selected = path_line.split('path=', 1)[1].split()[0].rsplit('/', 1)[-1]
+    stock_assets = {
+        'light.png': ROOT / 'assets/Background_LightTheme.png',
+        'dark.png': ROOT / 'assets/Background_BlackTheme.png',
+    }
+    if selected in stock_assets:
+        image = Image.open(stock_assets[selected]).convert('RGBA')
         iw, ih = image.size
         vw, vh, cx, cy = iw, ih, 0, 0
         if iw*g.height > ih*g.width: vw=ih*g.width//g.height; cx=(iw-vw)//2
@@ -40,8 +54,8 @@ with Guest(args.resolution, 'wallpaper-persistent-probe' if args.data else 'wall
             actual = g.backbuffer_pixel(x,y)
             assert cached == actual == expected, (x,y,hex(expected),hex(cached),hex(actual))
             print(f'PIXEL {x},{y} source={sx},{sy} expected={expected:06x} cache={cached:06x} scene={actual:06x}',flush=True)
-        assert 'GFX wallpaper unavailable' not in g.log.read_text()
-        shot = BUILD / f'wallpaper-synced-{args.resolution}.ppm'
+        assert 'GFX wallpaper unavailable' not in log_text
+        shot = BUILD / f'wallpaper-synced-{selected[:-4]}-{args.resolution}.ppm'
         points=((25,100),(g.width-25,110),(g.width-25,g.height-190))
         lfb,pitch,bpp=(g.words(n)[0] for n in ('address','stride','bytes'))
         # Account setup's marker precedes the first desktop presentation. Wait
@@ -58,7 +72,10 @@ with Guest(args.resolution, 'wallpaper-persistent-probe' if args.data else 'wall
                 assert frame.getpixel((x,y)) == ((expected>>16)&255,(expected>>8)&255,expected&255)
             frame.save(shot.with_suffix('.png'))
         finally:g.qmp('cont')
-        print('PASS synced wallpaper: five independent cache/scene pixel samples; three LFB samples; fallback absent')
+        print(f'PASS synced wallpaper {selected}: five independent cache/scene pixel samples; three LFB samples; fallback absent')
+    else:
+        assert args.data, f'unexpected non-stock wallpaper selection: {selected}'
+        print(f'NOT RUN stock pixel comparison: selected custom wallpaper {selected}')
 if args.data:
     after=digest(args.data)
     assert after==before

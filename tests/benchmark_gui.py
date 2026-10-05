@@ -10,15 +10,18 @@ import time
 from gui_metrics import BUILD, Guest, stage_result
 
 
-def benchmark(resolution):
+def benchmark(resolution, headless=False, accel=None, cpu=None):
     report = dict(status='RUNNING', stages=[], historical_before='NOT VERIFIED',
                   difference='not comparable: old instrumentation/scenario were invalid')
     path = BUILD / f'benchmark-{resolution}.json'
     started = time.monotonic()
     try:
-        with Guest(resolution) as g:
+        with Guest(resolution, headless=headless, accel=accel, cpu=cpu) as g:
             report['environment'] = g.environment
             report['serial_log'] = str(g.log)
+            screenshot = g.screendump(BUILD / f'benchmark-headless-{resolution}.ppm') if g.headless else None
+            if screenshot:
+                print(f'{resolution} QMP_SCREENSHOT path={screenshot} bytes={screenshot.stat().st_size}', flush=True)
             def finish(name, before, t0, operations):
                 result = stage_result(name, before, g.capture(), t0, operations)
                 report['stages'].append(result)
@@ -33,9 +36,19 @@ def benchmark(resolution):
                       f'{phases["draw"]}/{phases["composition"]}/{phases["present"]}; '
                       f'frame mean/p95/max={result["frame_history"]["mean_us"]:.0f}/'
                       f'{result["frame_history"]["p95_us"]}/{result["frame_history"]["max_us"]} us; '
-                      f'interval mean/p95/max={result["interval_history"]["mean_us"]:.0f}/'
-                      f'{result["interval_history"]["p95_us"]}/{result["interval_history"]["max_us"]} us', flush=True)
+                      f'guest interval p50/p95/max='
+                      f'{(str(result["interval_history"]["p50_us"]) + "/" + str(result["interval_history"]["p95_us"]) + "/" + str(result["interval_history"]["max_us"])) if result["interval_history"]["count"] else "NA/NA/NA"} us '
+                      f'({result["interval_history"]["count"]} samples; WM TSC presentation intervals)', flush=True)
                 return result
+
+            before, t0 = g.capture(), time.monotonic()
+            time.sleep(10)
+            x, y = g.pointer()
+            wake_x = x + 1 if x + 1 < g.width else x - 1
+            g.move(wake_x, y)
+            g.wait(lambda: g.stats()['frame_count'] > before['frame_count'],
+                   'idle wake cursor frame was not presented', 5)
+            finish('idle_10s', before, t0, 1)
 
             before, t0 = g.capture(), time.monotonic()
             for app in (1, 3, 4, 0, 2):
@@ -163,9 +176,12 @@ def benchmark(resolution):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--resolution', action='append')
+    parser.add_argument('--headless', action='store_true', help='use display=none and capture the LFB with QMP')
+    parser.add_argument('--accel', choices=('tcg', 'whpx'))
+    parser.add_argument('--cpu', choices=('max', 'qemu64'))
     args = parser.parse_args()
     for resolution in args.resolution or ['1024x768', '1920x1080']:
-        benchmark(resolution)
+        benchmark(resolution, args.headless, args.accel, args.cpu)
 
 
 if __name__ == '__main__':

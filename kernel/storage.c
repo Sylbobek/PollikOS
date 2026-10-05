@@ -48,9 +48,19 @@ static int ata_read_once(u8 drive, u32 lba, void *buffer) {
     outb(0x1f5, lba >> 16);
     outb(0x1f7, 0x20);
     if (!ata_wait(1)) return 0;
+#if defined(POLLIK_X64) || defined(POLLIK_ATA_SCALAR_READ)
     for (int i = 0; i < 256; i++) {
         ((u16 *)buffer)[i] = inw(0x1f0);
     }
+#else
+    /* One string-I/O transfer, rather than 256 HAL calls / hypervisor exits.
+     * Flat ES maps the same buffer as DS; REP consumes exactly one sector.
+     * Keep the DRQ/completion checks and reset/retry contract unchanged. */
+    void *destination = buffer;
+    u32 words = 256;
+    __asm__ volatile("cld; rep insw" : "+D"(destination), "+c"(words)
+                     : "d"((u16)0x1f0) : "memory");
+#endif
     for (int i = 0; i < 4; i++)
         inb(0x3f6);
     if (!ata_wait(0)) return 0;

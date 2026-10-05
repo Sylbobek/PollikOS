@@ -105,6 +105,8 @@ void desktop_paint_wallpaper(u32 *dst) {
     for (int y = 0; y < H; y++) for (int x = 0; x < W; x++)
         dst[y * W + x] = 0x8a9bac + (u32)((x + y) % 31);
 }
+void desktop_paint_wallpaper_mode(u32 *dst, int dark) { (void)dark; desktop_paint_wallpaper(dst); }
+void desktop_paint_wallpaper_fallback(u32 *dst, int dark) { (void)dark; desktop_paint_wallpaper(dst); }
 void desktop_draw_bar(void) { text(20, 7, "Scene bar", 0x202020, 1); }
 void dock_draw_pill(void) {
     int width = APP_COUNT * 68 + 48;
@@ -288,6 +290,14 @@ static int framebuffer_rows(void) {
     printf("PASS 24/32-bpp framebuffer channel order, padded pitch, partial rows\n");
     return 1;
 }
+static u64 test_pixel_hash(const u32 *buffer) {
+    u64 hash = 1469598103934665603ull;
+    for (int i = 0; i < N; i++) {
+        hash ^= buffer[i];
+        hash *= 1099511628211ull;
+    }
+    return hash;
+}
 #include "corners.h"
 int main(void) {
     setup();
@@ -297,5 +307,9 @@ int main(void) {
     failures += !framebuffer_rows();
     failures += !corner_pixels();
     failures += !corner_masks();
+    if (!failures)
+        printf("PIXEL_HASH scene=%016llx hardware=%016llx\n",
+               (unsigned long long)test_pixel_hash(scene),
+               (unsigned long long)test_pixel_hash(hardware));
     return failures != 0;
 }

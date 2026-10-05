@@ -4,7 +4,7 @@
 #include "../soft3d.h"
 
 /* Method: deterministic workloads, >=2s/level and >=3 completed iterations,
- * 10s hard deadline (discard incomplete iteration). Exact top-128 intervals
+ * 30s hard deadline (discard incomplete iteration). Exact top-128 intervals
  * for ceil(n/100), n<=8192, so the 1% low is a real tail rather than two
  * samples; intervals include cooperative scheduling and painting.
  * Throughput uses measured slice time, NOT presentation FPS. No render work,
@@ -26,10 +26,10 @@
 #define PM_BLUE 0x60a5fau
 #define PM_PINK 0xf472b6u
 #define PM_TEXSIZE 128
-/* Longer, denser sampling: >=2s per level, 10s hard deadline and up to 8192
+/* Longer, denser sampling: >=2s per level, 30s hard deadline and up to 8192
  * intervals so the 1% low averages ~82 real samples instead of two. */
 #define PM_LEVEL_MIN_US 2000000u
-#define PM_LEVEL_MAX_US 10000000u
+#define PM_LEVEL_MAX_US 30000000u
 #define PM_INTERVAL_CAP 8192
 /* Keep the slowest 5% (plus margin) so both p95 and p99 are real order
  * statistics over the whole level, not just the top 1%. */
@@ -236,6 +236,25 @@ static u64 pm_test_rate(int t) {
         total+=r->rate;count++;
     }
     return count?gfx_ratio64(total,count):0;
+}
+static void pm_serial_u32(u32 value) {
+    char text[12];int k=pm_put(text,0,value);text[k]=0;serial(text);
+}
+static void pm_serial_u64(u64 value) {
+    char text[24];int k=pm_put64(text,0,value);text[k]=0;serial(text);
+}
+static void pm_serial_full_summary(void) {
+    for(u32 t=0;t<8;t++) {
+        u32 completed=0;
+        for(u32 l=0;l<levels[t];l++)if(pollikmark_results[t][l].status==1)completed++;
+        serial("POLLIKMARK_RESULT test=");pm_serial_u32(t);
+        serial(" rate=");pm_serial_u64(pm_test_rate((int)t));
+        serial(" unit=");serial(unit_names[t]);
+        serial(" completed=");pm_serial_u32(completed);
+        serial(" levels=");pm_serial_u32(levels[t]);
+        serial("\n");
+    }
+    serial("POLLIKMARK_FULL_END\n");
 }
 static u32 pm_test_levels_done(int t) {
     u32 done=0;
@@ -597,7 +616,7 @@ static void advance(u32 status) {
     if(++pollikmark_level>=levels[pollikmark_test]) {
         if(!all) {pollikmark_level--;pollikmark_running=0;message="Completed - raw results retained";return;}
         pollikmark_level=0;pollikmark_test++;
-        if(pollikmark_test==8) {pollikmark_test=7;pollikmark_level=29;pollikmark_running=all=0;message="Full run complete - see RESULTS SUMMARY";summary=1;return;}
+        if(pollikmark_test==8) {pollikmark_test=7;pollikmark_level=29;pollikmark_running=all=0;message="Full run complete - see RESULTS SUMMARY";summary=1;pm_serial_full_summary();return;}
     }
     /* Failed memory sizes are recorded, never dereferenced. End at first
      * exhausted size: larger contiguous allocations cannot be assumed. */

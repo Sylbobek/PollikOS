@@ -8,6 +8,8 @@ static int failed, allocations, frees, fail_after=-1, painting;
 static u64 clock_us;
 static u32 ui[680*410];
 static int capture_text, text_count;
+static char serial_capture[4096];
+static unsigned serial_length;
 static struct { int x,y,w; } text_boxes[64];
 #define CHECK(x) do {if(!(x)){printf("FAIL %d: %s\n",__LINE__,#x);failed++;}}while(0)
 _Static_assert(sizeof(MarkResult)==68,"internal probe with 64-bit rate and units");
@@ -36,6 +38,8 @@ void app_host_free(void *p,u32 bytes){
 }
 int sys_get_glyph_advance(u8 c,int scale){(void)c;return 6*scale;}
 void number(char *b,u32 n){char a[10];int i=0,j=0;do{a[i++]=(char)('0'+n%10);n/=10;}while(n);while(i)b[j++]=a[--i];b[j]=0;}
+void serial(const char *s){while(*s&&serial_length+1<sizeof(serial_capture))serial_capture[serial_length++]=*s++;serial_capture[serial_length]=0;}
+static int has_text(const char *haystack,const char *needle){for(;*haystack;haystack++){const char *a=haystack,*b=needle;while(*a&&*b&&*a==*b){a++;b++;}if(!*b)return 1;}return 0;}
 void ui_bridge_rect(int x,int y,int w,int h,u32 c){
     CHECK(x>=0 && y>=34 && w>=0 && h>=0 && x+w<=win_w && y+h<=win_h);
     for(int j=y;j<y+h;j++)for(int i=x;i<x+w;i++)if(i>=0 && i<680 && j>=0 && j<410)ui[j*680+i]=c;
@@ -161,6 +165,7 @@ static void detailed_info_layout(void){
     }
 }
 static void memory_rate64(void){
+    CHECK(PM_LEVEL_MAX_US==30000000u);
     CHECK(sizeof(frame_units)==8);
     pollikmark_test=7;pollikmark_level=0;n=3;
     units=1ull<<34;measured_us=1000000;sum_us=1000000;
@@ -175,6 +180,9 @@ static void memory_rate64(void){
     CHECK(same_text(formatted,"17.1G"));
     printf("RAW memory units=%llu rate=%llu formatted=%s\n",
         (unsigned long long)live_result.units,(unsigned long long)live_result.rate,formatted);
+    serial_length=0;serial_capture[0]=0;pm_serial_full_summary();
+    CHECK(has_text(serial_capture,"POLLIKMARK_RESULT test=7 rate=17179869184 unit=B/s completed=1 levels=30"));
+    CHECK(has_text(serial_capture,"POLLIKMARK_FULL_END\n"));
     pm_short(formatted,0xffffffffffffffffull);
     CHECK(same_text(formatted,"18446744073.7G"));
 }

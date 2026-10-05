@@ -101,8 +101,22 @@ void gfx_fill_rect(gfx_u8 *dst, gfx_size_t dst_pitch_bytes,
                    gfx_size_t height, gfx_u32 color) {
     while (height--) {
         gfx_u8 *row = dst + y * dst_pitch_bytes + x * 4u;
-        for (gfx_size_t i = 0; i < width; ++i)
-            store_le_pixel(row + i * 4u, color);
+        if (((gfx_size_t)row & 3u) == 0) {
+#if !defined(GFX_REFERENCE) && (defined(__i386__) || defined(__x86_64__))
+            gfx_u32 *words = (gfx_u32 *)row;
+            gfx_size_t count = width;
+            __asm__ volatile("cld; rep stosl"
+                             : "+D"(words), "+c"(count)
+                             : "a"(color)
+                             : "cc", "memory");
+#else
+            gfx_u32 *words = (gfx_u32 *)row;
+            for (gfx_size_t i = 0; i < width; ++i) words[i] = color;
+#endif
+        } else {
+            for (gfx_size_t i = 0; i < width; ++i)
+                store_le_pixel(row + i * 4u, color);
+        }
         ++y;
     }
 }
@@ -126,7 +140,11 @@ void gfx_blit_rect(gfx_u8 *dst, gfx_size_t dst_pitch_bytes,
         gfx_u8 *d = dst + dst_offset + y * dst_pitch_bytes;
         const gfx_u8 *s = src + src_offset + y * src_pitch_bytes;
         gfx_size_t bytes = width * 4u;
-        if ((gfx_size_t)d > (gfx_size_t)s) {
+        gfx_size_t da = (gfx_size_t)d, sa = (gfx_size_t)s;
+        int disjoint = da <= sa ? sa - da >= bytes : da - sa >= bytes;
+        if (((da | sa) & 3u) == 0 && disjoint) {
+            gfx_blit_row((gfx_u32 *)d, (const gfx_u32 *)s, width);
+        } else if (da > sa) {
             while (bytes) { --bytes; d[bytes] = s[bytes]; }
         } else {
             for (gfx_size_t i = 0; i < bytes; ++i) d[i] = s[i];
@@ -157,31 +175,33 @@ void gfx_rounded_rect_mask(gfx_u8 *mask, gfx_size_t mask_pitch_bytes,
                            gfx_size_t radius) {
     if (radius > width / 2u) radius = width / 2u;
     if (radius > height / 2u) radius = height / 2u;
-    gfx_size_t radius16 = radius * 16u;
-    gfx_size_t right16 = (width - radius) * 16u;
-    gfx_size_t bottom16 = (height - radius) * 16u;
-    gfx_size_t radius_sq = radius16 * radius16;
-
     for (gfx_size_t y = 0; y < height; ++y) {
         gfx_u8 *row = mask + y * mask_pitch_bytes;
-        for (gfx_size_t x = 0; x < width; ++x) {
+        for (gfx_size_t x = 0; x < width; ++x) row[x] = 255u;
+    }
+    if (!radius) return;
+
+    gfx_size_t radius16 = radius * 16u;
+    gfx_size_t radius_sq = radius16 * radius16;
+
+    for (gfx_size_t y = 0; y < radius; ++y)
+        for (gfx_size_t x = 0; x < radius; ++x) {
             gfx_u32 covered = 0;
             for (gfx_u32 sy = 0; sy < 8u; ++sy) {
                 gfx_size_t qy = y * 16u + sy * 2u + 1u;
-                gfx_size_t cy = qy < radius16 ? radius16 :
-                                (qy > bottom16 ? bottom16 : qy);
-                gfx_size_t dy = qy < cy ? cy - qy : qy - cy;
+                gfx_size_t dy = radius16 - qy;
                 for (gfx_u32 sx = 0; sx < 8u; ++sx) {
                     gfx_size_t qx = x * 16u + sx * 2u + 1u;
-                    gfx_size_t cx = qx < radius16 ? radius16 :
-                                    (qx > right16 ? right16 : qx);
-                    gfx_size_t dx = qx < cx ? cx - qx : qx - cx;
+                    gfx_size_t dx = radius16 - qx;
                     if (dx * dx + dy * dy <= radius_sq) ++covered;
                 }
             }
-            row[x] = (gfx_u8)((covered * 255u + 32u) / 64u);
+            gfx_u8 coverage = (gfx_u8)((covered * 255u + 32u) / 64u);
+            mask[y * mask_pitch_bytes + x] = coverage;
+            mask[y * mask_pitch_bytes + width - 1u - x] = coverage;
+            mask[(height - 1u - y) * mask_pitch_bytes + x] = coverage;
+            mask[(height - 1u - y) * mask_pitch_bytes + width - 1u - x] = coverage;
         }
-    }
 }
 
 void gfx_fill_rect_masked(gfx_u8 *dst, gfx_size_t dst_pitch_bytes,
