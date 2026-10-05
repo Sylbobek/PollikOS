@@ -17,6 +17,8 @@ for mode, define in [('reference', '-DGFX_REFERENCE=1'), ('fast', None)]:
     lines = result.stdout.strip().splitlines()
     if not lines or not lines[0].startswith('PASS gfx correctness:'):
         raise SystemExit(f'{mode} correctness output missing: {result.stdout}{result.stderr}')
-    if len(lines) < 2 or f'mode={mode}' not in lines[1]:
+    if len(lines) < 2 or not lines[1].startswith('PASS gfx rectangle fuzz:'):
+        raise SystemExit(f'{mode} rectangle fuzz output missing: {result.stdout}{result.stderr}')
+    if not any(line.startswith('BENCH gfx ') and f'mode={mode}' in line for line in lines):
         raise SystemExit(f'{mode} benchmark output missing: {result.stdout}{result.stderr}')
     print('\n'.join(lines))

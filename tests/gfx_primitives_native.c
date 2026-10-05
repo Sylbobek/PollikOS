@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -26,7 +27,173 @@ static uint32_t reference_blend(uint32_t dst, uint32_t src) {
     return ((r & 255u) << 16) | ((g & 255u) << 8) | (b & 255u);
 }
 
+static uint32_t load_le32(const uint8_t *p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
+           ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+static void store_le32(uint8_t *p, uint32_t v) {
+    p[0] = (uint8_t)v;
+    p[1] = (uint8_t)(v >> 8);
+    p[2] = (uint8_t)(v >> 16);
+    p[3] = (uint8_t)(v >> 24);
+}
+
+static uint32_t random_u32(void);
 static uint32_t random_state = 0x6d2b79f5u;
+
+static void reference_rounded_mask(uint8_t *mask, size_t pitch, size_t width,
+                                   size_t height, size_t radius) {
+    if (radius > width / 2u) radius = width / 2u;
+    if (radius > height / 2u) radius = height / 2u;
+    for (size_t y = 0; y < height; ++y)
+        for (size_t x = 0; x < width; ++x) {
+            unsigned covered = 0;
+            for (unsigned sy = 0; sy < 8; ++sy)
+                for (unsigned sx = 0; sx < 8; ++sx) {
+                    double px = (double)x + ((double)sx + 0.5) / 8.0;
+                    double py = (double)y + ((double)sy + 0.5) / 8.0;
+                    double cx = px < radius ? radius : (px > width - radius ? width - radius : px);
+                    double cy = py < radius ? radius : (py > height - radius ? height - radius : py);
+                    double dx = px - cx, dy = py - cy;
+                    if (dx * dx + dy * dy <= (double)radius * radius) ++covered;
+                }
+            mask[y * pitch + x] = (uint8_t)((covered * 255u + 32u) / 64u);
+        }
+}
+
+static void reference_blit_rect(uint8_t *dst, size_t pitch, size_t dx, size_t dy,
+                                const uint8_t *src, size_t sx, size_t sy,
+                                size_t width, size_t height) {
+    uint8_t snapshot[37 * 29 * 4];
+    for (size_t y = 0; y < height; ++y)
+        for (size_t x = 0; x < width; ++x)
+            store_le32(snapshot + (y * width + x) * 4,
+                       load_le32(src + (sy + y) * pitch + (sx + x) * 4));
+    for (size_t y = 0; y < height; ++y)
+        for (size_t x = 0; x < width; ++x)
+            store_le32(dst + (dy + y) * pitch + (dx + x) * 4,
+                       load_le32(snapshot + (y * width + x) * 4));
+}
+
+static int rectangle_fuzz(void) {
+    enum { W = 37, H = 29, MIN_PITCH = W * 4, MAX_PITCH = MIN_PITCH + 11,
+           GUARD = 17, BUFFER_SIZE = H * MAX_PITCH + GUARD * 2 + 4, CASES = 100000 };
+    uint8_t *actual = (uint8_t *)malloc(BUFFER_SIZE);
+    uint8_t *expected = (uint8_t *)malloc(BUFFER_SIZE);
+    uint8_t source[BUFFER_SIZE];
+    uint8_t coverage[H * MAX_PITCH];
+    CHECK(actual && expected, "rectangle fuzz allocation");
+    random_state = 0x6d2b79f5u;
+
+    for (size_t i = 0; i < sizeof(source); ++i) source[i] = (uint8_t)random_u32();
+
+    for (unsigned test = 0; test < CASES; ++test) {
+        size_t pitch = MIN_PITCH + random_u32() % (MAX_PITCH - MIN_PITCH + 1u);
+        size_t align = random_u32() & 3u;
+        size_t x = random_u32() % W, y = random_u32() % H;
+        size_t width = random_u32() % (W - x + 1), height = random_u32() % (H - y + 1);
+        size_t src_x = random_u32() % (W - width + 1);
+        size_t src_y = random_u32() % (H - height + 1);
+        uint32_t color = random_u32();
+        uint32_t alpha = random_u32() & 255u;
+        uint32_t rgb = random_u32() & 0x00ffffffu;
+
+        memset(actual, 0xa5, BUFFER_SIZE);
+        memset(expected, 0xa5, BUFFER_SIZE);
+        uint8_t *a = actual + GUARD + align;
+        uint8_t *e = expected + GUARD + align;
+        gfx_fill_rect(a, pitch, x, y, width, height, color);
+        for (size_t ry = 0; ry < height; ++ry)
+            for (size_t rx = 0; rx < width; ++rx)
+                store_le32(e + (y + ry) * pitch + (x + rx) * 4, color);
+        CHECK(memcmp(actual, expected, BUFFER_SIZE) == 0,
+              "seeded rectangle fill/alignment/guards");
+
+        memcpy(actual, source, BUFFER_SIZE);
+        memcpy(expected, source, BUFFER_SIZE);
+        a = actual + GUARD + align;
+        e = expected + GUARD + align;
+        reference_blit_rect(e, pitch, x, y, e, src_x, src_y, width, height);
+        gfx_blit_rect(a, pitch, x, y, a, pitch, src_x, src_y, width, height);
+        CHECK(memcmp(actual, expected, BUFFER_SIZE) == 0,
+              "seeded overlapping rectangle blit/alignment/guards");
+
+        for (size_t ry = 0; ry < height; ++ry)
+            for (size_t rx = 0; rx < width; ++rx) {
+                uint8_t *p = e + (y + ry) * pitch + (x + rx) * 4;
+                store_le32(p, reference_blend(load_le32(p),
+                          ((alpha << 24) | ((((rgb >> 16) & 255u) * alpha + 127u) / 255u << 16) |
+                           ((((rgb >> 8) & 255u) * alpha + 127u) / 255u << 8) |
+                           (((rgb & 255u) * alpha + 127u) / 255u))));
+            }
+        gfx_fill_rect_alpha(a, pitch, x, y, width, height, rgb, alpha);
+        CHECK(memcmp(actual, expected, BUFFER_SIZE) == 0,
+              "seeded constant-alpha rectangle/alignment/guards");
+
+        for (size_t ry = 0; ry < height; ++ry)
+            for (size_t rx = 0; rx < width; ++rx) {
+                uint8_t cov = (uint8_t)random_u32();
+                coverage[ry * pitch + rx] = cov;
+                uint32_t effective_alpha = (alpha * cov + 127u) / 255u;
+                uint32_t src_pixel = (effective_alpha << 24) |
+                    (((((rgb >> 16) & 255u) * effective_alpha + 127u) / 255u) << 16) |
+                    (((((rgb >> 8) & 255u) * effective_alpha + 127u) / 255u) << 8) |
+                    (((rgb & 255u) * effective_alpha + 127u) / 255u);
+                uint8_t *p = e + (y + ry) * pitch + (x + rx) * 4;
+                store_le32(p, reference_blend(load_le32(p), src_pixel));
+            }
+        gfx_fill_rect_masked(a, pitch, x, y, width, height, rgb, alpha, coverage, pitch);
+        CHECK(memcmp(actual, expected, BUFFER_SIZE) == 0,
+              "seeded masked rectangle/alignment/guards");
+
+        /* Source-over rectangle uses a disjoint source surface. */
+        memcpy(actual, source, BUFFER_SIZE);
+        memcpy(expected, source, BUFFER_SIZE);
+        for (size_t ry = 0; ry < height; ++ry)
+            for (size_t rx = 0; rx < width; ++rx) {
+                uint32_t sa = random_u32() & 255u;
+                uint32_t sr = random_u32() % (sa + 1u);
+                uint32_t sg = random_u32() % (sa + 1u);
+                uint32_t sb = random_u32() % (sa + 1u);
+                uint8_t *sp = source + GUARD + ((src_y + ry) * pitch) + (src_x + rx) * 4;
+                store_le32(sp, (sa << 24) | (sr << 16) | (sg << 8) | sb);
+                uint8_t *dp = e + (y + ry) * pitch + (x + rx) * 4;
+                store_le32(dp, reference_blend(load_le32(dp), load_le32(sp)));
+            }
+        gfx_blend_premul_rect(a, pitch, x, y,
+                              source + GUARD, pitch, src_x, src_y, width, height);
+        CHECK(memcmp(actual, expected, BUFFER_SIZE) == 0,
+              "seeded premultiplied rectangle blend/alignment/guards");
+    }
+    free(actual);
+    free(expected);
+    printf("PASS gfx rectangle fuzz: %u cases seed=0x6d2b79f5 pitch=%u..%u align=0..3 overlap=all guards=checked\n",
+           CASES, MIN_PITCH, MAX_PITCH);
+    return 0;
+}
+
+static int rounded_mask_fuzz(void) {
+    enum { W = 37, H = 29, PITCH = 42, GUARD = 17, CASES = 10000 };
+    uint8_t actual[H * PITCH + GUARD * 2];
+    uint8_t expected[H * PITCH + GUARD * 2];
+    random_state = 0xc001d00du;
+    for (unsigned test = 0; test < CASES; ++test) {
+        size_t width = random_u32() % (W + 1u);
+        size_t height = random_u32() % (H + 1u);
+        size_t max_radius = width / 2u < height / 2u ? width / 2u : height / 2u;
+        size_t radius = max_radius ? random_u32() % (max_radius + 1u) : 0;
+        memset(actual, 0xa5, sizeof(actual));
+        memset(expected, 0xa5, sizeof(expected));
+        reference_rounded_mask(expected + GUARD, PITCH, width, height, radius);
+        gfx_rounded_rect_mask(actual + GUARD, PITCH, width, height, radius);
+        CHECK(memcmp(actual, expected, sizeof(actual)) == 0,
+              "seeded rounded mask coverage/padded-stride/guards");
+    }
+    printf("PASS gfx rounded-mask fuzz: %u cases seed=0xc001d00d coverage=8x8 guards=checked\n", CASES);
+    return 0;
+}
+
 static uint32_t random_u32(void) {
     uint32_t x = random_state;
     x ^= x << 13;
@@ -135,5 +302,7 @@ static int benchmark(void) {
 
 int main(void) {
     if (correctness()) return 1;
+    if (rectangle_fuzz()) return 1;
+    if (rounded_mask_fuzz()) return 1;
     return benchmark();
 }

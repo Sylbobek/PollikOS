@@ -470,3 +470,112 @@ PASS: pointer acceleration can be disabled and persists
 
 No smoke assertion or expected value was changed. The intermittent QMP/TCG
 input timeout remains a test flake; no cause was proven.
+
+## Phase 5b primitive API follow-up (2026-10-05)
+
+The primitive-only gap is closed: `gfx_fill_rect`, overlap-safe
+`gfx_blit_rect`, `gfx_fill_rect_alpha`, `gfx_blend_premul_rect`,
+`gfx_rounded_rect_mask`, and `gfx_fill_rect_masked` are freestanding APIs.
+Rectangles accept padded byte pitches and unaligned base addresses. Same-pitch
+blits use memmove ordering across both rows and pixels. Rounded masks use an
+8x8 coverage grid and are intended to be cached by callers. The UI has not been
+changed to use these new APIs.
+
+The first test-first compile failed because the rectangle API symbols were
+absent; adding the mask test then failed on the two absent mask symbols:
+
+```text
+$ python tests/gfx_primitives_native.py
+tests/gfx_primitives_native.c:89:9: error: call to undeclared function 'gfx_fill_rect'
+tests/gfx_primitives_native.c:101:9: error: call to undeclared function 'gfx_blit_rect'
+tests/gfx_primitives_native.c:113:9: error: call to undeclared function 'gfx_fill_rect_alpha'
+tests/gfx_primitives_native.c:126:9: error: call to undeclared function 'gfx_blend_premul_rect'
+$ python tests/gfx_primitives_native.py
+tests/gfx_primitives_native.c:153:9: error: call to undeclared function 'gfx_fill_rect_masked'
+tests/gfx_primitives_native.c:190:9: error: call to undeclared function 'gfx_rounded_rect_mask'
+```
+
+After implementation, both reference and optimized binaries printed:
+
+```text
+$ python tests/gfx_primitives_native.py
+PASS gfx correctness: fill/blit lengths 0..257; blend multipliers 65536; seeded pixels 100000 seed=0x6d2b79f5
+PASS gfx rectangle fuzz: 100000 cases seed=0x6d2b79f5 pitch=148..159 align=0..3 overlap=all guards=checked
+PASS gfx rounded-mask fuzz: 10000 cases seed=0xc001d00d coverage=8x8 guards=checked
+PASS gfx correctness: fill/blit lengths 0..257; blend multipliers 65536; seeded pixels 100000 seed=0x6d2b79f5
+PASS gfx rectangle fuzz: 100000 cases seed=0x6d2b79f5 pitch=148..159 align=0..3 overlap=all guards=checked
+PASS gfx rounded-mask fuzz: 10000 cases seed=0xc001d00d coverage=8x8 guards=checked
+```
+
+Freestanding target compile commands (i386, x86_64, SDK, host) all exited 0
+with empty stdout/stderr:
+
+```text
+$ clang --target=i386-none-elf -m32 -march=i386 -ffreestanding -fno-pic -fno-pie -fno-stack-protector -mno-sse -mno-mmx -Wall -Wextra -Werror -I kernel/include -I kernel/gfx -c kernel/gfx/gfx_primitives.c -o build/gfx-i386.o
+$ clang --target=x86_64-none-elf -ffreestanding -fno-pic -fno-pie -fno-stack-protector -mgeneral-regs-only -Wall -Wextra -Werror -I kernel/include -I kernel/gfx -c kernel/gfx/gfx_primitives.c -o build/gfx-x64.o
+$ clang --target=x86_64-none-elf -ffreestanding -fno-pic -fno-pie -fno-stack-protector -mgeneral-regs-only -Wall -Wextra -Werror -I sdk/include -I kernel/gfx -c kernel/gfx/gfx_primitives.c -o build/gfx-sdk.o
+$ clang -std=c11 -O2 -ffreestanding -fno-builtin -Wall -Wextra -Werror -I kernel/gfx -c kernel/gfx/gfx_primitives.c -o build/gfx-native.o
+$ llvm-nm -u build/gfx-i386.o build/gfx-x64.o build/gfx-sdk.o build/gfx-native.o
+
+build/gfx-i386.o:
+
+build/gfx-x64.o:
+
+build/gfx-sdk.o:
+
+build/gfx-native.o:
+```
+
+The native existing-scene regressions still passed:
+
+```text
+$ python tests/held_drag.py
+PASS held-drag frame pixels identical to full-repaint oracle (29 positions)
+PASS accumulated held-drag frames, shadow-only cull, dock cache, resize, dim controls
+PASS cursor union presents, kind changes, corners, cursor-free scene
+PASS all primitive scissors and padded target stride
+PASS 24/32-bpp framebuffer channel order, padded pitch, partial rows
+PASS independent four-corner RGB/AA, no canary RGB, opaque black, all screen edges/scissors, resize-before-render
+PASS independent LUT radii 1..29, rounded shadow/dock colors (18/29), clipping and padded stride
+$ python tests/cursor_framebuffer.py
+PASS cursor union presents, kind changes, corners, cursor-free scene
+PASS cursor framebuffer: all 10 kinds, four scales, four corners, dock, stationary cursor/window motion, scale erasure; pixel-identical full-repaint oracle
+```
+
+The linked i386 build ran in the disposable performance copy after copying only
+`gfx_primitives.c` and `.h` into it. The before and after file measurements are:
+
+```text
+PS C:\Users\syltu\AppData\Local\Temp\PollikOS-perfbuild-ogiluhwn> Get-Item build\kernel.bin | Select-Object FullName,Length,LastWriteTimeUtc
+FullName                                                                       Length LastWriteTimeUtc
+--------                                                                       ------ ----------------
+C:\Users\syltu\AppData\Local\Temp\PollikOS-perfbuild-ogiluhwn\build\kernel.bin 818296 10/4/2026 9:21:11 PM
+PS C:\Users\syltu\AppData\Local\Temp\PollikOS-perfbuild-ogiluhwn> .\build.ps1 -NoSync
+Graphics primitives: optimized x86 path
+System sync: skipped (-NoSync); data image unchanged.
+PollikOS built: build/PollikOS-Alpha.img (819592 kernel bytes, 1601 sectors loaded at 1 MiB)
+PS C:\Users\syltu\AppData\Local\Temp\PollikOS-perfbuild-ogiluhwn> Get-Item build\kernel.bin | Select-Object FullName,Length,LastWriteTimeUtc
+FullName                                                                       Length LastWriteTimeUtc
+--------                                                                       ------ ----------------
+C:\Users\syltu\AppData\Local\Temp\PollikOS-perfbuild-ogiluhwn\build\kernel.bin 819592 10/5/2026 1:36:14 PM
+```
+
+This is a +1296-byte i386 kernel delta in that copy. No rectangle-specific
+performance result is claimed; the APIs are not integrated into the compositor.
+Full PollikOS regression suites and QEMU visual goldens are NOT RUN in this
+follow-up. The attempted Windows sanitizer commands and their environment
+failures were:
+
+```text
+$ clang -std=c11 -O1 -g -fno-builtin -Wall -Wextra -Werror -DGFX_REFERENCE=1 "-fsanitize=address,undefined" tests/gfx_primitives_native.c kernel/gfx/gfx_primitives.c -o build/gfx_primitives_san.exe
+$ & .\build\gfx_primitives_san.exe; Write-Output "SAN_EXIT=$LASTEXITCODE"
+SAN_EXIT=-1073741515
+$ clang -std=c11 -O1 -g -fno-builtin -Wall -Wextra -Werror -DGFX_REFERENCE=1 "-fsanitize=undefined" tests/gfx_primitives_native.c kernel/gfx/gfx_primitives.c -o build/gfx_primitives_ubsan.exe
+lld-link: error: undefined symbol: __declspec(dllimport) CommandLineToArgvW
+lld-link: error: undefined symbol: __declspec(dllimport) SymLoadModuleEx
+clang: error: linker command failed with exit code 1 (use -v to see invocation)
+```
+
+The combined sanitizer binary could not load the Windows sanitizer runtime;
+the standalone UBSan link lacks Windows runtime symbols. Sanitizer validation
+is NOT RUN.

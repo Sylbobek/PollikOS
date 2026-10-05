@@ -15,8 +15,8 @@ startup. TCG measurements below therefore use the test harness's QMP,
 
 | Step | Status | Evidence | Commit | NOT RUN |
 |---|---|---|---|---|
-| 5b.1 freestanding primitives | Partial | `python tests/gfx_primitives_native.py`; formula/pixel format in `kernel/gfx/gfx_primitives.h` | `add1308`, `3f13c63` | Rect APIs, overlap-safe blit, constant-alpha fill, rounded-mask generation |
-| 5b.2 reference/fuzz gate | Partial | Native output: `PASS gfx correctness: fill/blit lengths 0..257; blend multipliers 65536; seeded pixels 100000 seed=0x6d2b79f5` | `add1308` | Randomized rectangles, arbitrary clipping/pitch/alignment and overlap equivalence |
+| 5b.1 freestanding primitives | Done | Native reference/fast builds; rectangle fill/blit, constant-alpha and masked fill, premultiplied rectangle blend, rounded-mask generation in `kernel/gfx/gfx_primitives.h` | current follow-up | Production compositor integration and cache reuse remain under 5b.4/5b.6 |
+| 5b.2 reference/fuzz gate | Done | `PASS gfx rectangle fuzz: 100000 cases seed=0x6d2b79f5 pitch=148..159 align=0..3 overlap=all guards=checked`; `PASS gfx rounded-mask fuzz: 10000 cases seed=0xc001d00d coverage=8x8 guards=checked` | current follow-up | Broader GUI scene golden tests are listed under 5b.4 |
 | 5b.3 target compiles | Done | `clang` compile commands for i386, x86_64, SDK and host in `PERF_LOG.md` all exited 0 | `add1308` | — |
 | 5b.4 rounded corners/shadows/dock | Partial | `python tests/held_drag.py`; all cached LUT radii 1..29 and full-repaint oracle passed | `add1308` | Old 8x8 pixel-by-pixel comparison, fresh cache implementation, dock-glass cache proof |
 | 5b.5 microbenchmarks | Partial | Host fill/copy/blend medians: 9,287.5/5,064.9/1,123.4 -> 9,853.4/5,249.1/1,487.5 Mpx/s | `add1308`, `3f13c63` | Rounded-fill benchmark and in-guest rates |
