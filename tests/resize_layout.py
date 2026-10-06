@@ -11,7 +11,7 @@ from gui_metrics import Guest, BUILD
 from surface_support import checked_surface_symbols, check_guards
 import app_layout
 
-NAMES = ('Welcome', 'Files', 'Terminal', 'Notes', 'Settings', 'Browser', 'PollikMark3D')
+NAMES = ('Welcome', 'Files', 'Terminal', 'Notes', 'Settings', 'Browser', 'PollikMark3D', 'Calculator')
 
 
 def run(resolution):
@@ -21,7 +21,7 @@ def run(resolution):
     try:
         with Guest(resolution, 'resize-layout') as g:
             report['environment'] = g.environment
-            assert count == g.apps == 7
+            assert count == g.apps == 8
 
             def scalar(name):
                 return g.words(name)[0]
@@ -70,6 +70,7 @@ def run(resolution):
                 for width, height in targets:
                     g.move(x+width-1, y+height-1)
                     expected = (max(width, 640), max(height, 520)) if app == 4 else (width, height)
+                    if app==7:expected=(max(width,320),max(height,440))
                     g.wait(lambda: g.window(app)[4:6] == expected, 'PS/2 resize geometry')
                     if not rapid:
                         g.wait(lambda: g.presented(app), 'held resize painted', 30)
@@ -144,7 +145,7 @@ def run(resolution):
                         exact(width-55, height-25, 0xffffff, 'Browser viewport bottom-right')
                         exact(width-40, height-5, 0xf4f2f8, 'Browser bottom status strip')
                         exact(width-50, 69, 0xcbc5d8, 'Browser address bar right extent')
-                    else:
+                    elif app==6:
                         exact(20, 85, 0x405574, 'PollikMark selected workload row')
                         exact(width-20, height-12, 0x202b40, 'PollikMark responsive status background')
                         y = 212 if height>=410 else 80
@@ -152,6 +153,12 @@ def run(resolution):
                         observed['level_label_ink'] = ink(label, 0x64718c) + ink(label, 0x8595b0)
                         if not observed['level_label_ink']:
                             return False
+                    else:
+                        from calc_layout import button_rect
+                        exact(20,85,0xffffff,'Calculator readout')
+                        for button,color in ((20,0xffffff),(23,0xd97523)):
+                            bx,by,bw,bh=button_rect(width,height,34,button)
+                            exact(bx+8,by+8,color,'Calculator resized button face')
                     lfb, pitch, bpp = (scalar(n) for n in ('address', 'stride', 'bytes'))
                     assert bpp in (3, 4) and pitch >= g.width*bpp
                     scene = scalar('pixels')
@@ -226,7 +233,7 @@ def run(resolution):
         raise
     finally:
         path.write_text(json.dumps(report, indent=2))
-    print(f'PASS {resolution}: all seven apps, 49 viewport-content stages, external guards', flush=True)
+    print(f'PASS {resolution}: all eight apps, 56 viewport-content stages, external guards', flush=True)
 
 
 if __name__ == '__main__':

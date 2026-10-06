@@ -28,7 +28,7 @@ def checked_surface_symbols():
                 'pixels', 'sizes', 'g_surface_phys', 'g_surface_capacity', 'g_surface_pages')
     assert not duplicates.intersection(required), ('ambiguous symbols', duplicates.intersection(required))
     apps, remainder = divmod(symbols['g_windows'][1], 84)
-    assert not remainder and apps == 7, 'Expected seven 84-byte Windows'
+    assert not remainder and apps == 8, 'Expected eight 84-byte Windows (Calculator appended)'
     assert symbols['g_surfaces'][1] == apps * 36, 'WindowSurface ABI36 changed'
     assert symbols['g_animations'][1] == apps * 17 * 4, 'Animation ABI17 words changed'
     for name in ('g_surface_phys', 'g_surface_capacity'):

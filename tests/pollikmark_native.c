@@ -5,6 +5,8 @@ extern int printf(const char *,...);
 extern void *malloc(__SIZE_TYPE__);
 extern void free(void *);
 static int failed, allocations, frees, fail_after=-1, painting;
+static int interactive_resize;
+int app_host_interactive_resize(int id){(void)id;return interactive_resize;}
 static u64 clock_us;
 static u32 ui[680*410];
 static int capture_text, text_count;
@@ -148,6 +150,20 @@ static void resize_and_layout(void){
     pollikmark_close();CHECK(allocations==frees && !target.color && !front && !mem_a && !mem_b);
 }
 static int same_text(const char *a,const char *b){while(*a&&*a==*b){a++;b++;}return *a==*b;}
+static void live_resize_progress(void){
+    pollikmark_open();pollikmark_resize(680,410);start(1,1);
+    u32 *color=target.color;int allocated=allocations;
+    u64 start_time=level_start;interactive_resize=1;
+    for(int i=0;i<40;i++) {
+        pollikmark_resize(480+i*3,280+i*2);
+        CHECK(target.color==color && allocations==allocated && level_start==start_time);
+    }
+    interactive_resize=0;
+    for(int i=0;i<20;i++)pollikmark_poll();
+    CHECK(n>0 && pollikmark_running && all && allocations==allocated);
+    printf("RAW live resize: changes=40 allocations=%d samples=%u running=%u\n",allocations-allocated,n,pollikmark_running);
+    pollikmark_close();CHECK(allocations==frees);
+}
 static void detailed_info_layout(void){
     char number64[24];int n64=pm_put64(number64,0,0xffffffffffffffffull);number64[n64]=0;
     CHECK(same_text(number64,"18446744073709551615"));
@@ -188,7 +204,7 @@ static void memory_rate64(void){
 }
 int main(void){
     shapes();pollikmark_init();pollikmark_open();rotation_and_counters();resize_and_layout();detailed_info_layout();
-    memory_rate64();
+    memory_rate64();live_resize_progress();
     printf("pollikmark native: %s (rotation, raster counters/ABI, mixed shapes, clipping, alpha, resize/failure/leaks, detailed info text bounds)\n",failed?"FAIL":"PASS");
     return !!failed;
 }

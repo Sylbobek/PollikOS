@@ -10,8 +10,9 @@ def main():
     p.add_argument('--data',type=Path,required=True)
     p.add_argument('--accel',choices=('tcg','whpx'),default='tcg')
     p.add_argument('--resolution',default='1920x1080')
+    p.add_argument('--label',default='calculator')
     a=p.parse_args()
-    with Guest(a.resolution,'calculator',data_image=a.data,boot_only=True,accel=a.accel) as g:
+    with Guest(a.resolution,a.label,data_image=a.data,boot_only=True,accel=a.accel) as g:
         g.wait(lambda:'[TEST] PMM no leak' in g.log.read_text(),'boot stress',120)
         def type_text(s):
             mapping={' ':'spc','+':'shift-equal','*':'shift-8','(':'shift-9',')':'shift-0','^':'shift-6','%':'shift-5','/':'slash','.':'dot','-':'minus',',':'comma'}
@@ -47,9 +48,31 @@ def main():
         assert 'calc_probe' not in g.symbols,'production build must exclude diagnostic probes'
         g.wait(lambda:'[CALC] 512\n' in g.log.read_text(),'keyboard result')
         print('[CALC] 512 (keyboard: 2^3^2)',flush=True)
-        path=BUILD/f'calculator-{a.resolution}.ppm';g.screendump(path)
+        path=BUILD/f'{a.label}-{a.resolution}.ppm';g.screendump(path)
         img=Image.open(path);img.save(path.with_suffix('.png'))
         assert img.size==(g.width,g.height)
         print(f'SCREENSHOT {path.with_suffix(".png")} size={img.size}',flush=True)
+        # Repeated launch/close must leave input, timers and presentation alive.
+        before=g.stats();tick=g.words('ticks')[0];started=time.monotonic()
+        for i in range(12):
+            g.key('alt-f4',lambda:not g.window(7)[7],'Calculator close')
+            g.key('f8',lambda:g.words('g_focused_window')[0]==7 and g.window(7)[7],'Calculator reopen')
+        g.wait(lambda:not g.words('g_window_anims',7)[0],'last opening animation',15)
+        after=g.stats();advance=g.words('ticks')[0]-tick
+        assert advance>0 and after['frame_count']>before['frame_count']
+        log=g.log.read_text();assert 'PANIC' not in log and 'PAGE FAULT' not in log and 'GUI MEMORY CORRUPTION' not in log
+        print(f'RAW rapid Calculator: cycles=12 host_seconds={time.monotonic()-started:.3f} ticks={advance} frames={after["frame_count"]-before["frame_count"]}',flush=True)
+        g.wait(lambda:g.words('g_dock_launch_app')[0]==0xffffffff,'Dock launch animation settled',15)
+        time.sleep(.2)
+        before=g.stats();type_text('1234567890');time.sleep(.3);after=g.stats()
+        print(f'RAW calculator editing: presents={after["frame_count"]-before["frame_count"]} composed_pixels={after["composed_pixels_total"]-before["composed_pixels_total"]} presented_pixels={after["presented_pixels_total"]-before["presented_pixels_total"]}',flush=True)
+        surface=g.words('g_surfaces',7);cached=g.memory(surface[0],surface[1]*surface[2]*4)
+        g.key('f11',lambda:g.window(7)[6]==2,'Calculator maximize')
+        g.wait(lambda:g.presented(7),'maximized surface')
+        g.key('f11',lambda:g.window(7)[6]==0,'Calculator restore')
+        g.wait(lambda:g.presented(7),'restored surface')
+        surface=g.words('g_surfaces',7);full=g.memory(surface[0],surface[1]*surface[2]*4)
+        assert cached==full,'partial readout repaint differs from full render'
+        print(f'PASS calculator partial/full render: {len(full)//4} pixels identical',flush=True)
         print('PASS calculator: terminal expressions/errors, GUI buttons/keyboard, real framebuffer',flush=True)
 if __name__=='__main__':main()

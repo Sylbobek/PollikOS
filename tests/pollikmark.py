@@ -14,7 +14,7 @@ def run(resolution, full_run=False, headless=False, accel=None, cpu=None):
     whpx = (accel or os.environ.get('POLLIK_GUI_ACCEL', 'tcg')).lower() == 'whpx'
     with Guest(resolution, 'pollikmark', headless=headless, accel=accel, cpu=cpu,
                boot_timeout=180 if whpx else 40) as g:
-        assert g.apps == 7
+        assert g.apps == 8  # APP_CALCULATOR appended; original IDs 0..6 unchanged.
         scalar = lambda name: g.words(name)[0]
         def guards():
             bases = g.words('g_surface_phys')
@@ -105,7 +105,7 @@ def run(resolution, full_run=False, headless=False, accel=None, cpu=None):
         assert set(g.memory(*g.symbol('pollikmark_icon'))) == {0,1,2,3}
         dock_order = (1, 0, 2, 3, 4, 5, 6)  # Files is the permanent first item.
         for slot, app_id in enumerate(dock_order):
-            x = g.width//2 - (g.apps-1)*34 + slot*68
+            x = g.width//2 - (len(dock_order)-1)*34 + slot*68
             g.move(x,g.height-56)
             g.button(True);g.button(False)
             # Browser's bounded loader deliberately discards client launches;

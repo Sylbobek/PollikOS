@@ -73,6 +73,7 @@ u32 pollikmark_running,pollikmark_test,pollikmark_level,pollikmark_completed;
 static u32 all, opened, info, pollikmark_generation, progress_ms;
 static int summary;
 static int win_w=680,win_h=410;
+static int resize_pending;
 static GfxTarget target;
 static u32 *front;
 static u32 surface_bytes, front_valid;
@@ -484,14 +485,14 @@ static int prepare_surface(void) {
     if(w>192) {h=h*192/w;w=192;}
     if(h>128) {w=w*128/h;h=128;}
     if(w<1)w=1; if(h<1)h=1;
-    if(target.width==w && target.height==h)return 1;
+    if(target.width==w && target.height==h){resize_pending=0;return 1;}
     u32 bytes=(u32)w*h*4;
     u32 *color=app_host_alloc(bytes),*depth=app_host_alloc(bytes),*display=app_host_alloc(bytes);
     if(!color||!depth||!display) {
         app_host_free(color,bytes);app_host_free(depth,bytes);app_host_free(display,bytes);return 0;
     }
     release_surface();surface_bytes=bytes;front=display;
-    target=(GfxTarget){color,(float *)depth,w,h,w,bytes/4};return 1;
+    target=(GfxTarget){color,(float *)depth,w,h,w,bytes/4};resize_pending=0;return 1;
 }
 static void reset_samples(void) {
     n=maximum=work_us=raster_pixels=0;minimum=0xffffffffu;
@@ -626,7 +627,16 @@ static void advance(u32 status) {
     }
 }
 int pollikmark_poll(void) {
-    if(!opened||!pollikmark_running)return 0;
+    if(!opened)return 0;
+    /* Keep the measured viewport and its samples stable during a live resize.
+     * Layout may change, but allocation waits until the run has ended. */
+    if(!pollikmark_running) {
+        if(resize_pending&&!app_host_interactive_resize(APP_POLLIKMARK)) {
+            if(!prepare_surface())message="Resize allocation failed - old viewport retained";
+            resize_pending=0;return 1;
+        }
+        return 0;
+    }
     u64 now=app_host_time_us(),deadline=now+2500;
     progress_ms=(u32)(now-level_start)/1000;
     if(pollikmark_test==6) {
@@ -681,6 +691,9 @@ void pollikmark_close(void) {stop();opened=0;release_surface();}
 void pollikmark_resize(int width,int height) {
     if(width==win_w&&height==win_h)return;
     win_w=width;win_h=height;
+    if(app_host_interactive_resize(APP_POLLIKMARK)||resize_pending) {
+        resize_pending=1;return;
+    }
     if(target.color) {
         int w=target.width,h=target.height;
         if(!prepare_surface())message="Resize allocation failed - old viewport retained";

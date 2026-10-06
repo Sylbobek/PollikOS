@@ -58,6 +58,8 @@ int app_host_pointer_acceleration(void);
 void app_host_set_pointer_acceleration(int enabled);
 int app_host_cursor_size(void);
 void app_host_set_cursor_size(int percent);
+/* Preview during a slider drag; commit to the settings store on release. */
+void app_host_preview_cursor_size(int percent);
 void app_host_stop_minimize(void);
 void app_host_power(int reboot);
 void app_host_perf_summary(char *out, int capacity);
@@ -68,6 +70,8 @@ typedef struct {
     u64 paint_us, compose_us, present_us, total_us;
 } AppPerfView;
 u64 app_host_time_us(void);
+/* Pointer resize/snap or explicit maximize/restore notification. */
+int app_host_interactive_resize(int id);
 void app_host_metrics(AppPerfView *out);
 u32 app_host_copy_frame_times(u32 after_frame, u32 count, u32 *out, u32 capacity);
 u32 app_host_free_bytes(void);

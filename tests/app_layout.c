@@ -28,6 +28,8 @@ GuiAppSize gui_app_size(int id) { return test_sizes[id]; }
 static void bounds(int x,int y,int w,int h) {
     if (!drawing) return;
     ++paints;
+    if(w<0||h<0||x<0||y<34||x+w>sw||y+h>sh)
+        printf("RAW bounds: tab=%d x=%d y=%d w=%d h=%d window=%dx%d\n",g_settings_tab,x,y,w,h,sw,sh);
     CHECK(w >= 0 && h >= 0 && x >= 0 && y >= 34 && x + w <= sw && y + h <= sh);
 }
 int sys_get_glyph_advance(u8 c,int scale) { CHECK(scale>=1&&scale<=5); return (c == 'W' ? 8 : c == 'i' ? 3 : 6) * scale; }
@@ -106,11 +108,14 @@ const char *app_host_selected_wallpaper(void) { return ""; }
 int app_host_set_wallpaper(int index) { (void)index; return 0; }
 int app_host_pointer_acceleration(void) { return 1; }
 void app_host_set_pointer_acceleration(int enabled) { (void)enabled; }
-int app_host_cursor_size(void) { return 100; }
-void app_host_set_cursor_size(int percent) { (void)percent; }
+static int cursor_size=100,setting_saves,volume=50;
+int app_host_cursor_size(void) { return cursor_size; }
+void app_host_set_cursor_size(int percent) { cursor_size=percent;setting_saves++; }
+void app_host_preview_cursor_size(int percent) { cursor_size=percent; }
+void app_host_save_settings(void) { setting_saves++; }
 int audio_is_available(void) { return 0; }
-u8 audio_get_volume(void) { return 50; }
-void audio_set_volume(u8 v) { (void)v; }
+u8 audio_get_volume(void) { return (u8)volume; }
+void audio_set_volume(u8 v) { volume=v; }
 void audio_play_sound(SoundEffect s) { (void)s; }
 void audio_play_tone(u32 freq, u32 duration) { (void)freq; (void)duration; }
 int audio_play_wav_file(const char *p) { (void)p; return 0; }
@@ -245,6 +250,18 @@ static void interactions(int w,int h) {
     settings_click(l.tabs[1].x+1,l.tabs[1].y+1);
     settings_click(cx+153,135); CHECK(!animations && stops>0);
     settings_click(cx+15,135); CHECK(animations==1);
+    AppRect slider=slider_rect(l,1);int saved=setting_saves;
+    CHECK(settings_drag(slider.x,slider.y,1)>=0 && cursor_size==100);
+    CHECK(settings_drag(slider.x+slider.w+500,slider.y,1)==1 && cursor_size==200);
+    CHECK(setting_saves==saved);
+    settings_drag(0,0,0);CHECK(setting_saves==saved+1);
+    settings_click(l.tabs[3].x+1,l.tabs[3].y+1);slider=slider_rect(l,0);saved=setting_saves;
+    CHECK(settings_drag(slider.x-1,slider.y,1)==-1);
+    CHECK(settings_drag(slider.x,slider.y,1)==1 && volume==0);
+    CHECK(settings_drag(slider.x+slider.w+500,0,1)==1 && volume==100);
+    CHECK(setting_saves==saved);settings_close();CHECK(setting_saves==saved+1);
+    CHECK(settings_drag(slider.x+slider.w/2,slider.y,1)>=0 && volume>=49 && volume<=51);
+    settings_drag(0,0,0);CHECK(setting_saves==saved+2);
     int before=pings;
     settings_click(l.tabs[4].x+1,l.tabs[4].y+1);
     settings_click(cx+165,310); CHECK(pings==before);
@@ -358,6 +375,11 @@ int main(void) {
         calculator_key(13,'=',1,0);calculator_key(4,'3',0,0);
         calculator_key(28,0,0,0);CHECK(model.evaluated&&eq(model.result,"5"));
         calculator_key(1,0,0,0);calculator_click(-1,-1);CHECK(!model.expression[0]);
+    }
+    current=APP_SETTINGS;sw=640;sh=520;test_sizes[APP_SETTINGS]=(GuiAppSize){sw,sh};
+    for(int mode=0;mode<2;mode++)for(int tab=0;tab<TAB_COUNT;tab++) {
+        theme=mode;g_settings_tab=tab;g_sound_played=1;drawing=1;
+        settings_render(sw,sh,1);drawing=0;
     }
     printf("PASS: real app geometry, hit bounds, file scrolling, Notes wrapping/cursor, Terminal prompt wrapping, Calculator (%d checks)\n",checks);
     return 0;

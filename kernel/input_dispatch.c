@@ -156,7 +156,7 @@ static void click(void) {
         /* Clicking into an application releases any desktop icon selection;
          * otherwise the highlight stayed lit behind the focused window. */
         if (desktop_items_selected_count() > 0) desktop_items_clear_selection();
-        focus_app(id);
+        if(active_app()!=id)focus_app(id);
         if (hit != HIT_TITLEBAR) shell.last_title_click_id = -1;
         if (hit >= HIT_RESIZE_LEFT && hit <= HIT_RESIZE_BOTTOM_RIGHT) {
             shell.resizing = id;
@@ -195,7 +195,7 @@ static void click(void) {
         }
         if (hit == HIT_CLIENT) {
             if (window_only) return;
-            compositor_invalidate(id);
+            if(id!=APP_CALCULATOR)compositor_invalidate(id);
             int local_x = mx - wx, local_y = my - wy;
             gui_app_click(id, local_x, local_y);
             app_pointer_capture = gui_app_drag(id, local_x, local_y, 1) >= 0 ? id : -1;
@@ -315,7 +315,9 @@ static void key(u8 code) {
     if (shell.alttab_open) return;
     shell.dirty = 1;
     int top = active_app();
-    if (top >= 0) compositor_invalidate(top);
+    /* Calculator owns precise readout damage; pre-invalidating the whole
+     * client discards that region and repaints all button faces on every key. */
+    if (top >= 0 && top != APP_CALCULATOR) compositor_invalidate(top);
     if (code == 60) { /* F2: rename selected item */
         if (desktop_items_get_selected() >= 0) {
             desktop_prompt_rename_selected();

@@ -17,8 +17,10 @@
 #include "net/net_manager.h"
 #include "auth.h"
 #include "media.h"
+#include "audio.h"
 
 static int desktop_ready;
+static int user_resize_notification=-1;
 static char g_wallpaper_names[8][56];
 static int g_wallpaper_count;
 static int g_wallpaper_scan_done;
@@ -107,9 +109,10 @@ void app_host_set_pointer_acceleration(int enabled) {
 }
 int app_host_cursor_size(void) { return compositor_cursor_size(); }
 void app_host_set_cursor_size(int percent) {
-    compositor_set_cursor_size(percent);
+    app_host_preview_cursor_size(percent);
     app_host_save_settings();
 }
+void app_host_preview_cursor_size(int percent) { compositor_set_cursor_size(percent); }
 
 void app_host_save_settings(void) {
     vfs_mkdir("/home");
@@ -138,6 +141,7 @@ void app_host_save_settings(void) {
     WRITE_SETTING("sound_muted=", sound_is_muted());
     WRITE_SETTING("pointer_accel=", input_get_pointer_acceleration());
     WRITE_SETTING("cursor_size=", compositor_cursor_size());
+    WRITE_SETTING("audio_volume=", audio_get_volume());
 
     #undef WRITE_SETTING
 
@@ -195,6 +199,10 @@ static void desktop_load_settings(void) {
             sound_set_muted(val);
         } else if (memcmp(line, "pointer_accel=", 14) == 0) {
             input_set_pointer_acceleration(line[14] == '1');
+        } else if (memcmp(line, "audio_volume=", 13) == 0) {
+            unsigned val=0;char *v=line+13;
+            while(*v>='0'&&*v<='9'&&val<=100)val=val*10+*v++-'0';
+            if(val<=100)audio_set_volume((u8)val);
         } else if (memcmp(line, "cursor_size=", 12) == 0) {
             int val = 0;
             char *cs = line + 12;
@@ -376,7 +384,9 @@ void toggle_maximize(int id) {
     ui_anim_cancel(id);
     wm_toggle_maximize(id);
     compositor_invalidate(id);
+    user_resize_notification=id;
     gui_app_resized(id, window_width(id), window_height(id));
+    user_resize_notification=-1;
     request_scene_redraw();
 }
 void minimize_app(int id) {
@@ -492,6 +502,9 @@ void app_host_set_sound_freq(u32 freq) {
 void app_host_stop_minimize(void) { compositor_cancel_minimize(-1); request_scene_redraw(); }
 void app_host_perf_summary(char *out, int capacity) { wm_perf_summary(out, capacity); }
 u64 app_host_time_us(void) { return wm_time_us(); }
+int app_host_interactive_resize(int id) {
+    return g_resized_window==id || g_dragged_window==id || user_resize_notification==id;
+}
 void app_host_metrics(AppPerfView *out) {
     if (!out) return;
     GuiPerfStats s;
@@ -1019,28 +1032,25 @@ static void draw_icon_web(int x, int y, int s) {
 }
 
 static void draw_icon_pollikmark(int x, int y, int s) {
-    int r = s / 5;
-    rounded(x + 2, y + s - 3, s - 4, 5, 3, 0x000000, 70);
-    roundrect(x, y, s, s, r, 0x6366f1);
-    roundrect(x + 1, y + 1, s - 2, 2, 1, 0xa5b4fc);
-
-    int cx = x + s / 2;
-    int cy = y + s / 2;
-    int ch = s * 11 / 48;
-
-    for (int row = 0; row <= ch; row++) {
-        int half_w = row * 16 / 11;
-        rect(cx - half_w, cy - ch + row, half_w * 2 + 1, 1, 0x38bdf8);
+    /* Own resolution-independent chart artwork, no linked bitmap resource. */
+    roundrect(x,y,s,s,s/4,0x5140b5);
+    roundrect_border(x,y,s,s,s/4,1,0x998ce5);
+    const u32 colors[3]={0xb9aaf7,0x83dbd0,0xf4f0ff};
+    int bar=s/7,base=y+s*4/5;
+    for(int i=0;i<3;i++) {
+        int h=s*(i+2)/7;
+        roundrect(x+s/5+i*s/5,base-h,bar,h,bar/3,colors[i]);
     }
-    for (int col = 0; col <= ch * 16 / 11; col++) {
-        int top_y = cy - ch + (col * 11 / 16);
-        rect(cx - col, top_y + ch, 1, ch, 0x1e40af);
-    }
-    for (int col = 0; col <= ch * 16 / 11; col++) {
-        int top_y = cy - ch + (col * 11 / 16);
-        rect(cx + col, top_y + ch, 1, ch, 0xa855f7);
-    }
-    rect(cx - 1, cy - ch - 1, 3, 3, 0xffffff);
+    roundrect(x+s/5,base+2,s*3/5,2,1,0xafa0eb);
+}
+static void draw_icon_calculator(int x,int y,int s) {
+    roundrect(x,y,s,s,s/4,0x393641);
+    roundrect_border(x,y,s,s,s/4,1,0x7f778d);
+    int gap=s/12,button=s/7;
+    roundrect(x+gap,y+gap,s-2*gap,s/4,s/16,0xe4dfec);
+    for(int row=0;row<3;row++)for(int col=0;col<4;col++)
+        roundrect(x+gap+col*s/5,y+s*2/5+row*s/6,button,s/8,s/24,
+                  col==3?0xee902c:row==0?0xb6aebf:0x7b7387);
 }
 
 static void draw_icon_welcome(int x, int y, int s) {
@@ -1071,7 +1081,7 @@ static void draw_icon_welcome(int x, int y, int s) {
 
 void draw_app_vector_icon(int id, int x, int y, int size) {
     const GuiApp *app = gui_app_get(id);
-    if (app && app->icon.indices && id != APP_POLLIKMARK) {
+    if (app && app->icon.indices && id != APP_POLLIKMARK && id != APP_CALCULATOR) {
         sprite(x, y, size, size, app->icon.indices, app->icon.alpha, app->icon.palette, app->icon.width, app->icon.height);
         return;
     }
@@ -1082,6 +1092,7 @@ void draw_app_vector_icon(int id, int x, int y, int size) {
         case APP_SETTINGS:   draw_icon_settings(x, y, size); break;
         case APP_BROWSER:    draw_icon_web(x, y, size); break;
         case APP_POLLIKMARK: draw_icon_pollikmark(x, y, size); break;
+        case APP_CALCULATOR: draw_icon_calculator(x,y,size); break;
         case APP_WELCOME:    draw_icon_welcome(x, y, size); break;
         default: {
             if (app && app->icon.indices) {

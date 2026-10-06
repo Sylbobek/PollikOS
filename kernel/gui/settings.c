@@ -43,6 +43,7 @@ static const char *ACCENT_NAMES[5] = {
 static int g_settings_tab = TAB_APPEARANCE;
 static int g_sound_played = 0;
 static const char *g_last_net_status = 0;
+static int slider_capture=-1,slider_changed;
 
 /* Layout computation helper */
 typedef struct {
@@ -75,6 +76,48 @@ static SettingsLayout settings_calc_layout(int width, int height) {
 static void draw_card(AppRect r, u32 bg, u32 border, int radius) {
     (void)border;
     roundrect(r.x, r.y, r.w, r.h, radius, bg);
+}
+static AppRect slider_rect(SettingsLayout l,int kind) {
+    return (AppRect){l.content.x+24,kind?490:222,l.content.w-48,24};
+}
+static void draw_slider(SettingsLayout l,int kind,int value,int maximum) {
+    AppRect r=slider_rect(l,kind);
+    int position=(r.w-1)*value/maximum;
+    roundrect(r.x,r.y+9,r.w,6,3,l.dark?0x414555:0xdcd8e5);
+    roundrect(r.x,r.y+9,position+1,6,3,app_host_accent_color());
+    roundrect(r.x+position-7,r.y+4,14,16,7,l.dark?0xe9e7f1:0xffffff);
+    roundrect_border(r.x+position-7,r.y+4,14,16,7,1,l.dark?0xaaa6b9:0xbcb5cd);
+}
+static int slider_update(SettingsLayout l,int x) {
+    AppRect r=slider_rect(l,slider_capture);
+    int offset=x-r.x;if(offset<0)offset=0;if(offset>=r.w)offset=r.w-1;
+    int changed;
+    if(slider_capture==0) {
+        int value=(offset*100+(r.w-1)/2)/(r.w-1);
+        changed=value!=audio_get_volume();if(changed)audio_set_volume((u8)value);
+    } else {
+        const int sizes[4]={100,125,150,200};
+        int index=(offset*3+(r.w-1)/2)/(r.w-1);
+        changed=sizes[index]!=app_host_cursor_size();
+        if(changed)app_host_preview_cursor_size(sizes[index]);
+    }
+    if(changed){slider_changed=1;app_host_invalidate_partial(APP_SETTINGS);}
+    return changed;
+}
+void settings_close(void) {
+    if(slider_changed)app_host_save_settings();
+    slider_capture=-1;slider_changed=0;
+}
+int settings_drag(int x,int y,int active) {
+    GuiAppSize s=gui_app_size(APP_SETTINGS);
+    SettingsLayout l=settings_calc_layout(s.width,s.height);
+    if(!active){int captured=slider_capture>=0;settings_close();return captured?0:-1;}
+    if(slider_capture<0) {
+        int kind=g_settings_tab==TAB_SOUND?0:g_settings_tab==TAB_DESKTOP_DOCK?1:-1;
+        if(kind<0||!app_hit(slider_rect(l,kind),x,y))return -1;
+        slider_capture=kind;
+    }
+    return slider_update(l,x);
 }
 
 int settings_poll(void) {
@@ -228,7 +271,7 @@ void settings_render(int width, int height, int active) {
         roundrect(cx + 14, 384, 146, 24, 7, accel ? acc : (dark ? 0x161a26 : 0xe9e1f3));
         centered(cx + 14, 390, 146, accel ? "Modest: Enabled" : "Disabled", accel ? 0xffffff : l.text_body, 1);
 
-        AppRect cursor_card = {cx, 426, cw, 64};
+        AppRect cursor_card = {cx, 426, cw, 88};
         draw_card(cursor_card, l.bg_card, l.border_card, 12);
         text(cx + 14, 434, "Cursor size", l.text_head, 1);
         const int cursor_sizes[4] = {100, 125, 150, 200};
@@ -239,6 +282,8 @@ void settings_render(int width, int height, int active) {
             roundrect(bx, 456, 64, 26, 7, selected ? acc : (dark ? 0x161a26 : 0xe9e1f3));
             centered(bx, 462, 64, cursor_labels[i], selected ? 0xffffff : l.text_body, 1);
         }
+        int size=app_host_cursor_size();
+        draw_slider(l,1,size==100?0:size==125?1:size==150?2:3,3);
 
     } else if (g_settings_tab == TAB_DISPLAY) {
         text(cx, 68, "View display resolution, color profile and graphics pipeline stats.", l.text_muted, 1);
@@ -292,17 +337,10 @@ void settings_render(int width, int height, int active) {
         AppRect card2 = {cx, 180, cw, 86};
         draw_card(card2, l.bg_card, l.border_card, 12);
         text(cx + 14, 188, "Output Volume Level", l.text_head, 1);
-        text(cx + 14, 204, "Select output volume level (hardware mixer attenuation):", l.text_muted, 1);
-
-        u8 vols[4] = {25, 50, 75, 100};
-        const char *vnames[4] = {"25%", "50%", "75%", "100%"};
-        u8 cur_vol = audio_get_volume();
-        for (int v = 0; v < 4; v++) {
-            int vx = cx + 14 + v * 85;
-            int sel = (cur_vol == vols[v] || (v == 3 && cur_vol >= 90));
-            roundrect(vx, 226, 75, 28, 8, sel ? acc : (dark ? 0x161a26 : 0xe9e1f3));
-            centered(vx, 233, 75, vnames[v], sel ? 0xffffff : l.text_body, 1);
-        }
+        char volume[16];number(volume,audio_get_volume());append_str(volume,"%",sizeof volume);
+        app_label(cx+cw-62,188,48,volume,l.text_body,1);
+        app_label(cx+14,204,cw-28,"Drag to adjust; saved when released.",l.text_muted,1);
+        draw_slider(l,0,audio_get_volume(),100);
 
         /* Sound Test Card */
         AppRect card3 = {cx, 276, cw, 78};
@@ -320,8 +358,9 @@ void settings_render(int width, int height, int active) {
         centered(cx + 242, 314, 110, "Trash Sound", l.text_body, 1);
 
         if (g_sound_played) {
-            roundrect(cx + 360, 309, 100, 24, 6, muted ? 0xef4444 : 0x059669);
-            centered(cx + 360, 313, 100, muted ? "Muted" : "Played OK!", 0xffffff, 1);
+            int status_width=cw-368;if(status_width>100)status_width=100;
+            roundrect(cx + 360, 309, status_width, 24, 6, muted ? 0xef4444 : 0x059669);
+            app_label(cx+364,313,status_width-8,muted?"Muted":"Played",0xffffff,1);
         } else {
             text(cx + 360, 314, "Click to test.", l.text_muted, 1);
         }
@@ -420,6 +459,7 @@ void settings_render(int width, int height, int active) {
 void settings_click(int x, int y) {
     GuiAppSize s = gui_app_size(APP_SETTINGS);
     SettingsLayout l = settings_calc_layout(s.width, s.height);
+    if(settings_drag(x,y,1)>=0)return;
 
     /* 1. Sidebar clicks */
     for (int i = 0; i < TAB_COUNT; i++) {
@@ -496,17 +536,6 @@ void settings_click(int x, int y) {
             app_host_invalidate(APP_SETTINGS);
         }
     } else if (g_settings_tab == TAB_SOUND) {
-        /* Volume buttons: 4 buttons at cx + 14 + v * 85, 226, 75, 28 */
-        u8 vols[4] = {25, 50, 75, 100};
-        for (int v = 0; v < 4; v++) {
-            int vx = cx + 14 + v * 85;
-            if (x >= vx && x <= vx + 75 && y >= 226 && y <= 254) {
-                audio_set_volume(vols[v]);
-                audio_play_sound(SOUND_CLICK);
-                app_host_invalidate(APP_SETTINGS);
-                break;
-            }
-        }
         /* Sound Mute Toggle: cx + 14, 306, 95, 30 */
         if (x >= cx + 14 && x <= cx + 109 && y >= 306 && y <= 336) {
             app_host_set_sound_muted(!app_host_sound_muted());

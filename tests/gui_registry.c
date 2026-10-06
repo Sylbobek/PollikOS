@@ -94,6 +94,8 @@ void terminal_key(u8 code, char ch, int shift, int control) {
 }
 void terminal_click(int x, int y) { record(APP_TERMINAL, CLICK, x, y, 0, 0); }
 int terminal_drag(int x, int y, int active) { record(APP_TERMINAL, DRAG, x, y, active, 0); return 1; }
+int settings_drag(int x,int y,int active) {record(APP_SETTINGS,DRAG,x,y,active,0);return 1;}
+void settings_close(void) {record(APP_SETTINGS,CLOSE,0,0,0,0);}
 void terminal_scroll(int delta) { record(APP_TERMINAL, SCROLL, delta, 0, 0, 0); }
 void notes_key(u8 code, char ch, int control) {
     record(APP_NOTES, KEY, code, ch, control, 0);
@@ -145,7 +147,7 @@ static int metadata(void) {
         BIT(RENDER) | BIT(CLICK), BIT(RENDER) | BIT(KEY) | BIT(CLICK) | BIT(CLOSE) | BIT(SCROLL) | BIT(POLL),
         BIT(RENDER) | BIT(KEY) | BIT(CLICK) | BIT(DRAG) | BIT(SCROLL),
         BIT(INIT) | BIT(RENDER) | BIT(KEY) | BIT(CLICK) | BIT(DRAG) | BIT(RESIZE) | BIT(SCROLL) | BIT(CURSOR),
-        BIT(RENDER) | BIT(CLICK), ((1u << OPS) - 1),
+        BIT(RENDER) | BIT(CLICK) | BIT(DRAG) | BIT(CLOSE), ((1u << OPS) - 1),
         BIT(INIT) | BIT(RENDER) | BIT(KEY) | BIT(CLICK) | BIT(OPEN) | BIT(CLOSE) | BIT(RESIZE) | BIT(POLL),
         BIT(INIT) | BIT(RENDER) | BIT(KEY) | BIT(CLICK)
     };
@@ -293,7 +295,7 @@ static int pointer_routing(void) {
             } else CHECK(total == 0);
             reset();
             int dragged = gui_app_drag(id, x, y, 1);
-            if (id == APP_TERMINAL || id == APP_BROWSER || id == APP_NOTES) {
+            if (id == APP_TERMINAL || id == APP_BROWSER || id == APP_NOTES || id == APP_SETTINGS) {
                 CHECK(dragged == 1 && only(id, DRAG));
                 CHECK(arg[0] == x && arg[1] == y && arg[2] == 1);
             } else CHECK(dragged == -1 && total == 0);
@@ -338,7 +340,7 @@ static int lifecycle(void) {
         for (int op = OPEN; op <= CLOSE; ++op) {
             reset();
             dispatch[op - OPEN](id);
-            if (id == APP_BROWSER || id == APP_POLLIKMARK || (id == APP_FILES && op == CLOSE)) CHECK(only(id, op));
+            if (id == APP_BROWSER || id == APP_POLLIKMARK || ((id == APP_FILES || id == APP_SETTINGS) && op == CLOSE)) CHECK(only(id, op));
             else CHECK(total == 0); /* Includes persistent Terminal/Notes close. */
         }
         for (unsigned s = 0; s < sizeof sizes / sizeof sizes[0]; ++s) {
