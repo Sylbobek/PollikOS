@@ -173,6 +173,57 @@ Actual i386 binary: `build/kernel.bin`, **829368 → 734588 bytes** (-94780).
 Actual installer binary: `build/install/kernel.bin`, **3952718 bytes**.
 These are not ELF or disk-image sizes.
 
+```powershell
+./build-x86_64.ps1
+Built build/x86_64/kernel/PollikOS-x86_64.img (440451 kernel bytes)
+./build-x86_64.ps1 -SelfTest
+Built build/x86_64/selftest/PollikOS-x86_64.img (530675 kernel bytes)
+python tests/x86_64_boot.py
+PASS: selftest-qemu64-16
+PASS: selftest-qemu64-64
+PASS: selftest-qemu64-256
+PASS: selftest-qemu64-5120
+PASS: selftest-qemu64-32768
+PASS: selftest-qemu64-64-reboot1
+PASS: selftest-qemu64-64-reboot2
+PASS: selftest-qemu64-64-full
+python tests/x86_64_storage.py
+PASS: missing/corrupt/unsupported/truncated storage refused without image changes
+```
+
+Actual guest serial lines from `build/x86_64/selftest-qemu64-16.log`:
+
+```text
+[MM64] balance before=0x0000000000000d7b after=0x0000000000000d7b
+[USER64] balance before=0x0000000000000d7b after=0x0000000000000d7b
+[ELF64] balance before=0x0000000000000d6a after=0x0000000000000d6a
+[SCHED64] balance before=0x0000000000000d6e after=0x0000000000000d6e
+[X64] SELFTEST PASS
+```
+
+32GiB serial: `[MM64] balance before=0x00000000007ff635 after=0x00000000007ff635`
+and `[X64] SELFTEST PASS`. The full boot command exited 0, including its native
+interactive console/TinyCC workflow. Logs: `build/system-x64-boot.txt` and
+`build/system-x64-storage.txt`.
+
+```powershell
+python tests/gui_registry.py
+PASS: gui registry (19393 checks)
+python tests/app_layout.py
+PASS: real app geometry, hit bounds, file scrolling, Notes wrapping/cursor, Terminal prompt wrapping, Calculator (201711 checks)
+python tests/browser_cooperative.py
+PASS: 972 cooperative services; home/success/error/close, no nested load or mutable DOM painting/layout/input
+python tests/browser_responsive.py --resolution 1024x768
+PASS: cursor pixels + WM drag + framebuffer progressed during held document/CSS bodies
+python tests/browser_responsive.py --resolution 1920x1080
+PASS: cursor pixels + WM drag + framebuffer progressed during held document/CSS bodies
+```
+
+The real `PollikData.img` was also booted with a read-only QEMU snapshot,
+without login: `[ICONS] PollikFS loaded=12 fallback=0`.
+Production refresh on a copy containing a personal file reported:
+`PASS production refresh on copy: user file preserved; second update byte-identical SHA256=dbc7912ad85edf686a96f75345038ae4eb280176c15d3fc45bf32acb5bd74824`.
+
 ## Assertion updates and limits
 
 - Registry bitmap-byte assertions moved from compiled palette arrays to the
