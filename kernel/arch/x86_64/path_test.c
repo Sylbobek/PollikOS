@@ -95,11 +95,13 @@ void path64_selftest(void) {
     int n;
     check(fd >= 0, "directory open");
     while ((n = vfs_readdir(fd, &entry)) > 0) { check(++entries <= 64, "bounded directory enumeration"); }
-    if (n != 0 || entries != 50) {
+    if (n != 0 || entries != 55) {
         memory_log("[PATH64] directory count="); memory_hex(entries);
         memory_log(" result="); memory_hex((uint64_t)n); memory_log("\n");
     }
-    check(n == 0 && entries == 54, "disk files visible through VFS");
+    /* Calculator was appended to the fixture; keep an exact count rather
+     * than a lower bound. Both normal and SelfTest images contain 55 files. */
+    check(n == 0 && entries == 55, "disk files visible through VFS");
     check(vfs_close(fd) == 0, "directory close");
     fd = vfs_open("/bin/hello", O_RDONLY);
     uint8_t header[4];
