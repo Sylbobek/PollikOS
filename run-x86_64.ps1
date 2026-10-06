@@ -6,11 +6,11 @@ param(
     [int]$MemoryMiB = 256
 )
 $ErrorActionPreference = 'Stop'
-$image = Join-Path $PSScriptRoot 'build/x86_64/kernel/PollikOS-x86_64.img'
-if (!$DataImage) { $DataImage = Join-Path $PSScriptRoot 'build/x86_64/kernel/PollikData-test.img' }
+$image = Join-Path $PSScriptRoot 'build/x86_64/system/PollikOS-x86_64.img'
+if (!$DataImage) { $DataImage = Join-Path $PSScriptRoot 'build/x86_64/system/PollikData-system.img' }
 foreach ($path in @($image,$DataImage)) {
     if (!(Test-Path -LiteralPath $path -PathType Leaf)) {
-        throw "Missing image: $path. Run build-x86_64.ps1 first. This launcher never formats disks."
+        throw "Missing image: $path. Run build-x86_64.ps1 -Production first. This launcher never formats disks."
     }
 }
 if ($MemoryMiB -lt 64) { throw 'The native target needs at least 64 MiB.' }

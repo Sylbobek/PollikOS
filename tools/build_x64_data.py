@@ -10,7 +10,7 @@ from format_pollikfs2 import format_disk, pack_inode, pack_dirent, START
 
 def build(output):
     output = Path(output).resolve()
-    assert output in {(ROOT / "build/x86_64/kernel").resolve(), (ROOT / "build/x86_64/selftest").resolve()}
+    assert output in {(ROOT / "build/x86_64/kernel").resolve(), (ROOT / "build/x86_64/selftest").resolve(),(ROOT/'build/x86_64/system').resolve()}
     target = output / "PollikData-test.img"
     pending = output / "PollikData-test.img.pending"
     format_disk(pending, total_size_mb=40)
@@ -210,6 +210,7 @@ def build(output):
     lib_inode = add_directory(usr_inode, "lib")
     share_inode = add_directory(usr_inode, "share")
     wallpapers_inode = add_directory(share_inode, "wallpapers")
+    icons_inode = add_directory(share_inode,"icons")
     src_inode = add_directory(usr_inode, "src")
     libc_src_inode = add_directory(src_inode, "libc")
     pollikos_inode = add_directory(include_inode, "pollikos")
@@ -240,6 +241,9 @@ def build(output):
                       (ROOT / "assets/Background_LightTheme.png").read_bytes())
     reserve_tree_file(wallpapers_inode, "dark.png",
                       (ROOT / "assets/Background_BlackTheme.png").read_bytes())
+    for name in ('welcome','files','terminal','notes','settings','browser','pollikmark','calculator',
+                 'folder','folder-blue','file','trash'):
+        reserve_tree_file(icons_inode,name+'.png',(ROOT/'assets/system-icons'/(name+'.png')).read_bytes())
     # Interactive shell fixture: the canonical self-host source in /home so the
     # terminal workflow can compile it without redirection support.
     reserve_tree_file(3, "hello.c",

@@ -6,6 +6,7 @@
 #include "ui_animation.h"
 #include "trash.h"
 #include "auth.h"
+#include "control_center.h"
 
 /* Private PS/2 decoder and pointer state. Symbol names remain compatible with
  * the existing QMP tests without exporting mutable pointers to other modules. */
@@ -46,6 +47,7 @@ static SnapTarget drag_snap_target(int id) {
     return target;
 }
 int input_cursor_kind(void) {
+    if(control_center_active())return CURSOR_POINTER;
     if (shell.drag && shell.drag_moved) return CURSOR_MOVE;
     if (shell.resizing >= 0) {
         if ((shell.resize_edges & (RESIZE_LEFT | RESIZE_TOP)) == (RESIZE_LEFT | RESIZE_TOP) ||
@@ -121,6 +123,10 @@ void input_dispatch_init(void) {
     if (mouse_cmd(0xf4)) serial(mouse_packet_size == 4 ? "INPUT PS/2 wheel ready; ACK/retry enabled\n" : "INPUT standard PS/2 ready\n");
 }
 static void click(void) {
+    if(control_center_active()) {
+        if(!window_only)control_center_click(mx,my);
+        return;
+    }
     /* Do not execute modal callbacks or launch clients on the loader's stack. */
     if (window_only && (g_active_dialog.active || g_active_menu.active)) return;
     if (g_active_dialog.active && ui_dialog_on_mouse_down(mx, my, 0)) {
@@ -264,6 +270,7 @@ static void key(u8 code) {
         }
         return; /* Discard, do not replay commands against a different focus. */
     }
+    if(!window_only&&control_center_key(code))return;
     if (g_active_dialog.active && ui_dialog_on_key(code, shift, control)) { shell.dirty = 1; return; }
     if (g_active_menu.active && ui_menu_on_key(&g_active_menu, code, shift)) {
         if (g_active_menu.active)
@@ -366,6 +373,12 @@ static void pointer_packet(const u8 *packet) {
         if (auth_pointer(mx, my, packet[0] & 1)) request_scene_redraw();
         compositor_draw_cursor(0);
         return;
+    }
+    if(control_center_active()) {
+        int down=packet[0]&1;
+        if(down&&!held&&!window_only)control_center_click(mx,my);
+        if(!window_only)control_center_pointer(mx,my,down);
+        held=down;right_held=(packet[0]&2)!=0;compositor_draw_cursor(0);return;
     }
     /* A modal dialog repaints only its own card: focused-button changes and
      * title-bar drags damage the union of the old and new rectangle, never the

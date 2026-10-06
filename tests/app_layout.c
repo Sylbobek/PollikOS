@@ -114,6 +114,8 @@ void app_host_set_cursor_size(int percent) { cursor_size=percent;setting_saves++
 void app_host_preview_cursor_size(int percent) { cursor_size=percent; }
 void app_host_save_settings(void) { setting_saves++; }
 int audio_is_available(void) { return 0; }
+int audio_output(void){return 0;}
+int audio_select_output(int n){return n==0;}
 u8 audio_get_volume(void) { return (u8)volume; }
 void audio_set_volume(u8 v) { volume=v; }
 void audio_play_sound(SoundEffect s) { (void)s; }

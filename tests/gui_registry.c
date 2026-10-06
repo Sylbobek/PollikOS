@@ -4,13 +4,9 @@
  * Clang from treating kernel memory declarations as host libc declarations.
  */
 #include "../kernel/gui/apps.h"
-#include "../kernel/gui/calculator_icon.h"
 #include "../kernel/browser/browser.h"
-#include "../kernel/ui_data.h"
 #include "../kernel/gui/pollikmark.h"
 extern int printf(const char *format, ...);
-u8 pollikmark_icon[256], pollikmark_alpha[128];
-const u32 pollikmark_palette[4] = {0x102030, 0x405060, 0x708090, 0xa0b0c0};
 static int mark_poll_result;
 
 _Static_assert(APP_WELCOME == 0 && APP_FILES == 1 && APP_TERMINAL == 2 &&
@@ -157,33 +153,8 @@ static int metadata(void) {
         CHECK(app != 0);
         CHECK(gui_app_get(id) == app);
         CHECK(text_equal(app->name, names[id]));
-        CHECK(app->icon.width == (id == APP_POLLIKMARK || id == APP_CALCULATOR ? 16 : 72));
-        CHECK(app->icon.height == app->icon.width);
-        CHECK(app->icon.indices && app->icon.alpha && app->icon.palette);
-        if (id == APP_POLLIKMARK) {
-            CHECK(app->icon.indices == pollikmark_icon);
-            CHECK(app->icon.alpha == pollikmark_alpha);
-            CHECK(app->icon.palette == pollikmark_palette);
-            for (unsigned i = 0; i < sizeof pollikmark_icon; ++i)
-                CHECK(app->icon.indices[i] == pollikmark_icon[i]);
-            for (unsigned i = 0; i < sizeof pollikmark_alpha; ++i)
-                CHECK(app->icon.alpha[i] == pollikmark_alpha[i]);
-            for (unsigned i = 0; i < 4; ++i)
-                CHECK(app->icon.palette[i] == pollikmark_palette[i]);
-        } else if(id==APP_CALCULATOR) {
-            for(unsigned i=0;i<sizeof calculator_icon;i++) CHECK(app->icon.indices[i]==calculator_icon[i]);
-            for(unsigned i=0;i<sizeof calculator_alpha;i++) CHECK(app->icon.alpha[i]==calculator_alpha[i]);
-            for(unsigned i=0;i<4;i++) CHECK(app->icon.palette[i]==calculator_palette[i]);
-        } else {
-        /* ui_data.h contains static arrays, so compare contents, not addresses
-         * across translation units. No generated assets or icon stubs needed. */
-        for (unsigned i = 0; i < sizeof icons_index[id]; ++i)
-            CHECK(app->icon.indices[i] == icons_index[id][i]);
-        for (unsigned i = 0; i < sizeof icons_alpha[id]; ++i)
-            CHECK(app->icon.alpha[i] == icons_alpha[id][i]);
-        for (unsigned i = 0; i < sizeof icons_palette[id] / sizeof(u32); ++i)
-            CHECK(app->icon.palette[i] == icons_palette[id][i]);
-        }
+        CHECK(app->icon.width == 64 && app->icon.height == 64);
+        CHECK(!app->icon.indices && !app->icon.alpha && !app->icon.palette); /* FS-owned pixels */
         CHECK(app->body_active == (id == APP_POLLIKMARK ? 0x202b40u : id == APP_TERMINAL ? 0x202331u : 0xfaf9fcu));
         CHECK(app->body_inactive == (id == APP_POLLIKMARK ? 0x202b40u : id == APP_TERMINAL ? 0x1a1c27u : 0xf4f2f7u));
         CHECK(app->bottom_inset == (id == APP_BROWSER ? 18 : 0));

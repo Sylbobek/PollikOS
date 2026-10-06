@@ -383,7 +383,11 @@ enum
    STBI_rgb_alpha  = 4
 };
 
-#include "../../kernel/mem.h" /* PollikOS allocator declarations */
+#ifndef STBI_EXTERNAL_RUNTIME
+#include "../../kernel/mem.h" /* PollikOS kernel allocator declarations */
+#else
+#include <stdlib.h>
+#endif
 typedef unsigned char stbi_uc;
 typedef unsigned short stbi_us;
 
@@ -586,7 +590,11 @@ STBIDEF int   stbi_zlib_decode_noheader_buffer(char *obuffer, int olen, const ch
 
 #include <stdarg.h>
 #include <stddef.h> // ptrdiff_t on osx
-#include "../../kernel/mem.h" /* PollikOS allocator declarations */
+#ifndef STBI_EXTERNAL_RUNTIME
+#include "../../kernel/mem.h" /* PollikOS kernel allocator declarations */
+#else
+#include <stdlib.h>
+#endif
 #include <string.h>
 #include <limits.h>
 

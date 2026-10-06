@@ -1,8 +1,6 @@
 #ifndef POLLIKMARK_H
 #define POLLIKMARK_H
 #include "../system.h"
-extern u8 pollikmark_icon[256], pollikmark_alpha[128];
-extern const u32 pollikmark_palette[4];
 void pollikmark_init(void);
 void pollikmark_open(void);
 void pollikmark_close(void);

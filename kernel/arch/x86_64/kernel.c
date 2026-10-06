@@ -312,6 +312,7 @@ static void kernel64_continue(void) {
         serial64("[VFS64] mount refused; disk unchanged\n");
         halt();
     }
+#ifndef PRODUCTION
     if (!elf64_demo()) halt();
     file64_demo();
     stat64_demo();
@@ -323,6 +324,7 @@ static void kernel64_continue(void) {
     c5_demo();
     c6_demo();
     c7_demo();
+#endif
 #ifdef SELFTEST
     rtc64_selftest();
     disk64_load_regression_fixtures();
@@ -360,7 +362,9 @@ static void kernel64_continue(void) {
     probe_double_fault((void *)(main_stack.base + 2048));
     fail("double fault did not occur");
 #else
+#ifndef PRODUCTION
     scheduler64_demo();
+#endif
     serial64("[X64] ready (Ring 3, native .pol windows, Desktop/Files Dock apps)\n");
     console64_run();
 #endif

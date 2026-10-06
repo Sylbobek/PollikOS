@@ -15,6 +15,7 @@ if (Get-Command python -ErrorAction SilentlyContinue) {
 }
 function Invoke-Checked { param([string]$Program, [string[]]$Arguments) & $Program @Arguments; if ($LASTEXITCODE -ne 0) { throw "$Program failed ($LASTEXITCODE)" } }
 Invoke-Checked python @('assets/build_cursor.py','--output','kernel/cursor_sprites.h')
+Invoke-Checked python @('assets/build_system_icons.py')
 $tscCompileFlags = @()
 if ($LegacyTsc) { $tscCompileFlags += '-DPOLLIK_TSC_FORCE_CPUID=1' }
 if ($LegacyTsc) { Write-Host 'TSC reader: legacy CPUID serialization' }
@@ -36,7 +37,7 @@ Invoke-Checked nasm @('-f','bin','boot/stage2.asm','-o','build/stage2.bin')
 Invoke-Checked nasm @('-f','elf32','kernel/entry.asm','-o','build/entry.o')
 Invoke-Checked nasm @('-f','elf32','kernel/interrupts.asm','-o','build/interrupts.o')
 $netModules = @('net_util','rtl8139','wifi_if','arp','ipv4','icmp','udp','dhcp','dns','tcp','tls','http','net_manager')
-foreach ($module in @('kernel','desktop','compositor','graphics','gfx_device','soft3d','input_dispatch','wm','hw','hal','mem','pmm','vmm','klog','ahci','storage','pollikfs','vfs','process','syscall','elf','network','framebuffer','ui','trash','ui_animation','desktop_items','auth','media','pollikgl','audio')) {
+foreach ($module in @('kernel','desktop','compositor','graphics','gfx_device','soft3d','input_dispatch','wm','hw','hal','mem','pmm','vmm','klog','ahci','storage','pollikfs','vfs','process','syscall','elf','network','framebuffer','ui','ui_icons','control_center','trash','ui_animation','desktop_items','auth','media','pollikgl','audio')) {
     $optimization = if ($module -eq 'wm') { '-Oz' } else { '-Os' }
     $moduleFlags = @()
     if ($module -eq 'compositor' -and $LegacyDamage) { $moduleFlags += '-DPOLLIK_COMPOSITOR_LEGACY_DAMAGE=1' }
@@ -73,7 +74,7 @@ foreach ($app in $userApps) {
 }
 $browserObjs = @($browserModules | ForEach-Object { "build/$_.o" })
 $netObjs = @($netModules | ForEach-Object { "build/$_.o" })
-$linkArgs = @('-m','elf_i386','-T','kernel/linker.ld','build/entry.o','build/interrupts.o','build/kernel.o','build/desktop.o','build/compositor.o','build/graphics.o','build/gfx_primitives.o','build/gfx_device.o','build/soft3d.o','build/input_dispatch.o','build/wm.o','build/ui.o','build/hw.o','build/hal.o','build/mem.o','build/pmm.o','build/vmm.o','build/klog.o','build/ahci.o','build/storage.o','build/pollikfs.o','build/vfs.o','build/process.o','build/syscall.o','build/elf.o','build/trash.o','build/ui_animation.o','build/desktop_items.o','build/auth.o','build/media.o','build/pollikgl.o','build/audio.o') + $userElfObjs + @('build/network.o','build/framebuffer.o') + $netObjs + $browserObjs + $guiObjs + @('build/elk.o') + @('build/libbearssl.a','-o','build/kernel.elf')
+$linkArgs = @('-m','elf_i386','-T','kernel/linker.ld','build/entry.o','build/interrupts.o','build/kernel.o','build/desktop.o','build/compositor.o','build/graphics.o','build/gfx_primitives.o','build/gfx_device.o','build/soft3d.o','build/input_dispatch.o','build/wm.o','build/ui.o','build/ui_icons.o','build/control_center.o','build/hw.o','build/hal.o','build/mem.o','build/pmm.o','build/vmm.o','build/klog.o','build/ahci.o','build/storage.o','build/pollikfs.o','build/vfs.o','build/process.o','build/syscall.o','build/elf.o','build/trash.o','build/ui_animation.o','build/desktop_items.o','build/auth.o','build/media.o','build/pollikgl.o','build/audio.o') + $userElfObjs + @('build/network.o','build/framebuffer.o') + $netObjs + $browserObjs + $guiObjs + @('build/elk.o') + @('build/libbearssl.a','-o','build/kernel.elf')
 Invoke-Checked ld.lld $linkArgs
 Invoke-Checked llvm-objcopy @('-O','binary','build/kernel.elf','build/kernel.bin')
 $kernelBytes = [IO.File]::ReadAllBytes("$PSScriptRoot/build/kernel.bin")
@@ -117,6 +118,8 @@ New-Item -ItemType Directory -Force build/install | Out-Null
 $wallpaperPackage = 'build/install/wallpapers_pkg.bin'
 Invoke-Checked python @('tools/build_wallpaper_package.py','--output',$wallpaperPackage)
 Invoke-Checked llvm-objcopy @('-I','binary','-O','elf32-i386','-B','i386',$wallpaperPackage,'build/install/wallpapers_pkg.o')
+Invoke-Checked python @('tools/build_icon_package.py','build/install/icons_pkg.bin')
+Invoke-Checked llvm-objcopy @('-I','binary','-O','elf32-i386','-B','i386','build/install/icons_pkg.bin','build/install/icons_pkg.o')
 $runtimePrefix = 'build/install/runtime-prefix.bin'
 $prefixStream = [IO.File]::Open($runtimePrefix, [IO.FileMode]::Create, [IO.FileAccess]::Write, [IO.FileShare]::Read)
 try {
@@ -145,7 +148,7 @@ for ($i = 0; $i -lt $linkArgs.Count; $i++) {
     $installerLinkArgs += $linkArgs[$i]
 }
 $installerLinkArgs += @('build/install/installer.o','build/install/runtime-prefix.o',
-                        'build/install/wallpapers_pkg.o','-o','build/install/kernel.elf')
+                        'build/install/wallpapers_pkg.o','build/install/icons_pkg.o','-o','build/install/kernel.elf')
 Invoke-Checked ld.lld $installerLinkArgs
 Invoke-Checked llvm-objcopy @('-O','binary','build/install/kernel.elf','build/install/kernel.bin')
 $installerKernel = [IO.File]::ReadAllBytes("$PSScriptRoot/build/install/kernel.bin")

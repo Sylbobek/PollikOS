@@ -6,7 +6,7 @@
 #include "shell_internal.h"
 #include "graphics.h"
 #include "klog.h"
-#include "ui_data.h"
+#include "ui_icons.h"
 #include "sample_media.h"
 
 #define GRID_START_X  24
@@ -1010,15 +1010,15 @@ static void __attribute__((unused)) draw_desktop_golden_folder(int x, int y, int
 
 static void draw_item_icon(const DesktopItem *item, int x, int y, int size) {
     if (item->type == ITEM_DIR) {
-        sprite(x, y, size, size, desktop_icons_index[0], desktop_icons_alpha[0], desktop_icons_palette[0], 72, 72);
+        ui_icon_draw(UI_ICON_FOLDER,x,y,size);
     } else if (item->type == ITEM_APP && item->app_id == APP_FILES) {
-        sprite(x, y, size, size, desktop_icons_index[3], desktop_icons_alpha[3], desktop_icons_palette[3], 72, 72);
+        ui_icon_draw(UI_ICON_FOLDER_BLUE,x,y,size);
     } else if (item->type == ITEM_TXT) {
-        sprite(x, y, size, size, desktop_icons_index[1], desktop_icons_alpha[1], desktop_icons_palette[1], 72, 72);
+        ui_icon_draw(UI_ICON_FILE,x,y,size);
     } else if (item->type == ITEM_FILE) {
-        sprite(x, y, size, size, desktop_icons_index[1], desktop_icons_alpha[1], desktop_icons_palette[1], 72, 72);
+        ui_icon_draw(UI_ICON_FILE,x,y,size);
     } else if (item->type == ITEM_TRASH) {
-        sprite(x, y, size, size, desktop_icons_index[2], desktop_icons_alpha[2], desktop_icons_palette[2], 72, 72);
+        ui_icon_draw(UI_ICON_TRASH,x,y,size);
     } else if (item->type == ITEM_APP) {
         if (item->app_id >= 0 && item->app_id < APP_COUNT) {
             draw_app_vector_icon(item->app_id, x, y, size);

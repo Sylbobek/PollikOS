@@ -20,6 +20,9 @@ from pollikfs_install import (PollikFsImage, PollikFsError, START, BLOCK_SIZE,
 SPAN = START + 32768 * BLOCK_SIZE
 FILES = {"/usr/share/wallpapers/light.png": ROOT / "assets/Background_LightTheme.png",
          "/usr/share/wallpapers/dark.png": ROOT / "assets/Background_BlackTheme.png"}
+ICON_NAMES=('welcome','files','terminal','notes','settings','browser','pollikmark','calculator',
+            'folder','folder-blue','file','trash')
+FILES.update({f'/usr/share/icons/{name}.png':ROOT/f'assets/system-icons/{name}.png' for name in ICON_NAMES})
 
 @contextlib.contextmanager
 def exclusive_image(path):
@@ -164,7 +167,8 @@ class StagedImage(PollikFsImage):
             return
         raise PollikFsError(f"missing system file {path}")
 
-def sync(path):
+def sync(path, files=None):
+    files=FILES if files is None else files
     with exclusive_image(path) as disk:
         length = os.fstat(disk.fileno()).st_size
         if length < SPAN:
@@ -173,10 +177,11 @@ def sync(path):
         before_fs = validate(original)
         before = manifest(before_fs)
         staged = StagedImage(original)
-        staged.ensure_directory('/usr/share/wallpapers')
+        for directory in sorted({target.rpartition('/')[0] for target in files}):
+            staged.ensure_directory(directory)
         changed = []
-        for target, asset in FILES.items():
-            content = asset.read_bytes()
+        for target, asset in files.items():
+            content = asset if isinstance(asset,bytes) else asset.read_bytes()
             if target in before:
                 if before_fs.read_file(target) == content: continue
                 staged.remove_system_file(target)
@@ -185,7 +190,7 @@ def sync(path):
         staged._write_superblock()
         after = manifest(validate(staged.data))
         for target, record in before.items():
-            if target not in FILES and not target.endswith('/') and after.get(target) != record:
+            if target not in files and not target.endswith('/') and after.get(target) != record:
                 raise PollikFsError(f"unrelated file changed during staging: {target}")
         # No disk writes have happened above, including allocation failures.
         patches = [(i, original[i:i+BLOCK_SIZE], staged.data[i:i+BLOCK_SIZE])

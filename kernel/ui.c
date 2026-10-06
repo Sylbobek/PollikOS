@@ -1,4 +1,5 @@
 #include "ui.h"
+#include "ui_icons.h"
 #include "gui/apps.h"
 
 /* =========================================================================
@@ -150,6 +151,17 @@ u32 ui_accent_hover(void) {
  * ========================================================================= */
 
 void ui_draw_icon(IconKind kind, int x, int y, int size, u32 accent, u32 fg) {
+    int asset=-1;
+    switch(kind) {
+        case ICON_FOLDER:asset=UI_ICON_FOLDER;break;
+        case ICON_FILE:case ICON_TEXT:case ICON_IMAGE:asset=UI_ICON_FILE;break;
+        case ICON_APP:case ICON_INFO:asset=UI_ICON_WELCOME;break;
+        case ICON_TRASH:asset=UI_ICON_TRASH;break;
+        case ICON_SETTINGS:asset=UI_ICON_SETTINGS;break;
+        case ICON_TERMINAL:asset=UI_ICON_TERMINAL;break;
+        default:break;
+    }
+    if(asset>=0){ui_icon_draw(asset,x,y,size);return;}
     if (kind == ICON_NONE || size <= 0) return;
     int s = size;
     ThemeColors *th = ui_theme();
@@ -548,17 +560,17 @@ void ui_menu_open(UiMenu *m, int x, int y, const UiMenuItem *items, int count, v
             total_h += 9;
             continue;
         }
-        total_h += 26;
+        total_h += 34;
         if (items[i].icon != ICON_NONE) has_icon = 1;
-        int tw = items[i].label ? ui_bridge_text_width(items[i].label, 1) : 0;
+        int tw = items[i].label ? ui_bridge_text_width(items[i].label, 2) : 0;
         if (tw > max_tw) max_tw = tw;
-        int sw = items[i].shortcut ? ui_bridge_text_width(items[i].shortcut, 1) : 0;
+        int sw = items[i].shortcut ? ui_bridge_text_width(items[i].shortcut, 2) : 0;
         if (sw > max_sw) max_sw = sw;
     }
 
     int calc_w = max_tw + (has_icon ? 26 : 12) + (max_sw ? max_sw + 24 : 16) + 16;
     if (calc_w < 180) calc_w = 180;
-    if (calc_w > 320) calc_w = 320;
+    if (calc_w > 440) calc_w = 440;
 
     int screen_w = ui_bridge_screen_width();
     int screen_h = ui_bridge_screen_height();
@@ -610,7 +622,7 @@ void ui_draw_menu(UiMenu *m) {
 
         int is_sel = (i == m->selected_index || i == m->hovered_index) && item->enabled;
         if (is_sel) {
-            ui_bridge_roundrect(m->x + 6, cur_y + 1, m->w - 12, 24, 8, th->selection);
+            ui_bridge_roundrect(m->x + 6, cur_y + 1, m->w - 12, 32, 8, th->selection);
         }
 
         u32 text_col = item->enabled ? (is_sel ? th->selection_text : th->text) : th->text_muted;
@@ -630,20 +642,20 @@ void ui_draw_menu(UiMenu *m) {
             if (!item->enabled) ico_accent = th->text_muted;
             u32 icon_tile = is_dark ? ui_bridge_blend(menu_bg, ico_accent, is_sel ? 54 : 32)
                                     : ui_bridge_blend(0xffffff, ico_accent, is_sel ? 48 : 24);
-            ui_bridge_roundrect(m->x + 8, cur_y + 2, 22, 22, 7, icon_tile);
-            ui_draw_icon(item->icon, m->x + 11, cur_y + 5, 16, ico_accent, text_col);
+            ui_bridge_roundrect(m->x + 8, cur_y + 6, 22, 22, 7, icon_tile);
+            ui_draw_icon(item->icon, m->x + 11, cur_y + 9, 16, ico_accent, text_col);
         }
 
         /* Label */
         int label_x = m->x + (item->icon != ICON_NONE ? 38 : 14);
         if (item->label) {
-            ui_bridge_text(label_x, cur_y + 9, item->label, text_col, 1);
+            ui_bridge_text(label_x, cur_y + 7, item->label, text_col, 2);
         }
 
         /* Shortcut */
         if (item->shortcut) {
-            int sw = ui_bridge_text_width(item->shortcut, 1);
-            ui_bridge_text(m->x + m->w - sw - 14, cur_y + 9, item->shortcut, is_sel ? text_col : th->text_secondary, 1);
+            int sw = ui_bridge_text_width(item->shortcut, 2);
+            ui_bridge_text(m->x + m->w - sw - 14, cur_y + 7, item->shortcut, is_sel ? text_col : th->text_secondary, 2);
         }
 
         /* Submenu indicator */
@@ -651,7 +663,7 @@ void ui_draw_menu(UiMenu *m) {
             ui_draw_icon(ICON_CHEVRON_RIGHT, m->x + m->w - 17, cur_y + 7, 12, th->accent, text_col);
         }
 
-        cur_y += 26;
+        cur_y += 34;
     }
 }
 
@@ -723,7 +735,7 @@ int ui_menu_on_mouse_move(UiMenu *m, int mx, int my) {
 
     int cur_y = m->y + 6;
     for (int i = 0; i < m->item_count; i++) {
-        int item_h = (m->items[i].kind == MENU_ITEM_SEPARATOR) ? 9 : 26;
+        int item_h = (m->items[i].kind == MENU_ITEM_SEPARATOR) ? 9 : 34;
         if (my >= cur_y && my < cur_y + item_h) {
             if (m->items[i].kind != MENU_ITEM_SEPARATOR && m->items[i].enabled) {
                 m->hovered_index = i;
@@ -750,7 +762,7 @@ int ui_menu_on_mouse_down(UiMenu *m, int mx, int my, int button) {
 
     int cur_y = m->y + 6;
     for (int i = 0; i < m->item_count; i++) {
-        int item_h = (m->items[i].kind == MENU_ITEM_SEPARATOR) ? 9 : 26;
+        int item_h = (m->items[i].kind == MENU_ITEM_SEPARATOR) ? 9 : 34;
         if (my >= cur_y && my < cur_y + item_h) {
             if (m->items[i].kind != MENU_ITEM_SEPARATOR && m->items[i].enabled) {
                 int action_id = m->items[i].id;
@@ -865,7 +877,8 @@ void ui_dialog_close(void) {
  * the whole card on screen. Shared by drawing, hit-testing and invalidation. */
 static void dialog_rect(const UiDialog *d, int *dx, int *dy, int *dw, int *dh) {
     int sw = ui_bridge_screen_width(), sh = ui_bridge_screen_height();
-    int w = 380, h = (d->kind == DIALOG_INPUT) ? 168 : 150;
+    int about = !memcmp(d->title,"About PollikOS",sizeof "About PollikOS");
+    int w = 380, h = about ? 212 : (d->kind == DIALOG_INPUT) ? 168 : 150;
     int x = d->x >= 0 ? d->x : (sw - w) / 2;
     int y = d->y >= 0 ? d->y : (sh - h) / 2;
     if (x < 4) x = 4;
@@ -904,7 +917,7 @@ void ui_draw_dialog(void) {
 
     /* Title bar */
     ui_bridge_rect(dx + 12, dy + 32, dw - 24, 1, th->border_subtle);
-    ui_bridge_text(dx + 16, dy + 10, d->title, th->text, 1);
+    ui_bridge_text(dx + 16, dy + 8, d->title, th->text, 2);
 
     /* Close button [X] at top right */
     ui_bridge_roundrect(dx + dw - 26, dy + 8, 16, 16, 8, th->surface_secondary);
@@ -919,6 +932,8 @@ void ui_draw_dialog(void) {
     int text_x = icon_x + icon_size + 14;
     int text_y = dy + 48;
     /* Draw message text with clean line wrapping */
+    int about = !memcmp(d->title,"About PollikOS",sizeof "About PollikOS");
+    int message_scale=about?2:1, line_height=about?26:16;
     const char *p = d->message;
     char line[48];
     int lidx = 0;
@@ -926,23 +941,23 @@ void ui_draw_dialog(void) {
     while (*p && cur_ty < dy + dh - 40) {
         if (*p == '\n') {
             line[lidx] = 0;
-            ui_bridge_text(text_x, cur_ty, line, th->text, 1);
-            cur_ty += 16;
+            ui_bridge_text(text_x, cur_ty, line, th->text, message_scale);
+            cur_ty += line_height;
             lidx = 0;
             p++;
             continue;
         }
         line[lidx++] = *p++;
-        if (lidx >= 40) {
+        if (lidx >= (about?22:40)) {
             line[lidx] = 0;
-            ui_bridge_text(text_x, cur_ty, line, th->text, 1);
-            cur_ty += 16;
+            ui_bridge_text(text_x, cur_ty, line, th->text, message_scale);
+            cur_ty += line_height;
             lidx = 0;
         }
     }
     if (lidx > 0 && cur_ty < dy + dh - 40) {
         line[lidx] = 0;
-        ui_bridge_text(text_x, cur_ty, line, th->text, 1);
+        ui_bridge_text(text_x, cur_ty, line, th->text, message_scale);
     }
 
     /* Input text box for DIALOG_INPUT */

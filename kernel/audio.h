@@ -16,6 +16,9 @@ void audio_play_tone(u32 freq_hz, u32 duration_ms);
 void audio_play_sound(SoundEffect s);
 void audio_set_volume(u8 vol_0_to_100);
 u8 audio_get_volume(void);
+/* 0 PC speaker; 1 AC'97. Unavailable devices are rejected. */
+int audio_output(void);
+int audio_select_output(int device);
 int audio_play_wav(const u8 *data, u32 len);
 int audio_play_wav_file(const char *path);
 

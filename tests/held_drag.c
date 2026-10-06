@@ -4,6 +4,7 @@
  * graphics.c is linked unchanged. Only external shell/client services are mocks.
  */
 #include "../kernel/shell_internal.h"
+#include "fixtures/ui_data.h" /* Frozen sprite oracle; never linked into kernel. */
 extern int printf(const char *, ...);
 
 /* PMM/VBE addresses are intentionally 32-bit in the kernel. These unreachable
@@ -116,6 +117,8 @@ void dock_draw_content(void) {
     sprite(360, H - 88, 56, 56, cursors_index[2], cursors_alpha[2], cursors_palette[2], 32, 36);
 }
 void ui_draw_dialog(void) { rounded(400, 200, 340, 280, 12, 0xeeeeee, 190); }
+void control_center_draw(void){}
+int control_center_active(void){return 0;}
 void ui_draw_menu(UiMenu *m) { (void)m; rounded(100, 300, 250, 180, 8, 0x303040, 200); }
 void ui_draw_notifications(u32 now) {
     (void)now;
@@ -300,6 +303,21 @@ static u64 test_pixel_hash(const u32 *buffer) {
 }
 #include "corners.h"
 int main(void) {
+    for(int percent=20;percent<=100;percent++) {
+        framebuffer_set_brightness(percent);
+        for(int value=0;value<256;value++) {
+            u32 color=0xff000000u|((u32)value<<16)|((u32)(255-value)<<8)|(u32)value;
+            u32 actual=brightness_pixel(color);
+            for(int shift=0;shift<=16;shift+=8) {
+                int expected=(((color>>shift)&255)*(u32)percent+50)/100;
+                int difference=(int)((actual>>shift)&255)-expected;
+                if(difference < -1 || difference > 1)failures++;
+            }
+            if((actual>>24)!=255)failures++;
+        }
+    }
+    framebuffer_set_brightness(100);
+    if(!failures)printf("PASS brightness: 62208 channel vectors, max channel error 1, alpha preserved\n");
     setup();
     failures += !held_drag();
     failures += !cursor_presentations();

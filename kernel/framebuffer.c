@@ -2,6 +2,18 @@
 static volatile u8 *address;
 static int stride, bytes, screen_w, screen_h;
 static u32 presents, transferred;
+static int brightness_percent=100;
+static u32 brightness_factor=256;
+int framebuffer_brightness(void){return brightness_percent;}
+void framebuffer_set_brightness(int percent){
+    if(percent<20)percent=20;if(percent>100)percent=100;
+    brightness_percent=percent;brightness_factor=(u32)(percent*256+50)/100;
+}
+static u32 brightness_pixel(u32 c){
+    u32 rb=(((c&0x00ff00ffu)*brightness_factor+0x00800080u)>>8)&0x00ff00ffu;
+    u32 g=(((c&0x0000ff00u)*brightness_factor+0x00008000u)>>8)&0x0000ff00u;
+    return (c&0xff000000u)|rb|g;
+}
 /* QEMU fw_cfg carries the launcher's monitor choice. Missing configuration
  * retains the BIOS mode so older launchers and non-QEMU machines still boot. */
 static void requested_mode(int *w, int *h) {
@@ -100,7 +112,8 @@ void framebuffer_present(const u32 *source, int x, int y, int w, int h) {
              * Linear framebuffer memory, not register MMIO; no atomic flip. */
             void *dest = (void *)(address + line * stride + x * 4);
             const u32 *s = source + line * screen_w + x;
-            memcpy(dest, s, (u32)w * sizeof(u32));
+            if(brightness_percent==100)memcpy(dest,s,(u32)w*sizeof(u32));
+            else for(int col=0;col<w;col++)((volatile u32 *)dest)[col]=brightness_pixel(s[col]);
         }
     } else {
         for (int row = 0; row < h; row++) {
@@ -108,7 +121,7 @@ void framebuffer_present(const u32 *source, int x, int y, int w, int h) {
             volatile u8 *dest = address + line * stride + x * bytes;
             const u32 *s = source + line * screen_w + x;
             for (int col = 0; col < w; col++) {
-                u32 c = s[col];
+                u32 c = brightness_percent==100?s[col]:brightness_pixel(s[col]);
                 dest[col * 3] = (u8)c;
                 dest[col * 3 + 1] = (u8)(c >> 8);
                 dest[col * 3 + 2] = (u8)(c >> 16);
@@ -141,9 +154,12 @@ void framebuffer_present_cursor_pair(const u32 *old_pixels, int old_x, int old_y
         for (int row = 0; row < h; ++row) {
             const u32 *s = source + (sy + row) * widths[region] + sx;
             volatile u8 *dest = address + (y + row) * stride + x * bytes;
-            if (bytes == 4) memcpy((void *)dest, s, (u32)w * sizeof(u32));
+            if (bytes == 4) {
+                if(brightness_percent==100)memcpy((void *)dest,s,(u32)w*sizeof(u32));
+                else for(int col=0;col<w;col++)((volatile u32 *)dest)[col]=brightness_pixel(s[col]);
+            }
             else for (int col = 0; col < w; ++col) {
-                u32 c = s[col];
+                u32 c = brightness_percent==100?s[col]:brightness_pixel(s[col]);
                 dest[col * 3] = (u8)c;
                 dest[col * 3 + 1] = (u8)(c >> 8);
                 dest[col * 3 + 2] = (u8)(c >> 16);

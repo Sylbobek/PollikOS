@@ -18,6 +18,8 @@
 #include "auth.h"
 #include "media.h"
 #include "audio.h"
+#include "ui_icons.h"
+#include "control_center.h"
 
 static int desktop_ready;
 static int user_resize_notification=-1;
@@ -142,6 +144,8 @@ void app_host_save_settings(void) {
     WRITE_SETTING("pointer_accel=", input_get_pointer_acceleration());
     WRITE_SETTING("cursor_size=", compositor_cursor_size());
     WRITE_SETTING("audio_volume=", audio_get_volume());
+    WRITE_SETTING("brightness=",framebuffer_brightness());
+    WRITE_SETTING("audio_output=",audio_output());
 
     #undef WRITE_SETTING
 
@@ -199,6 +203,12 @@ static void desktop_load_settings(void) {
             sound_set_muted(val);
         } else if (memcmp(line, "pointer_accel=", 14) == 0) {
             input_set_pointer_acceleration(line[14] == '1');
+        } else if (memcmp(line,"brightness=",11)==0) {
+            unsigned val=0;char *v=line+11;
+            while(*v>='0'&&*v<='9'&&val<=100)val=val*10+*v++-'0';
+            if(val>=20&&val<=100)framebuffer_set_brightness((int)val);
+        } else if (memcmp(line,"audio_output=",13)==0) {
+            if(line[13]=='0'||line[13]=='1')audio_select_output(line[13]-'0');
         } else if (memcmp(line, "audio_volume=", 13) == 0) {
             unsigned val=0;char *v=line+13;
             while(*v>='0'&&*v<='9'&&val<=100)val=val*10+*v++-'0';
@@ -575,9 +585,7 @@ static void on_menu_action(int action_id) {
     shell.dirty = 1;
     switch (action_id) {
         case ACTION_ABOUT_POLLIKOS:
-            ui_dialog_confirm("About PollikOS",
-                "PollikOS Desktop Edition\nx86 Native Compositor & Shell\nA desktop OS with Pollik UX design.",
-                "OK", "Cancel", 0, ICON_APP, NULL);
+            ui_dialog_message("About PollikOS","PollikOS\nDesktop: i386\nPollikFS v2",ICON_INFO,0);
             break;
         case ACTION_DISPLAY_SETTINGS:
             ui_toggle_theme_mode();
@@ -727,6 +735,10 @@ static void desktop_bar_open_menu(int item) {
 int desktop_bar_handle_click(int mx, int my) {
     if (my >= 32) return 0;
     int target = desktop_bar_hit(mx);
+    if(target==BAR_SYSTEM) {
+        if(g_active_menu.active)ui_menu_close(&g_active_menu);
+        control_center_toggle();return 1;
+    }
     if (target >= 0 && target == g_bar_menu_open && g_active_menu.active) {
         ui_menu_close(&g_active_menu);
         g_bar_menu_open = -1;
@@ -902,205 +914,8 @@ int dock_hit(void) {
     return -1;
 }
 
-static void draw_icon_files(int x, int y, int s) {
-    rounded(x + 2, y + s - 4, s - 4, 5, 3, 0x000000, 75);
-    int tab_w = s * 5 / 11;
-    roundrect(x + 2, y + 4, tab_w, 10, 4, 0x1d4ed8);
-    roundrect(x + 2, y + 8, s - 4, s - 11, 5, 0x2563eb);
-    roundrect(x + 6, y + 5, s - 12, 10, 3, 0xffffff);
-    rect(x + 9, y + 7, s - 18, 2, 0x3b82f6);
-    rect(x + 9, y + 10, s - 22, 1, 0x93c5fd);
-    rect(x + 2, y + 13, s - 4, 2, 0x1e40af);
-    roundrect(x, y + 14, s, s - 16, 5, 0x3b82f6);
-    roundrect(x + 1, y + 14, s - 2, 2, 1, 0x93c5fd);
-    rect(x + 3, y + s - 3, s - 6, 1, 0x1d4ed8);
-}
-
-static void draw_icon_terminal(int x, int y, int s) {
-    int r = s / 5;
-    rounded(x + 2, y + s - 3, s - 4, 5, 3, 0x000000, 70);
-    roundrect(x, y, s, s, r, 0x0f172a);
-    roundrect(x + 1, y + 1, s - 2, 2, 1, 0x334155);
-
-    int dot_y = y + s * 7 / 48;
-    int dot_sz = s / 12;
-    if (dot_sz < 3) dot_sz = 3;
-    roundrect(x + s * 7 / 48, dot_y, dot_sz, dot_sz, 1, 0xef4444);
-    roundrect(x + s * 13 / 48, dot_y, dot_sz, dot_sz, 1, 0xf59e0b);
-    roundrect(x + s * 19 / 48, dot_y, dot_sz, dot_sz, 1, 0x10b981);
-
-    int scr_x = x + s / 10;
-    int scr_y = y + s * 14 / 48;
-    int scr_w = s - s / 5;
-    int scr_h = s - s * 18 / 48;
-    roundrect(scr_x, scr_y, scr_w, scr_h, 3, 0x020617);
-
-    int px = scr_x + 5;
-    int py = scr_y + scr_h / 2 - 4;
-    for (int d = 0; d < 5; d++) {
-        rect(px + d, py + d, 2, 1, 0x22c55e);
-        rect(px + d, py + 8 - d, 2, 1, 0x22c55e);
-    }
-    rect(px + 8, py + 7, s / 6, 2, 0x4ade80);
-}
-
-static void draw_icon_notes(int x, int y, int s) {
-    int r = s / 5;
-    rounded(x + 2, y + s - 3, s - 4, 5, 3, 0x000000, 70);
-    roundrect(x, y, s, s, r, 0xf59e0b);
-    roundrect(x, y, s, s * 11 / 48, r, 0xd97706);
-    roundrect(x + 1, y + 1, s - 2, 2, 1, 0xfde68a);
-
-    int px = x + s * 4 / 48;
-    int py = y + s * 12 / 48;
-    int pw = s - s * 8 / 48;
-    int ph = s - s * 16 / 48;
-    roundrect(px, py, pw, ph, 3, 0xffffff);
-
-    int line_spacing = s / 7;
-    int line_y = py + line_spacing;
-    while (line_y < py + ph - 4) {
-        rect(px + 5, line_y, pw - 10, 1, 0x93c5fd);
-        line_y += line_spacing;
-    }
-    rect(px + 9, py + 2, 1, ph - 4, 0xfca5a5);
-
-    int pen_x = px + pw - s * 14 / 48;
-    int pen_y = py + ph - s * 14 / 48;
-    roundrect(pen_x, pen_y, s * 12 / 48, 4, 2, 0x4f46e5);
-    rect(pen_x - 2, pen_y + 1, 2, 2, 0xfbbf24);
-}
-
-static void draw_icon_settings(int x, int y, int s) {
-    int r = s / 5;
-    rounded(x + 2, y + s - 3, s - 4, 5, 3, 0x000000, 70);
-    roundrect(x, y, s, s, r, 0x1e293b);
-    roundrect(x + 1, y + 1, s - 2, 2, 1, 0x475569);
-
-    int cx = x + s / 2;
-    int cy = y + s / 2;
-    int gr = s * 14 / 48;
-
-    int tw = s * 7 / 48, th = s * 4 / 48;
-    roundrect(cx - tw / 2, cy - gr - th + 1, tw, th + 2, 1, 0xcbd5e1);
-    roundrect(cx - tw / 2, cy + gr - 1, tw, th + 2, 1, 0x94a3b8);
-    roundrect(cx - gr - th + 1, cy - tw / 2, th + 2, tw, 1, 0x94a3b8);
-    roundrect(cx + gr - 1, cy - tw / 2, th + 2, tw, 1, 0xcbd5e1);
-
-    int d_off = gr * 7 / 10;
-    roundrect(cx - d_off - 2, cy - d_off - 2, 5, 5, 1, 0xb0bac9);
-    roundrect(cx + d_off - 3, cy - d_off - 2, 5, 5, 1, 0xb0bac9);
-    roundrect(cx - d_off - 2, cy + d_off - 3, 5, 5, 1, 0x94a3b8);
-    roundrect(cx + d_off - 3, cy + d_off - 3, 5, 5, 1, 0x94a3b8);
-
-    roundrect(cx - gr, cy - gr, gr * 2, gr * 2, gr, 0x94a3b8);
-    roundrect(cx - gr + 1, cy - gr + 1, (gr - 1) * 2, (gr - 1) * 2, gr - 1, 0xcbd5e1);
-
-    int ir = s * 6 / 48;
-    roundrect(cx - ir, cy - ir, ir * 2, ir * 2, ir, 0x1e293b);
-
-    int pr = s * 3 / 48;
-    if (pr < 2) pr = 2;
-    roundrect(cx - pr, cy - pr, pr * 2, pr * 2, pr, 0x38bdf8);
-}
-
-static void draw_icon_web(int x, int y, int s) {
-    int r = s / 5;
-    rounded(x + 2, y + s - 3, s - 4, 5, 3, 0x000000, 70);
-    roundrect(x, y, s, s, r, 0x1d4ed8);
-    roundrect(x + 1, y + 1, s - 2, 2, 1, 0x60a5fa);
-
-    int cx = x + s / 2;
-    int cy = y + s / 2;
-    int gr = s * 14 / 48;
-
-    roundrect(cx - gr, cy - gr, gr * 2, gr * 2, gr, 0x0284c7);
-    roundrect(cx - gr + 1, cy - gr + 1, (gr - 1) * 2, (gr - 1) * 2, gr - 1, 0x0ea5e9);
-
-    int mw = gr * 8 / 10;
-    roundrect(cx - mw / 2, cy - gr + 2, mw, (gr - 2) * 2, mw / 2, 0x38bdf8);
-    roundrect(cx - mw / 2 + 2, cy - gr + 3, mw - 4, (gr - 3) * 2, (mw - 4) / 2, 0x0ea5e9);
-
-    rect(cx, cy - gr + 2, 1, (gr - 2) * 2, 0xe0f2fe);
-    rect(cx - gr + 2, cy, (gr - 2) * 2, 2, 0xe0f2fe);
-
-    int lat_y1 = cy - gr / 2;
-    int lat_w1 = gr * 3 / 2;
-    rect(cx - lat_w1 / 2, lat_y1, lat_w1, 1, 0xbae6fd);
-    int lat_y2 = cy + gr / 2;
-    rect(cx - lat_w1 / 2, lat_y2, lat_w1, 1, 0xbae6fd);
-}
-
-static void draw_icon_pollikmark(int x, int y, int s) {
-    /* Own resolution-independent chart artwork, no linked bitmap resource. */
-    roundrect(x,y,s,s,s/4,0x5140b5);
-    roundrect_border(x,y,s,s,s/4,1,0x998ce5);
-    const u32 colors[3]={0xb9aaf7,0x83dbd0,0xf4f0ff};
-    int bar=s/7,base=y+s*4/5;
-    for(int i=0;i<3;i++) {
-        int h=s*(i+2)/7;
-        roundrect(x+s/5+i*s/5,base-h,bar,h,bar/3,colors[i]);
-    }
-    roundrect(x+s/5,base+2,s*3/5,2,1,0xafa0eb);
-}
-static void draw_icon_calculator(int x,int y,int s) {
-    roundrect(x,y,s,s,s/4,0x393641);
-    roundrect_border(x,y,s,s,s/4,1,0x7f778d);
-    int gap=s/12,button=s/7;
-    roundrect(x+gap,y+gap,s-2*gap,s/4,s/16,0xe4dfec);
-    for(int row=0;row<3;row++)for(int col=0;col<4;col++)
-        roundrect(x+gap+col*s/5,y+s*2/5+row*s/6,button,s/8,s/24,
-                  col==3?0xee902c:row==0?0xb6aebf:0x7b7387);
-}
-
-static void draw_icon_welcome(int x, int y, int s) {
-    int r = s / 5;
-    rounded(x + 2, y + s - 3, s - 4, 5, 3, 0x000000, 70);
-    roundrect(x, y, s, s, r, 0x4338ca);
-    roundrect(x + 1, y + 1, s - 2, 2, 1, 0x818cf8);
-
-    int cx = x + s / 2;
-    int cy = y + s / 2;
-    int cr = s * 14 / 48;
-
-    roundrect(cx - cr, cy - cr, cr * 2, cr * 2, cr, 0x6366f1);
-    roundrect(cx - cr + 2, cy - cr + 2, (cr - 2) * 2, (cr - 2) * 2, cr - 2, 0x312e81);
-
-    int nw = s * 4 / 48;
-    if (nw < 2) nw = 2;
-    for (int d = 0; d < cr - 4; d++) {
-        int cur_w = (d * nw) / (cr - 4);
-        rect(cx - cur_w, cy - d, cur_w * 2 + 1, 1, 0xef4444);
-    }
-    for (int d = 0; d < cr - 4; d++) {
-        int cur_w = (d * nw) / (cr - 4);
-        rect(cx - cur_w, cy + d, cur_w * 2 + 1, 1, 0xf1f5f9);
-    }
-    roundrect(cx - 3, cy - 3, 6, 6, 3, 0xfbbf24);
-}
-
-void draw_app_vector_icon(int id, int x, int y, int size) {
-    const GuiApp *app = gui_app_get(id);
-    if (app && app->icon.indices && id != APP_POLLIKMARK && id != APP_CALCULATOR) {
-        sprite(x, y, size, size, app->icon.indices, app->icon.alpha, app->icon.palette, app->icon.width, app->icon.height);
-        return;
-    }
-    switch (id) {
-        case APP_FILES:      draw_icon_files(x, y, size); break;
-        case APP_TERMINAL:   draw_icon_terminal(x, y, size); break;
-        case APP_NOTES:      draw_icon_notes(x, y, size); break;
-        case APP_SETTINGS:   draw_icon_settings(x, y, size); break;
-        case APP_BROWSER:    draw_icon_web(x, y, size); break;
-        case APP_POLLIKMARK: draw_icon_pollikmark(x, y, size); break;
-        case APP_CALCULATOR: draw_icon_calculator(x,y,size); break;
-        case APP_WELCOME:    draw_icon_welcome(x, y, size); break;
-        default: {
-            if (app && app->icon.indices) {
-                sprite(x, y, size, size, app->icon.indices, app->icon.alpha, app->icon.palette, app->icon.width, app->icon.height);
-            }
-            break;
-        }
-    }
+void draw_app_vector_icon(int id,int x,int y,int size) {
+    if(gui_app_get(id))ui_icon_draw(id,x,y,size);
 }
 
 static void app_icon(int id, int x, int y, int size) {
@@ -1430,6 +1245,7 @@ void desktop_start(void) {
     trash_init();
     ui_anim_init();
     desktop_items_init();
+    ui_icons_init();
     dock_load_config();
     /* Reserve required client surfaces before the optional second cache. */
     compositor_splash("Preparing desktop", 94);
@@ -1495,7 +1311,9 @@ static int desktop_present(void) {
             shell.dirty = 1;
         }
     }
+    if(auth_is_active())control_center_close();
     int animating = compositor_animate(now_ms);
+    animating|=control_center_poll(now_ms);
     if (animating || was_animating) {
         shell.dirty = 1;
         shell.partial = 1;
@@ -1511,7 +1329,7 @@ static int desktop_present(void) {
         shell.dirty = 1;
     }
     int frame_due = wm_frame_due(now_ms);
-    int dock_frozen = auth_is_active() || g_active_menu.active || g_active_dialog.active;
+    int dock_frozen = auth_is_active() || g_active_menu.active || g_active_dialog.active || control_center_active();
     if (dock_frozen && !g_dock_motion_frozen) {
         g_dock_motion_frozen = 1;
         g_dock_motion_freeze_ms = now_ms;

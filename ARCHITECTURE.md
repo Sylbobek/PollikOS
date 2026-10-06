@@ -75,7 +75,7 @@ To więcej niż graficzna makieta: kod implementuje rozruch BIOS, sterowniki urz
 | HAL (faza 1) | `kernel/hal.c`, `kernel/hal.h`, adaptery `kernel/system.h` | Port-I/O 8/16/32-bit, IRQ/flags, idle/halt, CR0–CR4, TLB, MSR, CPUID/TSC/RDRAND, IDT/TR oraz i386 x87 context; oba targety używają wspólnego API, a boot/entry zachowują kod arch-specific |
 | Podsystem 64-bitowy | `kernel/arch/x86_64/*`, `build-x86_64.ps1` | Jądro x86_64 wyższej połówki, PML4, scheduler TCB, ELF64, potoki, TTY, serwer okien `window.c` |
 | PollikOS C SDK | `sdk/*`, `tools/*` | Biblioteka standardowa `libpollikc.a`, `crt0`, driver `pollikcc`, `/bin/pollish`, natywny **TinyCC 0.9.27 (`/bin/tcc`)** |
-| Zasoby | `assets/`, `fonts/`, `kernel/ui_data.h`, `kernel/font_data.h` | Generatory ikon, kursorów i Pollik Sans oraz gotowe tablice |
+| Zasoby | `assets/system-icons/`, `/usr/share/icons`, `fonts/`, `kernel/font_data.h` | Ikony PNG ładowane z PollikFS; kursory i Pollik Sans generowane osobno |
 | Budowanie i testy | `build.ps1`, `build-x86_64.ps1`, `run.ps1`, `Start-PollikOS.cmd`, `tests/` | Obrazy dysków, konfiguracja QEMU, scenariusze integracyjne obu architektur |
 
 ### 1.3. Rozruch i inicjalizacja

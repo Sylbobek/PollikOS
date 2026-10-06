@@ -35,8 +35,6 @@
  * statistics over the whole level, not just the top 1%. */
 #define PM_SLOW_MAX (PM_INTERVAL_CAP / 20 + 16)
 
-u8 pollikmark_icon[256], pollikmark_alpha[128];
-const u32 pollikmark_palette[4]={0x242b48,0x5edac9,0x8b7fdb,0xffffff};
 static const char *names[8]={"Fill Rate","2D Shapes","Triangle","Cube","Geometry","Texture","Compositor","Memory"};
 static const char *unit_names[8]={"px/s","shapes/s","tris/s","tris/s","tris/s","texpx/s","fps","B/s"};
 static const u32 refs[8]={10000000u,10000u,10000u,10000u,10000u,2000000u,60u,104857600u};
@@ -681,9 +679,6 @@ progress:
     }return 0;
 }
 void pollikmark_init(void) {
-    memset(pollikmark_alpha,255,sizeof(pollikmark_alpha));
-    for(int y=0;y<16;y++)for(int x=0;x<16;x++)pollikmark_icon[y*16+x]=
-        (x>3 && x<12 && y>2 && y<13)?((x+y)%3+1):0;
     make_texture();
 }
 void pollikmark_open(void) {opened=1;}

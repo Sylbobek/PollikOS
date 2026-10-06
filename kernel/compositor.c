@@ -4,12 +4,12 @@
 #include "pmm.h"
 #include "mem.h"
 #include "klog.h"
-#include "ui_data.h"
 #include "desktop_items.h"
 #include "auth.h"
 #include "ui_animation.h"
 #include "trash.h"
 #include "cursor_sprites.h"
+#include "control_center.h"
 
 static u32 *pixels, *wallpaper;
 static int wallpaper_theme = -1;
@@ -988,13 +988,14 @@ void compositor_paint(int full) {
     }
     /* Clock changes repaint only the 32-pixel menu strip, preserving the
      * cached windows, desktop icons, and Dock while the user is idle. */
-    if (full == 3 && !shell.scene_dirty && !shell.alttab_open && !ui_anim_has_active()) {
+    if (full == 3 && !shell.scene_dirty && !shell.alttab_open && !ui_anim_has_active() && !control_center_active()) {
         GraphicsClip bar = {0, 0, width, 32};
         graphics_set_clip(bar);
         for (int y = 0; y < 32; y++)
             memcpy(pixels + y * width, wallpaper + y * width, (u32)width * 4);
         desktop_draw_bar();
         if (g_active_menu.active) ui_draw_menu(&g_active_menu);
+        control_center_draw();
         g_perf_stats.composed_pixels = (u32)width * 32u;
         g_perf_stats.effective_rects = 1;
         u32 count = present_with_cursor(&bar, 1, 0);
@@ -1159,6 +1160,7 @@ void compositor_paint(int full) {
         }
         if (g_active_dialog.active) ui_draw_dialog();
         if (g_active_menu.active) ui_draw_menu(&g_active_menu);
+        control_center_draw();
         ui_draw_notifications(wm_time_ms());
         desktop_draw_overlays();
         auth_render(width, height);

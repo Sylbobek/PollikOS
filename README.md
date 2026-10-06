@@ -114,7 +114,7 @@ Test sieciowy wysyła 300 ramek ARP przez backend socket QEMU i sprawdza odpowie
 - `kernel/process.c`, `kernel/interrupts.asm` — przerwania, procesy i program CPL3.
 - `kernel/network.c` — PCI/RTL8139, ARP i ICMP.
 - `kernel/framebuffer.c` — walidacja VBE oraz pełne i częściowe aktualizacje ekranu.
-- `assets/build_ui.py` — własne ikony i kursory, generator tablic `kernel/ui_data.h` (regeneracja wymaga Pillow).
+- `assets/build_system_icons.py` - normalized PNG icons in /usr/share/icons, loaded from PollikFS; assets/build_cursor.py generates cursors.
 - `fonts/build_font.py` — własne wektorowe definicje Pollik Sans i generator; nie korzysta z zewnętrznych fontów.
 - `fonts/PollikSans.png` — próbka czcionki.
 - `kernel/font_data.h` — gotowe maski pokrycia; zwykła kompilacja nie wymaga Pillow. Regeneracja fontu: `python fonts/build_font.py` (wymaga Pillow).

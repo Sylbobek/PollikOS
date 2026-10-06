@@ -1,11 +1,12 @@
-param([switch]$SelfTest, [switch]$PerturbSchedule, [switch]$CrashWriteLog)
+param([switch]$SelfTest, [switch]$PerturbSchedule, [switch]$CrashWriteLog, [switch]$Production)
 $ErrorActionPreference = 'Stop'
+if($Production -and ($SelfTest -or $CrashWriteLog -or $PerturbSchedule)){throw '-Production is a separate release variant'}
 if ($PerturbSchedule -and !$SelfTest) { throw '-PerturbSchedule requires -SelfTest' }
 if ($CrashWriteLog -and $SelfTest) { throw '-CrashWriteLog is a normal-kernel instrumentation build' }
 Push-Location $PSScriptRoot
 try {
     # Separate artifacts; never open the desktop image or PollikData.img.
-    $variant = if ($SelfTest) { 'selftest' } else { 'kernel' }
+    $variant = if ($Production) { 'system' } elseif ($SelfTest) { 'selftest' } else { 'kernel' }
     $output = "build/x86_64/$variant"
     New-Item -ItemType Directory -Force $output | Out-Null
     function Invoke-Checked { param([string]$Program, [string[]]$Arguments)
@@ -14,6 +15,8 @@ try {
     }
     $defines = @('-DPOLLIK_X64=1')
     if ($SelfTest) { $defines += '-DSELFTEST=1' }
+    if ($Production) { $defines += '-DPRODUCTION=1' }
+    $productionCompileFlags = if($Production){@('-ffunction-sections','-fdata-sections')}else{@()}
     if ($PerturbSchedule) { $defines += '-DPOLLIK_TEST_TIMER_HZ=137' }
     $abi = Get-Content kernel/arch/x86_64/user_abi.h | ForEach-Object {
         if ($_ -match '^#define (\w+) (0x[0-9a-fA-F]+|[0-9]+)$') { "%define $($matches[1]) $($matches[2])" }
@@ -74,7 +77,7 @@ try {
         'pipe_nowait'       = @{ Sources = @('sdk/tests/pipe_nowait.c');       Optimization = '-O2' }
         'windowdemo'        = @{ Sources = @('sdk/tests/windowdemo.c');       Optimization = '-O2' }
         'terminal'          = @{ Sources = @('sdk/apps/terminal.c');            Optimization = '-O2' }
-        'desktop'           = @{ Sources = @('sdk/apps/desktop.c');            Optimization = '-O2' }
+        'desktop'           = @{ Sources = @('sdk/apps/desktop.c','sdk/apps/icon_assets.c'); Optimization = '-O2' }
         'files'             = @{ Sources = @('sdk/apps/files.c');              Optimization = '-O2' }
         'browser'           = @{ Sources = @('sdk/apps/browser.c','sdk/apps/browser_js.c','kernel/browser/html_parser.c','kernel/browser/css_engine.c','kernel/browser/layout.c','kernel/browser/render.c','third_party/elk/elk.c'); Optimization = '-O2'; Defines = @('POLLIK_BROWSER_STANDALONE=1') }
         'notes'             = @{ Sources = @('sdk/apps/notes.c');              Optimization = '-O2' }
@@ -144,7 +147,9 @@ try {
     $second = (Get-FileHash -Algorithm SHA256 "$userOutput/sdk_hello_repeat.elf").Hash
     if ($first -ne $second) { throw 'SDK build is not reproducible for sdk_hello.elf' }
     Remove-Item -LiteralPath "$userOutput/sdk_hello_repeat.elf" -Force
+    Invoke-Checked python @('assets/build_system_icons.py')
     Invoke-Checked python @('tools/build_x64_data.py',$output)
+    if (!$SelfTest) { Invoke-Checked python @('tools/build_x64_system.py',$output) }
     # Install the SDK hello through the official tool, exercising it on every
     # build; the test image is disposable and never a user data image.
     Invoke-Checked python @('sdk/tools/pollikinstall.py',"$output/PollikData-test.img",
@@ -182,8 +187,10 @@ try {
         Set-Content -LiteralPath $bearSslStamp -Value 'BearSSL freestanding scalar x86_64'
     }
     $modules = @('kernel','auth64','physical','pmm','vmm','usercopy','process','scheduler','fpu','elf64','elf_demo','timer','scheduler_demo','fs_platform','net_platform','network','launch','syscall','path','file','file_demo','stat_demo','dir_demo','runtime_demo','heap','rtc64_decode','rtc64','tty','mouse','console_fb','window','pipe','c3_demo','c4_demo','c5_demo','c6_demo','c7_demo')
+    if($Production){$modules=@($modules | Where-Object {$_ -notlike '*_demo'})}
     if ($SelfTest) { $modules += @('test_memory','memory_test','user_test','elf_test','scheduler_test','path_test','file_test','stat_test','dir_test','runtime_test','c2_test','c3_test','c4_test','c5_test','c6_test','c7_test','selfhost_test') }
     $linkOptions = @()
+    if($Production){$linkOptions+='--gc-sections'}
     if ($CrashWriteLog) {
         $defines += '-DPOLLIKFS_WRITELOG_TEST=1'
         $modules += 'crash_write_log'
@@ -196,7 +203,7 @@ try {
         Invoke-Checked clang (@('--target=x86_64-none-elf','-ffreestanding','-fno-pic','-fno-pie',
         '-fno-stack-protector','-mno-red-zone','-mgeneral-regs-only','-O2','-Wall','-Wextra','-Werror',
         '-Ithird_party/bearssl/inc','-Isdk/include',
-        '-c',"kernel/arch/x86_64/$module.c",'-o',"$output/$objectName.o") + $defines)
+        '-c',"kernel/arch/x86_64/$module.c",'-o',"$output/$objectName.o") + $defines + $productionCompileFlags)
         $objects += "$output/$objectName.o"
     }
     foreach ($source in @('arp','dhcp','dns','icmp','ipv4','net_manager','net_util','rtl8139','tcp','udp','wifi_if')) {

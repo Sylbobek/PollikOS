@@ -57,6 +57,12 @@ typedef struct __attribute__((packed)) {
 static u16 s_nambar = 0;
 static u16 s_nabmbar = 0;
 static int s_ac97_present = 0;
+static int selected_output=-1;
+int audio_output(void){return selected_output<0?s_ac97_present:selected_output;}
+int audio_select_output(int device){
+    if(device<0||device>1||(device==1&&!s_ac97_present))return 0;
+    selected_output=device;return 1;
+}
 static u8  s_volume = 85;
 
 static Ac97BdlEntry *s_bdl = 0;
@@ -172,9 +178,9 @@ u8 audio_get_volume(void) {
 }
 
 void audio_play_tone(u32 freq_hz, u32 duration_ms) {
-    if (freq_hz == 0 || duration_ms == 0) return;
+    if (freq_hz == 0 || duration_ms == 0 || !s_volume || sound_is_muted()) return;
 
-    if (!s_ac97_present) {
+    if (!audio_output()) {
         speaker_beep(freq_hz, duration_ms);
         return;
     }
@@ -256,6 +262,7 @@ void audio_play_sound(SoundEffect s) {
 }
 
 int audio_play_wav(const u8 *data, u32 len) {
+    if(!audio_output())return 0; /* PC speaker is not a PCM sound output. */
     if (!data || len < 44) return 0;
     if (data[0] != 'R' || data[1] != 'I' || data[2] != 'F' || data[3] != 'F') return 0;
     if (data[8] != 'W' || data[9] != 'A' || data[10] != 'V' || data[11] != 'E') return 0;

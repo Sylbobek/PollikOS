@@ -1,5 +1,5 @@
 """Native Ring 3 x86-64 calculator, real shell and PS/2 framebuffer evidence."""
-import json,socket,subprocess,tempfile,time
+import argparse,json,socket,subprocess,tempfile,time
 from pathlib import Path
 from PIL import Image
 from x86_64_console import Console,ROOT,BUILD
@@ -9,15 +9,16 @@ def port():
     with socket.socket() as s:s.bind(('127.0.0.1',0));return s.getsockname()[1]
 
 def main():
+    parser=argparse.ArgumentParser();parser.add_argument('--data',type=Path,default=BUILD/'PollikData-test.img');parser.add_argument('--kernel',type=Path,default=BUILD/'PollikOS-x86_64.img');options=parser.parse_args()
     oracle=BUILD/'calculator-text-oracle.exe';reference=BUILD/'calculator-reference.ppm'
     compile=['clang','-O2','-Wall','-Wextra','-Werror','-fuse-ld=lld','tests/calculator_text_oracle.c','-o',str(oracle)]
     print('COMMAND '+subprocess.list2cmdline(compile),flush=True);subprocess.run(compile,cwd=ROOT,check=True)
     subprocess.run([str(oracle),'5',str(reference)],check=True)
     expected=Image.open(reference).crop((0,44,328,60)).tobytes()
     serial_port,qmp_port=port(),port()
-    cmd=['qemu-system-x86_64','-accel','tcg','-cpu','qemu64','-m','256M','-vga','std','-nic','none','-display','none','-no-reboot',
-         '-drive',f'file={BUILD/"PollikOS-x86_64.img"},format=raw,if=ide,index=0,snapshot=on',
-         '-drive',f'file={BUILD/"PollikData-test.img"},format=raw,if=ide,index=1,snapshot=on',
+    cmd=['qemu-system-x86_64','-S','-accel','tcg','-cpu','qemu64','-m','256M','-vga','std','-nic','none','-display','none','-no-reboot',
+         '-drive',f'file={options.kernel.resolve()},format=raw,if=ide,index=0,snapshot=on',
+         '-drive',f'file={options.data.resolve()},format=raw,if=ide,index=1,snapshot=on',
          '-serial',f'tcp:127.0.0.1:{serial_port},server=on,wait=off','-qmp',f'tcp:127.0.0.1:{qmp_port},server=on,wait=off']
     print('COMMAND '+subprocess.list2cmdline(cmd),flush=True)
     proc=subprocess.Popen(cmd,cwd=ROOT,creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
@@ -33,7 +34,9 @@ def main():
             while True:
                 r=json.loads(f.readline());assert 'error' not in r,r
                 if 'return' in r:return r['return']
-        call('qmp_capabilities');c=Console(stream)
+        # Attach the serial reader before executing the first guest instruction.
+        # A clean disk boots fast enough to lose early TCP serial bytes otherwise.
+        call('qmp_capabilities');c=Console(stream);call('cont')
         c.wait_for('[AUTH64] First run: create a local account.',120)
         for value,prompt in [('calcuser','Create password (6-63 characters):'),('test123','Confirm password:'),('test123','Account created.')]:
             c.send(value);c.wait_for(prompt,120)

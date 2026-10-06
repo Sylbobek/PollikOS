@@ -99,10 +99,13 @@ def run(resolution, full_run=False, headless=False, accel=None, cpu=None):
             print(f'{resolution} full PollikMark {state}: accel={g.accel} cpu={g.cpu}',flush=True)
             print(f'{resolution} FULL_RUN_SECONDS={full_elapsed:.1f} (limit=600)', flush=True)
             return
-        # Real registry icon uses opaque packed-nibble alpha; verify the generated
-        # palette indexes and source alpha, plus actual dock hit/focus behavior.
-        assert set(g.memory(*g.symbol('pollikmark_alpha'))) == {255}
-        assert set(g.memory(*g.symbol('pollikmark_icon'))) == {0,1,2,3}
+        # Artwork moved to PollikFS: verify every cached PNG byte, not an old
+        # compiled palette. Dock hit/focus behavior remains checked below.
+        from PIL import Image
+        from gui_metrics import ROOT
+        decoded=Image.open(ROOT/'assets/system-icons/pollikmark.png').convert('RGBA').tobytes()
+        pointer=g.words('icon_pixels')[6]
+        assert pointer and g.memory(pointer,len(decoded))==decoded
         dock_order = (1, 0, 2, 3, 4, 5, 6)  # Files is the permanent first item.
         for slot, app_id in enumerate(dock_order):
             x = g.width//2 - (len(dock_order)-1)*34 + slot*68

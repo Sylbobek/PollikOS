@@ -1,9 +1,7 @@
 #include "apps.h"
 
 #include "pollikmark.h"
-#include "calculator_icon.h"
 #include "../browser/browser.h"
-#include "../ui_data.h"
 
 static GuiAppSize sizes[APP_COUNT];
 GuiAppSize gui_app_size(int id) {
@@ -30,7 +28,7 @@ static void files_client_key(u8 code, char ch, int shift, int control) {
 
 /* Missing callbacks deliberately mean no-op, including close for persistent
  * Notes/Terminal state. Icon pixels and client decoration are registry-owned. */
-#define ICON(id) { icons_index[id], icons_alpha[id], icons_palette[id], 72, 72 }
+#define ICON(id) { 0, 0, 0, 64, 64 } /* Pixels live in /usr/share/icons. */
 #define LIGHT_BODY .body_active = 0xfaf9fc, .body_inactive = 0xf4f2f7
 #define MIN_SIZE .min_width = 480, .min_height = 280
 static const GuiApp registry[APP_COUNT] = {
@@ -51,13 +49,13 @@ static const GuiApp registry[APP_COUNT] = {
         .click = browser_handle_click, .drag = browser_client_drag, .open = browser_open, .close = browser_close,
         .resize = browser_client_resized, .scroll = browser_client_scroll,
         .cursor = browser_cursor, .poll = browser_client_poll },
-    [APP_POLLIKMARK] = { .name = "PollikMark3D", .icon = {pollikmark_icon, pollikmark_alpha, pollikmark_palette, 16, 16},
+    [APP_POLLIKMARK] = { .name = "PollikMark3D", .icon = ICON(APP_POLLIKMARK),
         MIN_SIZE, .body_active = 0x202b40, .body_inactive = 0x202b40,
         .init = pollikmark_init, .render = pollikmark_render, .resize = pollikmark_resize,
         .open = pollikmark_open, .close = pollikmark_close, .key = pollikmark_key,
         .click = pollikmark_click, .poll = pollikmark_poll },
 #ifndef POLLIK_INSTALL_MEDIA
-    [APP_CALCULATOR] = { .name = "Calculator", .icon = {calculator_icon,calculator_alpha,calculator_palette,16,16},
+    [APP_CALCULATOR] = { .name = "Calculator", .icon = ICON(APP_CALCULATOR),
         .min_width=320,.min_height=440,LIGHT_BODY,.init=calculator_init,
         .render=calculator_render,.key=calculator_key,.click=calculator_click }
 #endif

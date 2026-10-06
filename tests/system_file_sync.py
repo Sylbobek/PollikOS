@@ -46,7 +46,7 @@ with tempfile.TemporaryDirectory(prefix='pollikos-sync-') as temp:
     save_list('after.txt',after)
     assert all(after[path]==value for path,value in before.items())
     added=set(after)-set(before)
-    assert added==set(FILES)|{'/usr/','/usr/share/','/usr/share/wallpapers/'}
+    assert added==set(FILES)|{'/usr/','/usr/share/','/usr/share/wallpapers/','/usr/share/icons/'}
     for i in range(fs.inode_count):
         if fs.read_inode(i)[0]==0: continue
         offset=fs.inode_offset(i)
@@ -57,7 +57,7 @@ with tempfile.TemporaryDirectory(prefix='pollikos-sync-') as temp:
                 if struct.unpack_from('<I',original,at)[0]:
                     assert original[at:at+64]==modified[at:at+64], f'directory entry changed: {i}'
     assert original[SPAN:]==modified[SPAN:]
-    print('DIFF lists: only +/usr/, +/usr/share/, +/usr/share/wallpapers/, +light.png, +dark.png')
+    print('DIFF lists: only system directories, stock wallpapers and 12 stock icons')
     print('PASS old image: all original file hashes, live inode bytes, existing directory entries and tail preserved')
     synced=sha(copy);assert sync(copy)==[];assert sha(copy)==synced
     print(f'PASS second sync changed nothing SHA256={synced}')

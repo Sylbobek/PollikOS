@@ -48,6 +48,8 @@ void framebuffer_present(const u32 *, int, int, int, int);
 void framebuffer_present_cursor_pair(const u32 *, int, int, int, int,
                                      const u32 *, int, int, int, int);
 void framebuffer_info(char *);
+int framebuffer_brightness(void);
+void framebuffer_set_brightness(int percent);
 int sys_text_width(const char *s, int scale);
 int sys_get_glyph_advance(u8 c, int scale);
 void sys_draw_rect_clipped(int x, int y, int w, int h, u32 c, int cx1, int cy1, int cx2, int cy2);
