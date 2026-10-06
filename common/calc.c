@@ -11,6 +11,21 @@ static double finite(Parser *p,double v) {
 static int name_is(const char *a,unsigned n,const char *b) {
     unsigned i=0;while(i<n&&b[i]&&a[i]==b[i])i++;return i==n&&!b[i];
 }
+/* Exact binary64 integer validation; no float-to-int conversion of NaN or
+ * overflow, and no dependency on x87 comparison/control-word intermediates.
+ * All supported host/kernel/SDK targets use IEEE binary64 doubles. */
+static int integer_exponent(double value,int *out) {
+    union { double value; unsigned long long bits; } u={value};
+    unsigned hi=(unsigned)(u.bits>>32),lo=(unsigned)u.bits;
+    unsigned exp=(hi>>20)&2047;
+    if(!(hi&0x7fffffff)&&!lo) {*out=0;return 1;}
+    if(exp<1023||exp>1033)return 0;
+    unsigned shift=20-(exp-1023);
+    if(lo||(hi&((1u<<shift)-1)))return 0;
+    unsigned n=(0x100000u|(hi&0xfffffu))>>shift;
+    if(n>1024)return 0;
+    *out=(hi>>31)?-(int)n:(int)n;return 1;
+}
 static double primary(Parser *p) {
     if(++p->depth>32){p->error="Expression too deep";p->depth--;return 0;}
     space(p);double v=0;
@@ -55,11 +70,12 @@ static double power(Parser *p) {
     double v=primary(p);
     while(!p->error&&take(p,'%'))v/=100;
     if(!p->error&&take(p,'^')) {
-        double exponent=unary(p);
-        if(exponent< -1024||exponent>1024||(int)exponent!=exponent) {
+        double exponent=unary(p);int n;
+        if(p->error)return 0;
+        if(!integer_exponent(exponent,&n)) {
             p->error="Power requires integer exponent (-1024..1024)";return 0;
         }
-        int n=(int)exponent;int negative=n<0;if(negative)n=-n;
+        int negative=n<0;if(negative)n=-n;
         if(negative&&v==0){p->error="Division by zero";return 0;}
         double base=negative?1/v:v,result=1;
         while(n&&!p->error){if(n&1)result=finite(p,result*base);n>>=1;if(n)base=finite(p,base*base);}
@@ -131,7 +147,7 @@ static void append(CalcModel *m,const char *s){unsigned n=0;while(m->expression[
 void calc_model_key(CalcModel *m,char key) {
     if(key==27){calc_model_init(m);return;}
     if(key==8){unsigned n=0;while(m->expression[n])n++;if(n)m->expression[n-1]=0;m->evaluated=0;return;}
-    if(key==13||key=='='){m->evaluated=calc_evaluate(m->expression,m->result,sizeof m->result);return;}
+    if(key==10||key==13||key=='='){m->evaluated=calc_evaluate(m->expression,m->result,sizeof m->result);return;}
     if(key<32||key>126)return;
     if(m->evaluated) {
         if(key=='+'||key=='-'||key=='*'||key=='/'||key=='^'||key=='%')copy_text(m->expression,sizeof m->expression,m->result);

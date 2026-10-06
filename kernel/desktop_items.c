@@ -179,7 +179,6 @@ void desktop_items_scan(void) {
     add_item(ITEM_APP, "Web", "/bin/browser", APP_BROWSER);
     add_item(ITEM_APP, "Settings", "/bin/settings", APP_SETTINGS);
     add_item(ITEM_APP, "PollikMark", "/bin/pollikmark", APP_POLLIKMARK);
-    add_item(ITEM_APP, "Calculator", "/bin/calculator", APP_CALCULATOR);
 
     /* 2. Read /home/Desktop real items via VFS */
     int fd = vfs_open("/home/Desktop", O_RDONLY);
@@ -209,6 +208,8 @@ void desktop_items_scan(void) {
 
     /* 3. Add Trash */
     add_item(ITEM_TRASH, "Trash", "/home/Trash", -1);
+    /* Append new apps after existing items so old layout cells stay occupied. */
+    add_item(ITEM_APP, "Calculator", "/bin/calculator", APP_CALCULATOR);
 
     for (int k = 0; k < g_desktop_item_count; k++) {
         char cbuf[12], rbuf[12], xbuf[12], ybuf[12];

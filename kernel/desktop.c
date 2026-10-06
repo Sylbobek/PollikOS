@@ -206,6 +206,10 @@ static void desktop_load_settings(void) {
 
 static void dock_default_pins(void) {
     for (int i = 0; i < APP_COUNT; i++) g_dock_pinned[i] = 1;
+#ifndef POLLIK_INSTALL_MEDIA
+    /* New apps appear while running; preserve the established pinned layout. */
+    g_dock_pinned[APP_CALCULATOR] = 0;
+#endif
 }
 
 static void dock_save_config(void) {

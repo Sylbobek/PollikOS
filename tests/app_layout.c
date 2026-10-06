@@ -7,6 +7,7 @@
 #include "../kernel/gui/settings.c"
 #include "../kernel/gui/terminal.c"
 #include "../kernel/gui/app_edit.c"
+#include "../kernel/gui/calculator.c"
 extern int printf(const char *, ...);
 extern void exit(int);
 #define CHECK(x) do { ++checks; if (!(x)) { printf("FAIL %d: %s (app %d, %dx%d)\n", __LINE__, #x, current, sw, sh); exit(1); } } while (0)
@@ -29,7 +30,7 @@ static void bounds(int x,int y,int w,int h) {
     ++paints;
     CHECK(w >= 0 && h >= 0 && x >= 0 && y >= 34 && x + w <= sw && y + h <= sh);
 }
-int sys_get_glyph_advance(u8 c,int scale) { return (c == 'W' ? 8 : c == 'i' ? 3 : 6) * scale; }
+int sys_get_glyph_advance(u8 c,int scale) { CHECK(scale>=1&&scale<=5); return (c == 'W' ? 8 : c == 'i' ? 3 : 6) * scale; }
 int sys_text_width(const char *s,int scale) {
     int w = 0; while (*s) w += sys_get_glyph_advance(*s++,scale); return w;
 }
@@ -339,6 +340,25 @@ int main(void) {
     int final_note_bottom=82+note_rows()*20+20;
     CHECK(notes_cursor(665,final_note_bottom-1) && !notes_cursor(666,final_note_bottom-1) &&
           !notes_cursor(665,final_note_bottom));
-    printf("PASS: real app geometry, hit bounds, file scrolling, Notes wrapping/cursor, Terminal prompt wrapping (%d checks)\n",checks);
+    calculator_init();
+    current=APP_CALCULATOR;
+    static const int calculator_sizes[][2]={{320,440},{360,500},{800,650}};
+    for(unsigned i=0;i<3;i++) {
+        sw=calculator_sizes[i][0];sh=calculator_sizes[i][1];
+        test_sizes[APP_CALCULATOR]=(GuiAppSize){sw,sh};drawing=1;
+        calculator_render(sw,sh,1);drawing=0;
+        calculator_key(1,0,0,0);
+        const int buttons[]={16,19,17,23}; /* 1 + 2 = */
+        for(unsigned j=0;j<4;j++) {
+            CalcRect r=calc_button_rect(sw,sh,34,buttons[j]);
+            calculator_click(r.x+r.w/2,r.y+r.h/2);
+        }
+        CHECK(model.evaluated&&eq(model.result,"3"));
+        calculator_key(1,0,0,0);calculator_key(3,'2',0,0);
+        calculator_key(13,'=',1,0);calculator_key(4,'3',0,0);
+        calculator_key(28,0,0,0);CHECK(model.evaluated&&eq(model.result,"5"));
+        calculator_key(1,0,0,0);calculator_click(-1,-1);CHECK(!model.expression[0]);
+    }
+    printf("PASS: real app geometry, hit bounds, file scrolling, Notes wrapping/cursor, Terminal prompt wrapping, Calculator (%d checks)\n",checks);
     return 0;
 }

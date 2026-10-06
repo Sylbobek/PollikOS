@@ -71,7 +71,8 @@ int main(void) {
     }
     if (mapped<0) { puts("[desktop] cannot create desktop window"); return 1; }
     PollikCanvas canvas={(uint32_t *)(uintptr_t)mapped,width,height};
-    int files_x=(int)width/2-182, terminal_x=files_x+64, demo_x=terminal_x+64;
+    /* Preserve existing shortcut positions when appending Calculator. */
+    int files_x=(int)width/2-118, terminal_x=files_x+64, demo_x=terminal_x+64;
     int browser_x=demo_x+64, notes_x=browser_x+64, calc_x=notes_x+64;
     int dock_y=(int)height-72;
     draw(&canvas,files_x,terminal_x,demo_x,browser_x,notes_x,calc_x,dock_y);

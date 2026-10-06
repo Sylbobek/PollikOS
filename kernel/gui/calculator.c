@@ -14,14 +14,14 @@ void calculator_render(int w,int h,int active) {
     u32 ink=dark?0xf1f2fa:0x202331, muted=dark?0xaeb4c8:0x656b7c;
     rect(0,GUI_CHROME_HEIGHT,w,h-GUI_CHROME_HEIGHT,dark?0x171b28:0xfaf9fc);
     roundrect(16,GUI_CHROME_HEIGHT+12,w-32,88,12,dark?0x23293a:0xeeedf5);
-    app_label(28,GUI_CHROME_HEIGHT+23,w-56,model.expression[0]?model.expression:"Enter an expression",muted,0);
-    app_label(28,GUI_CHROME_HEIGHT+56,w-56,model.result[0]?model.result:"0",ink,1);
+    app_label(28,GUI_CHROME_HEIGHT+23,w-56,model.expression[0]?model.expression:"Enter an expression",muted,1);
+    app_label(28,GUI_CHROME_HEIGHT+56,w-56,model.result[0]?model.result:"0",ink,2);
     for(int i=0;i<24;i++) {
         CalcRect r=calc_button_rect(w,h,GUI_CHROME_HEIGHT,i);
         int action=i%4==3 || i==0;
         u32 fill=i==23?app_host_accent_color():action?(dark?0x30384c:0xe1dfed):(dark?0x242a39:0xf0eff6);
         roundrect(r.x,r.y,r.w,r.h,8,fill);
-        centered(r.x,r.y+(r.h-20)/2,r.w,calc_button_label(i),i==23?0xffffff:ink,0);
+        centered(r.x,r.y+(r.h-20)/2,r.w,calc_button_label(i),i==23?0xffffff:ink,1);
     }
 }
 void calculator_key(u8 code,char ch,int shift,int control) {

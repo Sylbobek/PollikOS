@@ -20,7 +20,7 @@ def main():
         g.wait(lambda:'AUTH: login accepted' in g.log.read_text(),'fixture login',30)
         g.key('f3',lambda:g.words('g_focused_window')[0]==2,'Terminal')
         g.wait(lambda:not g.words('g_window_anims',2)[0],'Terminal animation')
-        for expr,wanted in [('(2+3)*4','20'),('sqrt(81)','9'),('200*10%','20'),('1/0','Error: division by zero')]:
+        for expr,wanted in [('(2+3)*4','20'),('sqrt(81)','9'),('200*10%','20'),('1/0','Error: Division by zero')]:
             start=len(g.log.read_text());type_text('calc '+expr);g.hmp('sendkey ret 1')
             g.wait(lambda:'SHELL END' in g.log.read_text()[start:],'calc command',15)
             text=g.log.read_text()[start:]
@@ -36,7 +36,15 @@ def main():
             g.hmp('mouse_button 1');time.sleep(.09);g.hmp('mouse_button 0');time.sleep(.09)
         g.wait(lambda:'[CALC] 63\n' in g.log.read_text(),'button result')
         print('[CALC] 63 (buttons: C, 7, *, 9, =)',flush=True)
-        g.hmp('sendkey esc 1');time.sleep(.12);type_text('2^3^2');g.hmp('sendkey ret 1')
+        # Escape is the desktop's global minimize key; clear through C.
+        x,y,bw,bh=button_rect(w[4],w[5],34,0)
+        g.move(w[2]+x+bw//2,w[3]+y+bh//2)
+        g.hmp('mouse_button 1');time.sleep(.09);g.hmp('mouse_button 0');time.sleep(.12)
+        type_text('2^3^2');g.hmp('sendkey ret 1')
+        time.sleep(1)
+        raw=g.memory(*g.symbol('model'))
+        print(f'RAW keyboard model expression={raw[:128].split(bytes([0]))[0]!r} result={raw[128:224].split(bytes([0]))[0]!r} focus={g.words("g_focused_window")[0]}',flush=True)
+        assert 'calc_probe' not in g.symbols,'production build must exclude diagnostic probes'
         g.wait(lambda:'[CALC] 512\n' in g.log.read_text(),'keyboard result')
         print('[CALC] 512 (keyboard: 2^3^2)',flush=True)
         path=BUILD/f'calculator-{a.resolution}.ppm';g.screendump(path)
