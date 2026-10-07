@@ -291,6 +291,7 @@ void tcp_close(TcpSocket *s) {
     s->active = 0;
     s->state = TCP_STATE_CLOSED;
 }
+void tcp_abort_all(void){for(int i=0;i<MAX_TCP_SOCKETS;i++)tcp_abort(&sockets[i]);}
 
 void tcp_poll_all(void) {
     u32 now = ticks;

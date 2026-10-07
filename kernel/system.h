@@ -1,7 +1,7 @@
 #ifndef POLLIK_SYSTEM_H
 #define POLLIK_SYSTEM_H
-#define OS_NAME "Pollik OS"
-#define OS_VERSION "v0.1 Alpha"
+#define OS_NAME "PollikOS"
+#define OS_VERSION "v0.0.001"
 #define OS_LABEL OS_NAME " " OS_VERSION
 /* Shared corner-radius scale (px): controls, inputs/cards, large panels, pills.
  * Every rounded element should pick one of these instead of a magic number. */

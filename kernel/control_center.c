@@ -10,7 +10,7 @@
 void request_partial_redraw(int x,int y,int w,int h);
 /* Independent overlay state; no change to window, menu or syscall layouts. */
 static int cc_shown,cc_opening,cc_animating,cc_position=-520,cc_start_position=-520;
-static int cc_capture=-1,cc_settings_changed;
+static int cc_capture=-1,cc_settings_changed,cc_list;
 static u32 cc_started;
 enum { WIDTH=400,HEIGHT=530,DURATION=200 };
 static int left(void){return (ui_bridge_screen_width()-WIDTH)/2;}
@@ -18,7 +18,7 @@ static int top(void){return 38+cc_position;}
 static void damage(void){request_partial_redraw(left()-6,32,WIDTH+12,HEIGHT+44);}
 int control_center_active(void){return cc_shown;}
 static void commit(void){if(cc_settings_changed)app_host_save_settings();cc_settings_changed=0;cc_capture=-1;}
-void control_center_close(void){if(cc_shown){damage();commit();cc_shown=cc_animating=cc_opening=0;cc_position=-HEIGHT;}}
+void control_center_close(void){if(cc_shown){damage();commit();cc_shown=cc_animating=cc_opening=0;cc_position=-HEIGHT;cc_list=0;}}
 void control_center_toggle(void){
     if(!cc_shown){cc_shown=1;cc_position=-HEIGHT;cc_opening=0;}
     commit();cc_start_position=cc_position;cc_opening=!cc_opening;cc_animating=1;cc_started=wm_time_ms();damage();
@@ -48,22 +48,39 @@ void control_center_draw(void){
     ui_bridge_rounded(x-3,y+3,WIDTH+6,HEIGHT+6,18,0x080610,64);
     ui_bridge_roundrect_stroke(x,y,WIDTH,HEIGHT,16,1,t->border,t->surface_elevated);
     label(20,14,"Control Center",t->text);
-    card(52,112);label(30,62,"Wi-Fi",t->text);label(210,62,"Bluetooth",t->text);
-    label(30,92,"No adapter",t->text_secondary);label(210,92,"No adapter",t->text_secondary);
-    label(30,130,"Airplane mode",t->text_secondary);label(220,130,"No radios",t->text_muted);
-    card(176,62);label(30,187,"Network",t->text);
-    NetworkInterface *iface=net_manager_get_active_iface();
-    label(166,187,iface&&iface->link_up?"Ethernet":"Disconnected",t->text_secondary);
+    for(int i=0;i<2;i++){
+        ui_bridge_roundrect(x+16+i*184,y+52,176,70,12,t->surface);
+        label(30+i*184,62,i?"Bluetooth":"Wi-Fi",t->text);
+        label(30+i*184,92,"No adapter",t->text_muted);
+        ui_bridge_roundrect(x+155+i*184,y+61,28,28,8,t->surface_secondary);
+        label(163+i*184,64,">",t->text);
+    }
+    card(130,34);label(30,136,"Airplane mode",t->text);
+    label(270,136,net_manager_enabled()?"Off":"On",net_manager_enabled()?t->text_secondary:t->accent);
+    card(176,62);
+    if(cc_list==1||cc_list==2){
+        label(30,184,cc_list==1?"Wi-Fi networks":"Bluetooth devices",t->text);
+        label(30,211,"No supported adapter",t->text_secondary);
+    }else{
+        label(30,187,"Network",t->text);
+        NetworkInterface *iface=net_manager_get_active_iface();
+        label(166,187,!net_manager_enabled()?"Blocked":iface&&iface->link_up?"Ethernet":"Disconnected",t->text_secondary);
+    }
     card(250,76);label(30,260,"Brightness",t->text);char b[16];number(b,(u32)framebuffer_brightness());
     label(312,260,b,t->text_secondary);slider(292,framebuffer_brightness(),20);
-    card(338,76);label(30,348,"Volume",t->text);number(b,audio_get_volume());label(312,348,b,t->text_secondary);slider(380,audio_get_volume(),0);
-    card(426,60);label(30,435,"Sound output",t->text);
-    for(int i=0;i<2;i++) {
-        u32 color=audio_output()==i?t->accent:t->surface_secondary;
-        if(i&&!audio_is_available())color=t->surface_secondary;
-        ui_bridge_roundrect(x+20+i*184,y+459,176,24,7,color);
-        label(30+i*184,460,i?"AC'97":"PC Speaker",i&&!audio_is_available()?t->text_muted:audio_output()==i?0xffffff:t->text);
-    }
+    ui_bridge_roundrect(x+20,y+337,WIDTH-40,1,0,t->border);
+    card(348,66);label(30,351,"Volume",t->text);number(b,audio_get_volume());label(285,351,b,t->text_secondary);
+    ui_bridge_roundrect(x+348,y+348,28,28,8,cc_list==3?t->accent:t->surface_secondary);
+    label(356,351,">",t->text);slider(380,audio_get_volume(),0);
+    if(cc_list==3){
+        card(426,60);label(30,432,"Sound output",t->text);
+        for(int i=0;i<2;i++) {
+            u32 color=audio_output()==i?t->accent:t->surface_secondary;
+            if(i&&!audio_is_available())color=t->surface_secondary;
+            ui_bridge_roundrect(x+20+i*184,y+459,176,24,7,color);
+            label(30+i*184,460,i?"AC'97":"PC Speaker",i&&!audio_is_available()?t->text_muted:audio_output()==i?0xffffff:t->text);
+        }
+    }else label(30,435,audio_output()?"Output: AC'97":"Output: PC Speaker",t->text_secondary);
     label(30,498,"Settings",t->accent);label(238,498,"About",t->accent);
     graphics_set_clip(old);
 }
@@ -85,16 +102,22 @@ int control_center_click(int x,int y){
     int lx=x-left(),ly=y-top();
     if(lx<0||lx>=WIDTH||ly<0||ly>=HEIGHT){control_center_toggle();return 1;}
     if(cc_animating)return 1;
+    if(ly>=52&&ly<122){
+        if((lx>=155&&lx<183)||(lx>=339&&lx<367)){int list=lx>=204?2:1;cc_list=cc_list==list?0:list;damage();}
+        return 1; /* Unsupported radio is never displayed as enabled. */
+    }
+    if(ly>=130&&ly<164){net_manager_set_enabled(!net_manager_enabled());damage();return 1;}
+    if(ly>=348&&ly<378&&lx>=348){cc_list=cc_list==3?0:3;damage();return 1;}
     if(lx>=22&&lx<=WIDTH-22) {
         if(ly>=286&&ly<320){cc_capture=1;update_slider(x);return 1;}
         if(ly>=374&&ly<408){cc_capture=0;update_slider(x);return 1;}
     }
-    if(ly>=459&&ly<485) {
+    if(cc_list==3&&ly>=459&&ly<485) {
         int device=lx>=204;if(audio_select_output(device)){app_host_save_settings();damage();}return 1;
     }
     if(ly>=492) {
         int about=lx>=220;control_center_close();
-        if(about)ui_dialog_message("About PollikOS","PollikOS\nDesktop: i386\nPollikFS v2",ICON_INFO,0);
+        if(about)ui_dialog_message("About PollikOS",OS_LABEL "\nDesktop: i386\nPollikFS v2",ICON_INFO,0);
         else app_host_open(APP_SETTINGS);
     }
     return 1;

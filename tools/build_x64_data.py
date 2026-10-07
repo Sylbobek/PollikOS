@@ -227,6 +227,10 @@ def build(output):
         reserve_tree_file(pollikos_inode, header.name, header.read_bytes())
     reserve_tree_file(pollikos_inode, "abi_numbers.h",
                       (output / "sdk/include/pollikos/abi_numbers.h").read_bytes())
+    reserve_tree_file(pollikos_inode, "minimp3.h",
+                      (output / "sdk/include/pollikos/minimp3.h").read_bytes())
+    reserve_tree_file(pollikos_inode, "stb_image.h",
+                      (output / "sdk/include/pollikos/stb_image.h").read_bytes())
     for header in sorted((include_root / "sys").glob("*.h")):
         reserve_tree_file(sys_inode, header.name, header.read_bytes())
     for header in sorted((ROOT / "third_party/tinycc/include").glob("*.h")):

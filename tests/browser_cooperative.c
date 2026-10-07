@@ -12,13 +12,15 @@ volatile u32 ticks;
 static int services, requests, dom_paints, layouts_during_service;
 static int in_service, queue_navigation, close_loading, fail_http;
 static int allocations, view_w, view_h, view_scroll, status_strip, url_cursor, thumb_bottom;
+static int script_calls;
+static const char *override_page;
 #define CHECK(x) do { if (!(x)) { printf("FAIL line %d: %s\n", __LINE__, #x); exit(1); } } while (0)
 void *kmalloc(u32 n) { ++ticks; ++allocations; return malloc(n); }
 void kfree(void *p) { free(p); }
 void serial(const char *s) { (void)s; }
 void number(char *s, u32 n) { int k=0; char b[12]; do {b[k++]='0'+n%10;n/=10;}while(n);int i=0;while(k)s[i++]=b[--k];s[i]=0; }
 void js_init(void) {}
-void js_execute(const char *s, DomNode *d) {(void)s;(void)d;}
+void js_execute(const char *s, DomNode *d) {(void)s;(void)d;++script_calls;}
 void js_dispatch_event(DomNode *n, const char *s) {(void)n;(void)s;CHECK(!in_service);}
 void js_set_event_pos(int x, int y) {(void)x;(void)y;}
 void js_set_event_key(int k) {(void)k;}
@@ -111,7 +113,8 @@ int http_get(const char *url,HttpResponse *r) {
     for(int i=0;i<25;i++){++ticks;net_service_wait();}
     if(fail_http){r->error=3;return 0;}
     const char page[]="<html><head><title>Native PASS</title><style>p {color:red;}</style></head><body><p>Safe cooperative load</p></body></html>";
-    r->body_len=sizeof(page)-1;r->status_code=200;r->body=kmalloc(sizeof(page));memcpy(r->body,page,sizeof(page));return 1;
+    const char *body=override_page?override_page:page;
+    r->body_len=strlen(body);r->status_code=200;r->body=kmalloc(r->body_len+1);memcpy(r->body,body,r->body_len+1);return 1;
 }
 int http_get_timeout(const char *url,HttpResponse *r,u32 timeout) {
     CHECK(timeout>0);return http_get(url,r);
@@ -155,6 +158,16 @@ int main(void) {
     browser_navigate("http://127.0.0.1/");fail_http=1;browser_poll();check_loaded();
     fail_http=0;browser_navigate("http://127.0.0.1/");close_loading=1;browser_poll();
     CHECK(!g_browser.open);check_loaded();
+    override_page="<html><body><script type='application/ld+json'>{\"name\":\"metadata\"}</script>"
+                  "<script type='application/json'>{\"name\":\"config\"}</script>"
+                  "<script type='text/plain'>not JavaScript</script>"
+                  "<script type='module'>import x from 'x';</script>"
+                  "<script>let classic=1;</script>"
+                  "<script type='TeXt/JaVaScRiPt'>let classic=2;</script></body></html>";
+    script_calls=0;browser_open();browser_navigate("http://127.0.0.1/");browser_poll();
+    CHECK(script_calls==2);
+    CHECK(g_browser.script_errors==1); /* module remains explicitly unsupported */
+    printf("PASS: script types: two classic scripts, JSON/data untouched, module reported unsupported\n");
     printf("PASS: %d cooperative services; home/success/error/close, no nested load or mutable DOM painting/layout/input\n",services);
     dom_free_tree(g_browser.document);return 0;
 }

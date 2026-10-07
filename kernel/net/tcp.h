@@ -15,6 +15,7 @@ int tcp_is_connected(TcpSocket *sock);
 int tcp_is_eof(TcpSocket *sock);
 int tcp_has_error(TcpSocket *sock);
 void tcp_abort(TcpSocket *sock);
+void tcp_abort_all(void);
 void tcp_close(TcpSocket *sock);
 void tcp_poll_all(void);
 void tcp_on_packet(NetworkInterface *iface, const u8 *src_ip, const u8 *dst_ip, const u8 *payload, int len);

@@ -62,18 +62,22 @@ function Ensure-PollikosRuntime {
     $crtSource = Join-Path $repo 'sdk/crt/crt0.asm'
     $abiSource = Join-Path $repo 'kernel/arch/x86_64/user_abi.h'
     $abiInfoSource = Join-Path $repo 'include/pollikos_abi.h'
+    $mp3Source = Join-Path $repo 'third_party/minimp3/minimp3.h'
+    $imageSource = Join-Path $repo 'third_party/stb/stb_image.h'
     $stale = $Force -or -not (Test-Path -LiteralPath $crt0) -or -not (Test-Path -LiteralPath $archive) `
         -or -not (Test-Path -LiteralPath (Join-Path $includeDir 'pollikos/abi_numbers.h')) `
         -or -not (Test-Path -LiteralPath (Join-Path $includeDir 'pollikos_abi.h'))
     if (-not $stale) {
         $stamp = (Get-Item -LiteralPath $archive).LastWriteTimeUtc
-        foreach ($input in @($crtSource, $abiSource, $abiInfoSource) + $sources) {
+        foreach ($input in @($crtSource, $abiSource, $abiInfoSource, $mp3Source, $imageSource) + $sources) {
             if ((Get-Item -LiteralPath $input).LastWriteTimeUtc -gt $stamp) { $stale = $true; break }
         }
     }
     if (-not $stale) { return $RuntimeDir }
     Write-Host "pollikos-sdk: building runtime (crt0 + libpollikc.a) in $RuntimeDir"
     New-PollikosAbiHeader -IncludeDir $includeDir
+    Copy-Item -LiteralPath $mp3Source -Destination (Join-Path $includeDir 'pollikos/minimp3.h') -Force
+    Copy-Item -LiteralPath $imageSource -Destination (Join-Path $includeDir 'pollikos/stb_image.h') -Force
     Copy-Item -LiteralPath $abiInfoSource -Destination (Join-Path $includeDir 'pollikos_abi.h') -Force
     New-Item -ItemType Directory -Force (Join-Path $RuntimeDir 'libc') | Out-Null
     $flags = Get-PollikosCFlags -Optimization '-O2' -IncludeDir $includeDir

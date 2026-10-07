@@ -64,7 +64,10 @@ static void launch_selected(void) {
         else snprintf(status_text,sizeof(status_text),"Cannot open folder: %s",entry->name);
         return;
     }
-    if (!is_pol(entry->name)) {
+    size_t name_length=strlen(entry->name);
+    int audio_file=name_length>=4&&(!strcmp(entry->name+name_length-4,".wav")||!strcmp(entry->name+name_length-4,".mp3"));
+    int video_file=name_length>=4&&!strcmp(entry->name+name_length-4,".mp4");
+    if (!is_pol(entry->name)&&!audio_file&&!video_file) {
         snprintf(status_text,sizeof(status_text),"Only .pol files are launchable");
         return;
     }
@@ -72,8 +75,8 @@ static void launch_selected(void) {
     int root=!strcmp(current_path,"/");
     snprintf(path,sizeof(path),root?"/%s":"%s/%s",root?entry->name:current_path,
              root?"":entry->name);
-    const char *argv[]={path,0};
-    long pid=pollikos_spawn(path,argv,0);
+    const char *argv[]={video_file?"video":audio_file?"media":path,audio_file||video_file?path:0,0};
+    long pid=pollikos_spawn(video_file?"/bin/video.pol":audio_file?"/bin/media.pol":path,argv,0);
     if (pid<0) snprintf(status_text,sizeof(status_text),"Cannot launch %s (%ld)",entry->name,pid);
     else {
         snprintf(status_text,sizeof(status_text),"Opened %s  PID %ld",entry->name,pid);

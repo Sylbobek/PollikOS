@@ -8,6 +8,8 @@ void console_fb_mouse_enable(void);
 void console_fb_mouse_move(int x, int y);
 unsigned console_fb_width(void);
 unsigned console_fb_height(void);
+unsigned console_fb_pitch(void);
+unsigned console_fb_bpp(void);
 void console_fb_overlay_begin(void);
 void console_fb_overlay_end(void);
 int console_fb_read_pixels(unsigned x, unsigned y, unsigned count, uint32_t *pixels_out);

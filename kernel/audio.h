@@ -1,7 +1,11 @@
 #ifndef POLLIK_AUDIO_H
 #define POLLIK_AUDIO_H
 
+#ifdef POLLIK_X64
+#include "arch/x86_64/fs_platform.h"
+#else
 #include "system.h"
+#endif
 
 typedef enum {
     SOUND_STARTUP = 1,
@@ -21,5 +25,10 @@ int audio_output(void);
 int audio_select_output(int device);
 int audio_play_wav(const u8 *data, u32 len);
 int audio_play_wav_file(const char *path);
+#ifdef POLLIK_X64
+unsigned audio_bus_master_port(void);
+int audio_reset_dma(void);
+int audio_quiesce_dma(void);
+#endif
 
 #endif

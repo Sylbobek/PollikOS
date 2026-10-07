@@ -16,14 +16,17 @@ log.write_text("")
 data_disk = BUILD / "browser-e2e-data.img"
 from gui_fixture import create_gui_disk
 create_gui_disk(data_disk)
-process = subprocess.Popen([
-    "qemu-system-x86_64", "-machine", "pc", "-cpu", "max", "-rtc", "base=utc", "-m", "2G", "-vga", "std",
+command = [
+    "qemu-system-x86_64", "-machine", "pc", "-accel", os.environ.get('POLLIK_TEST_ACCEL', 'tcg'),
+    "-cpu", os.environ.get('POLLIK_TEST_CPU', 'max'), "-rtc", "base=utc", "-m", "2G", "-vga", "std",
     "-drive", f"format=raw,file={BUILD / os.environ.get('POLLIK_TEST_IMAGE', 'PollikOS-Alpha.img')},if=ide,index=0,snapshot=on",
     "-drive", f"format=raw,file={data_disk},if=ide,index=1",
     "-netdev", "user,id=net0", "-device", "rtl8139,netdev=net0",
     "-display", "none", "-serial", f"file:{log}",
     "-qmp", f"tcp:127.0.0.1:{port},server=on,wait=off",
-], cwd=ROOT, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+]
+print('COMMAND ' + subprocess.list2cmdline(command), flush=True)
+process = subprocess.Popen(command, cwd=ROOT, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 try:
     deadline = time.monotonic() + 15
     while True:

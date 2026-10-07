@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include "window_ui.h"
 #include "icon_assets.h"
+#include "control_panel.h"
 
 static int launch(const char *path) {
     const char *argv[]={path,0};
@@ -23,7 +24,8 @@ static void draw(PollikCanvas *canvas,int files_x,int terminal_x,int demo_x,int 
     for (unsigned y=0;y<canvas->height/2;y+=3)
         pollik_ui_fill(canvas,0,(int)y,(int)canvas->width,1,0x161e30);
     pollik_ui_fill(canvas,0,0,(int)canvas->width,38,0x161c2a);
-    pollik_ui_text(canvas,22,10,"PollikOS x86-64",0xf0f2f7);
+    pollik_ui_text(canvas,22,10,"PollikOS v0.0.001",0xf0f2f7);
+    pollik_ui_text(canvas,(int)canvas->width/2-35,10,"Pollik OS",0xf0f2f7);
     pollik_ui_text(canvas,(int)canvas->width-150,10,"Desktop",0xa9b2c4);
     pollik_ui_text(canvas,48,104,"Your applications",0xf0f2f7);
     pollik_ui_text(canvas,48,131,"Open Files to browse .pol apps",0xa9b2c4);
@@ -45,6 +47,7 @@ static void draw(PollikCanvas *canvas,int files_x,int terminal_x,int demo_x,int 
     pollik_assets_icon(canvas,7,calc_x,dock_y,42);
     pollik_ui_text(canvas,calc_x-1,dock_y+46,"Calc",0xe8eaf1);
     pollik_ui_text(canvas,16,(int)canvas->height-18,"PollikOS .pol desktop",0x828da2);
+    panel_draw(canvas);
 }
 
 int main(void) {
@@ -77,7 +80,8 @@ int main(void) {
         if (pollikos_input_read(&event)==(int64_t)sizeof(event)) {
             if (event.kind&POLLIKOS_INPUT_WINDOW_CLOSE) running=0;
             if (event.kind&POLLIKOS_INPUT_KEY_DOWN) {
-                if (event.key=='f' || event.key=='F' || event.key==13) (void)launch("/bin/files.pol");
+                if(panel_open||panel_slide){if(event.key==27&&panel_open)panel_toggle();}
+                else if (event.key=='f' || event.key=='F' || event.key==13) (void)launch("/bin/files.pol");
                 else if (event.key=='t' || event.key=='T') (void)launch("/bin/terminal.pol");
                 else if (event.key=='d' || event.key=='D') (void)launch("/bin/windowdemo.pol");
                 else if (event.key=='b' || event.key=='B') (void)launch("/bin/browser.pol");
@@ -85,12 +89,21 @@ int main(void) {
                 else if (event.key=='c' || event.key=='C') (void)launch("/bin/calculator.pol");
                 else if (event.key==27) running=0;
             }
+            if((event.kind&(POLLIKOS_INPUT_MOUSE_MOVE|POLLIKOS_INPUT_MOUSE_BUTTON))&&panel_capture){
+                pollikos_window_info_t info;
+                if(pollikos_window_info(&info)==0)panel_drag(&canvas,event.x-info.content_x,event.buttons&POLLIKOS_MOUSE_LEFT);
+                draw(&canvas,files_x,terminal_x,demo_x,browser_x,notes_x,calc_x,dock_y);
+                (void)pollikos_window_present();
+            }
             if ((event.kind&POLLIKOS_INPUT_MOUSE_BUTTON) &&
                 (event.changed&POLLIKOS_MOUSE_LEFT) && (event.buttons&POLLIKOS_MOUSE_LEFT)) {
                 pollikos_window_info_t info;
                 if (pollikos_window_info(&info)==0) {
                     int x=event.x-info.content_x, y=event.y-info.content_y;
-                    if (y>=dock_y-5 && y<dock_y+62) {
+                    if (panel_pointer(&canvas,x,y,1)) {
+                        draw(&canvas,files_x,terminal_x,demo_x,browser_x,notes_x,calc_x,dock_y);
+                        (void)pollikos_window_present();
+                    } else if (y>=dock_y-5 && y<dock_y+62) {
                         if (x>=files_x-14 && x<files_x+36) (void)launch("/bin/files.pol");
                         else if (x>=terminal_x-4 && x<terminal_x+44) (void)launch("/bin/terminal.pol");
                         else if (x>=demo_x && x<demo_x+48) (void)launch("/bin/windowdemo.pol");
@@ -100,6 +113,10 @@ int main(void) {
                     }
                 }
             }
+        }
+        if(panel_tick()){
+            draw(&canvas,files_x,terminal_x,demo_x,browser_x,notes_x,calc_x,dock_y);
+            (void)pollikos_window_present();
         }
         (void)pollikos_sleep_ms(10);
     }

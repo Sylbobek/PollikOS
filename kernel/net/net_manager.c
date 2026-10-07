@@ -15,6 +15,22 @@ static NetworkInterface *active_iface = 0;
 static int eth_available = 0;
 static int wifi_available = 0;
 static int last_eth_link = -1;
+static int administrative_enabled=1;
+int net_manager_enabled(void){return administrative_enabled;}
+void net_manager_set_enabled(int enabled){
+    enabled=enabled!=0;if(enabled==administrative_enabled)return;
+    administrative_enabled=enabled;
+    if(!enabled){
+        active_iface=0;tcp_abort_all();arp_init();dns_init();
+        if(eth_available){eth_iface.dhcp_bound=0;memset(eth_iface.ip,0,4);}
+        if(wifi_available){wifi_iface.dhcp_bound=0;memset(wifi_iface.ip,0,4);}
+        serial("NetworkManager: all traffic administratively blocked\n");
+    }else{
+        if(eth_available){active_iface=&eth_iface;last_eth_link=-1;}
+        else if(wifi_available&&wifi_iface.link_up)active_iface=&wifi_iface;
+        serial("NetworkManager: networking enabled\n");
+    }
+}
 
 void net_manager_init(void) {
     arp_init();
@@ -45,6 +61,7 @@ void net_manager_init(void) {
 }
 
 void net_manager_poll(void) {
+    if(!administrative_enabled)return;
     if (eth_available && eth_iface.poll)
         eth_iface.poll(&eth_iface);
     if (wifi_available && wifi_iface.poll)
@@ -161,6 +178,7 @@ TcpSocket *net_manager_connect_tcp(const u8 *ip, u16 port) {
 }
 
 void net_on_frame_received(NetworkInterface *iface, const u8 *frame, int len) {
+    if(!administrative_enabled)return;
     if (len < 14)
         return;
 

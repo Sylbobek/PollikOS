@@ -74,6 +74,7 @@ try {
         # Interactive userspace shell (delivered as /bin/pollish).
         'pollish'           = @{ Sources = @('sdk/apps/pollish.c','common/calc.c'); Optimization = '-O2' }
         'calculator'        = @{ Sources = @('sdk/apps/calculator.c','common/calc.c'); Optimization = '-O2' }
+        'media_player'      = @{ Sources = @('sdk/apps/media_player.c'); Optimization = '-O2' }
         'pipe_nowait'       = @{ Sources = @('sdk/tests/pipe_nowait.c');       Optimization = '-O2' }
         'windowdemo'        = @{ Sources = @('sdk/tests/windowdemo.c');       Optimization = '-O2' }
         'terminal'          = @{ Sources = @('sdk/apps/terminal.c');            Optimization = '-O2' }
@@ -115,6 +116,15 @@ try {
             --runtime $runtimeDir @Arguments
         if ($LASTEXITCODE -ne 0) { throw "pollikcc failed: $($Arguments -join ' ')" }
     }
+    # Optional MP4/H264/AAC userspace library; never linked into the kernel.
+    Invoke-Checked python @('tools/build_mp4_codecs.py','--native','--output',"$output/codecs")
+    Compile-PollikosObject -Source 'sdk/media/movie.c' -Object "$userOutput/movie-api.o" -RuntimeDir $runtimeDir `
+        -ExtraIncludes @('third_party/h264bsd/src','third_party/faad2/include')
+    Invoke-Checked llvm-ar @('rcs',"$output/codecs/libpollikvideo.a","$userOutput/movie-api.o")
+    Compile-PollikosObject -Source 'sdk/apps/video_player.c' -Object "$userOutput/video-player.o" -RuntimeDir $runtimeDir
+    Invoke-PollikosLink -Objects @("$userOutput/video-player.o") -Libraries @("$output/codecs/libpollikvideo.a") `
+        -Output "$userOutput/video_player.elf" -RuntimeDir $runtimeDir
+    [void](Test-PollikosElf -Path "$userOutput/video_player.elf")
     Invoke-Pollikcc @('-O0','sdk/tests/abi_test_c.c','-o',"$userOutput/abi_test_o0.elf")
     Invoke-Pollikcc @('sdk/examples/multifile/main.c','sdk/examples/multifile/utils.c',
         'sdk/examples/multifile/parser.c','-o',"$userOutput/sdk_multifile.elf")
@@ -186,7 +196,7 @@ try {
         Invoke-Checked llvm-ar (@('rcs',$bearSslArchive) + $bearSslObjects)
         Set-Content -LiteralPath $bearSslStamp -Value 'BearSSL freestanding scalar x86_64'
     }
-    $modules = @('kernel','auth64','physical','pmm','vmm','usercopy','process','scheduler','fpu','elf64','elf_demo','timer','scheduler_demo','fs_platform','net_platform','network','launch','syscall','path','file','file_demo','stat_demo','dir_demo','runtime_demo','heap','rtc64_decode','rtc64','tty','mouse','console_fb','window','pipe','c3_demo','c4_demo','c5_demo','c6_demo','c7_demo')
+    $modules = @('kernel','auth64','physical','pmm','vmm','usercopy','process','scheduler','fpu','elf64','elf_demo','timer','scheduler_demo','fs_platform','net_platform','audio_platform','audio_stream','devices','network','launch','syscall','path','file','file_demo','stat_demo','dir_demo','runtime_demo','heap','rtc64_decode','rtc64','tty','mouse','console_fb','window','pipe','c3_demo','c4_demo','c5_demo','c6_demo','c7_demo')
     if($Production){$modules=@($modules | Where-Object {$_ -notlike '*_demo'})}
     if ($SelfTest) { $modules += @('test_memory','memory_test','user_test','elf_test','scheduler_test','path_test','file_test','stat_test','dir_test','runtime_test','c2_test','c3_test','c4_test','c5_test','c6_test','c7_test','selfhost_test') }
     $linkOptions = @()
@@ -197,7 +207,7 @@ try {
         $linkOptions += '--wrap=ata_write_sector'
     }
     $objects = @()
-    $modules += @('../../vfs','../../pollikfs','../../storage','../../hal')
+    $modules += @('../../vfs','../../pollikfs','../../storage','../../hal','../../audio')
     foreach ($module in $modules) {
         $objectName = Split-Path $module -Leaf
         Invoke-Checked clang (@('--target=x86_64-none-elf','-ffreestanding','-fno-pic','-fno-pie',

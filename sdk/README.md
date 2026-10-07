@@ -183,3 +183,31 @@ hard links are not implemented. Plain `rename()` never overwrites; the separate
 `rename_replace()` operation replaces regular files. Although the inode pointer
 tree represents ~64.24 MiB, actual file data is constrained below the volume's
 32 MiB gross capacity by metadata and other allocated files.
+
+## Media extensions (x86-64)
+
+`pollikos/media.h` decodes WAV/MP3 in userspace to 48000-Hz stereo S16LE.
+`pollikos/audio.h` submits asynchronous PCM to the AC97 driver with explicit
+ownership, queue backpressure, pause/resume and stop. `pollikos/image.h` decodes
+bounded PNG/JPEG/BMP/GIF-first-frame inputs to owned RGBA8 buffers.
+
+Build the public API example:
+
+```powershell
+.\sdk\tools\pollikcc.ps1 --runtime build/x86_64/system/sdk sdk/examples/audio.c -o build/audio.pol
+```
+
+Encoded audio is limited to 16 MiB; decoded PCM is streamed. MP3 encoder
+padding is retained. The initial resampler is linear. This audio/image checkpoint does not add full POSIX or additional language
+runtimes. MP4 requires the optional library described below. See
+[the media checkpoint](../docs/MEDIA_SDK_CHECKPOINT.md) and
+[executed test evidence](../docs/MEDIA_SDK_EVIDENCE.md).
+
+## MP4 Baseline extension
+
+`pollikos/movie.h` and `/usr/lib/libpollikvideo.a` support the documented
+unfragmented H.264 Baseline/AAC-LC subset. `/bin/video.pol` is the native
+software player. For host SDK clients link the optional archive, for example
+`--runtime build/x86_64/system/sdk -Lbuild/x86_64/system/codecs -lpollikvideo`.
+The library is never linked into the kernel. Limits and executed proof are in
+[MP4_CHECKPOINT.md](../docs/MP4_CHECKPOINT.md).

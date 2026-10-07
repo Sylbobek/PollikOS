@@ -1,4 +1,5 @@
 #include "browser.h"
+#include "script_type.h"
 #include "../mem.h"
 #include "../net/http.h"
 #include "../net/net_util.h"
@@ -133,7 +134,9 @@ static void execute_dom_scripts(DomNode *node) {
     if (!node) return;
     browser_work_checkpoint();
     if (node->tag[0] == 's' && node->tag[1] == 'c' && node->tag[2] == 'r' && node->tag[3] == 'i' && node->tag[4] == 'p' && node->tag[5] == 't') {
-        if (node->src[0]) {
+        int kind=browser_script_kind(node);
+        if(kind==2){++g_browser.script_errors;serial("JS: module scripts are unsupported\n");}
+        if (kind==1 && node->src[0]) {
             char url[256];
             HttpResponse response;
             if (http_resolve_url(browser_base_url(), node->src, url, sizeof(url)) && http_get(url, &response)) {
@@ -148,7 +151,7 @@ static void execute_dom_scripts(DomNode *node) {
                 }
                 http_response_free(&response);
             }
-        } else if (node->first_child && node->first_child->text) {
+        } else if (kind==1 && node->first_child && node->first_child->text) {
             js_execute(node->first_child->text, g_browser.document);
         }
     }

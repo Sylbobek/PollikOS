@@ -2,6 +2,9 @@
 extern int printf(const char *,...);
 static int errors,saves,volume=85,bright=100,device,invalidations,dialogs,opened;
 static u32 clock_ms;
+static int networking=1;
+int net_manager_enabled(void){return networking;}
+void net_manager_set_enabled(int enabled){networking=enabled;}
 static GraphicsClip clip={0,0,1024,768};
 static ThemeColors theme={.surface=0xffffff,.surface_elevated=0xf2eff6,.accent=0x2563eb,.text=0x202331};
 #define CHECK(x) do{if(!(x)){printf("FAIL %d: %s\n",__LINE__,#x);errors++;}}while(0)
@@ -42,7 +45,12 @@ int main(void){
     control_center_click(x+30,y+305);CHECK(bright==20&&saves==1);
     control_center_pointer(x+WIDTH+50,0,1);CHECK(bright==100&&saves==1&&invalidations==2);
     control_center_pointer(0,0,0);CHECK(saves==2);
+    control_center_click(x+360,y+360);CHECK(cc_list==3);
     control_center_click(x+260,y+470);CHECK(device==0&&saves==2); /* AC97 absent. */
+    control_center_click(x+160,y+70);CHECK(cc_list==1);
+    control_center_click(x+345,y+70);CHECK(cc_list==2);
+    control_center_click(x+30,y+140);CHECK(!networking);
+    control_center_click(x+30,y+140);CHECK(networking);
     CHECK(control_center_key(1));control_center_poll(550);CHECK(!cc_shown&&saves==2);
     clock_ms=550;control_center_toggle();control_center_poll(750);
     control_center_click(x+260,top()+504);CHECK(dialogs==1&&!cc_shown);

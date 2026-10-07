@@ -13,6 +13,14 @@ def build(output):
     records=manifest(source)
     apps=('pollish','tcc','desktop.pol','files.pol','terminal.pol','notes.pol','browser.pol','calculator.pol','windowdemo.pol')
     selected=dict(FILES)
+    selected['/bin/media.pol']=(output/'userspace/media_player.elf').read_bytes()
+    selected['/bin/video.pol']=(output/'userspace/video_player.elf').read_bytes()
+    selected['/usr/lib/libpollikvideo.a']=(output/'codecs/libpollikvideo.a').read_bytes()
+    selected['/usr/share/videos/demo.mp4']=(ROOT/'assets/media/demo.mp4').read_bytes()
+    selected['/usr/share/licenses/h264bsd.txt']=(ROOT/'third_party/h264bsd/LICENSE.md').read_bytes()
+    selected['/usr/share/licenses/faad2.txt']=(ROOT/'third_party/faad2/COPYING').read_bytes()
+    from build_demo_audio import demo_wave
+    selected['/usr/share/sounds/demo.wav']=demo_wave()
     for path,record in records.items():
         if record[0]!='file':continue
         if (path in tuple('/bin/'+a for a in apps) or path.startswith('/usr/include/') or
@@ -32,4 +40,8 @@ def build(output):
     for path in sorted(selected):print('SYSTEM',path)
     for bad in ('/bin/invalid','/bin/tiny','/bin/truncated','/bin/large','/testdir/'):
         if created and bad in actual:raise ValueError('test fixture unexpectedly present in system image: '+bad)
+    if output.name=='system':
+        from create_vm_profile import create
+        profile=create(target,output/'PollikData-system-30g.img',30)
+        sync(profile,selected)
 if __name__=='__main__':build(sys.argv[1])

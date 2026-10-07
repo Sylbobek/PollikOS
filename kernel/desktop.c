@@ -585,7 +585,7 @@ static void on_menu_action(int action_id) {
     shell.dirty = 1;
     switch (action_id) {
         case ACTION_ABOUT_POLLIKOS:
-            ui_dialog_message("About PollikOS","PollikOS\nDesktop: i386\nPollikFS v2",ICON_INFO,0);
+            ui_dialog_message("About PollikOS",OS_LABEL "\nDesktop: i386\nPollikFS v2",ICON_INFO,0);
             break;
         case ACTION_DISPLAY_SETTINGS:
             ui_toggle_theme_mode();

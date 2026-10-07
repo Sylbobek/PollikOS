@@ -1,5 +1,6 @@
 #include "rtl8139.h"
 #include "net_util.h"
+#include "net_manager.h"
 
 #define RX_CONFIG 0x0000e70a /* 8 KiB wrapping ring, physical + broadcast, unlimited DMA */
 
@@ -102,7 +103,7 @@ int rtl8139_is_link_up(NetworkInterface *iface) {
 }
 
 int rtl8139_send_frame(NetworkInterface *iface, const u8 *frame, int len) {
-    if (!io || !frame || len <= 0 || len > 1536)
+    if (!net_manager_enabled() || !io || !frame || len <= 0 || len > 1536)
         return 0;
 
     int i = (int)tx_index;
@@ -123,7 +124,7 @@ int rtl8139_send_frame(NetworkInterface *iface, const u8 *frame, int len) {
 }
 
 void rtl8139_poll(NetworkInterface *iface) {
-    if (!io)
+    if (!net_manager_enabled() || !io)
         return;
 
     /* Update link status */

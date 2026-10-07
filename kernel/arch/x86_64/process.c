@@ -13,6 +13,8 @@
 #include "tty.h"
 #include "pipe.h"
 #include "network.h"
+#include "devices.h"
+#include "audio_stream.h"
 #include "../../vfs.h"
 #include "../../hal.h"
 #include "../../../include/pollikos_abi.h"
@@ -163,6 +165,7 @@ int process64_reclaim(Process64 *process) {
     memory_context_check();
     if (!process64_internal_known(process)) return 0;
     network64_http_owner_cleanup(process->pid);
+    audio64_stream_cleanup(process->pid);
     window64_process_cleanup(process);
     file64_cleanup(process);
     if (process->space.root)
@@ -370,6 +373,7 @@ static void finish(Process64 *process, UserFrame *frame, int fault, int status, 
     __attribute__((noreturn));
 static void finish(Process64 *process, UserFrame *frame, int fault, int status, uint64_t address) {
     network64_http_owner_cleanup(process->pid);
+    audio64_stream_cleanup(process->pid);
     frame_copy(&process->frame, frame);
     process64_internal_transition(process, fault ? PROCESS_FAULTED : PROCESS_EXITED);
     process->exit_status = status;
@@ -892,6 +896,10 @@ int process64_trap(UserFrame *frame, uint64_t cr2) {
                                                  : pipe_write_request(process, frame);
         if (result == WAIT_SUSPEND) scheduler64_suspend(&process->thread, frame); /* never returns until progressed */
         frame->rax = (uint64_t)result;
+    } else if(frame->rax==USER_AUDIO_STREAM){
+        frame->rax=(uint64_t)audio64_stream_control(process,frame->rdi,frame->rsi,frame->rdx);
+    } else if (frame->rax==USER_DEVICE_CONTROL) {
+        frame->rax=(uint64_t)devices64_control(frame->rdi,frame->rsi);
     } else if (!file64_dispatch(process, frame) && !heap64_dispatch(process, frame) &&
                !proc64_dispatch(process, frame) && !window64_dispatch(process, frame))
         frame->rax = (uint64_t)-(int64_t)USER_ENOSYS;

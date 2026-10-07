@@ -5,6 +5,7 @@
 static vfs_file_t *kernel_fds[VFS_MAX_FDS];
 static vfs_file_t **fd_context;
 static uint32_t sectors;
+uint64_t fs64_disk_bytes(void){return (uint64_t)sectors*512;}
 static int64_t fail_after = -1;
 u32 ticks;
 void fs64_tick_update(u32 value) { ticks = value; }

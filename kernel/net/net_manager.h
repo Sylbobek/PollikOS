@@ -6,6 +6,9 @@
 
 void net_manager_init(void);
 void net_manager_poll(void);
+/* Administrative block applies to all interfaces, including cached sockets. */
+int net_manager_enabled(void);
+void net_manager_set_enabled(int enabled);
 int net_manager_is_connected(void);
 NetworkInterface *net_manager_get_active_iface(void);
 NetworkInterface *net_manager_get_ethernet_iface(void);

@@ -1,6 +1,9 @@
 #ifndef POLLIKOS_STDLIB_H
 #define POLLIKOS_STDLIB_H
 #include <stddef.h>
+int abs(int value);
+long labs(long value);
+long long llabs(long long value);
 #define EXIT_SUCCESS 0
 #define EXIT_FAILURE 1
 /* malloc family: process-private brk arena plus optional anonymous mmap for

@@ -18,6 +18,7 @@ extern u32 ticks;
 void fs64_tick_update(u32 value);
 int fs64_sector_allowed(u32 lba);
 int fs64_mount(void);
+uint64_t fs64_disk_bytes(void);
 void fs64_io_fail_after(int64_t sectors);
 unsigned vfs_debug_handles(void);
 struct vfs_file;

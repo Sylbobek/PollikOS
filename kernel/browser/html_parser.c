@@ -474,8 +474,8 @@ static void serialize_node(DomNode *n, char *out, int cap, int *used) {
             if (*used >= cap - 1) break;
             out[(*used)++] = ' ';
             for (const char *a = c->attr_names[i]; *a && *used < cap - 1; a++) out[(*used)++] = *a;
-            out[(*used)++] = '=';
-            out[(*used)++] = '"';
+            if (*used < cap - 1) out[(*used)++] = '=';
+            if (*used < cap - 1) out[(*used)++] = '"';
             serialize_escape(c->attr_vals[i], out, cap, used, 1);
             if (*used < cap - 1) out[(*used)++] = '"';
         }

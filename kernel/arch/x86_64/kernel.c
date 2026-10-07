@@ -219,6 +219,8 @@ __attribute__((noreturn)) static void console64_run(void) {
     timer64_stop();
     if (!authenticated) halt();
     network64_init();
+    extern int audio_init(void);
+    (void)audio_init();
     const char *environment[] = {"PATH=/bin"};
     const char *desktop_arguments[]={"desktop",0};
     Process64 *desktop=0;

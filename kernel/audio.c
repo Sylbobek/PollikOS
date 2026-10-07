@@ -1,10 +1,16 @@
 #include "audio.h"
+#ifdef POLLIK_X64
+#include "arch/x86_64/audio_platform.h"
+#else
 #include "hw.h"
 #include "klog.h"
 #include "mem.h"
 #include "pmm.h"
 #include "vfs.h"
 #include "hal.h"
+static void *audio_dma_alloc(uintptr_t *physical){*physical=pmm_alloc_page();return (void *)*physical;}
+static void audio_dma_free(void *mapped,uintptr_t physical){if(mapped)pmm_free_page(physical);}
+#endif
 
 typedef short s16;
 typedef int s32;
@@ -69,6 +75,9 @@ static Ac97BdlEntry *s_bdl = 0;
 static uintptr_t s_bdl_phys = 0;
 static s16 *s_pcm_buf = 0;
 static uintptr_t s_pcm_phys = 0;
+#ifdef POLLIK_X64
+static PciDevice dma_controller;
+#endif
 
 static void ac97_write_mixer(u8 reg, u16 val) {
     if (!s_nambar) return;
@@ -80,15 +89,41 @@ static u16 ac97_read_mixer(u8 reg) {
     return inw((u16)(s_nambar + reg));
 }
 
+static int ac97_reset_output(void){
+    outb((u16)(s_nabmbar+AC97_PO_CR),AC97_CR_RR);
+    for(unsigned n=0;n<10000;n++){
+        if(!(inb((u16)(s_nabmbar+AC97_PO_CR))&AC97_CR_RR))return 1;
+        __asm__ volatile("pause");
+    }
+    KLOG_WARN(KLOG_CAT_BOOT,"Audio: DMA reset timeout");return 0;
+}
+#ifdef POLLIK_X64
+unsigned audio_bus_master_port(void){return s_ac97_present?s_nabmbar:0;}
+int audio_reset_dma(void){return s_ac97_present&&ac97_reset_output();}
+int audio_quiesce_dma(void){
+    if(!s_ac97_present)return 1;
+    outb((u16)(s_nabmbar+AC97_PO_CR),0);
+    for(unsigned n=0;n<10000;n++)if(inw((u16)(s_nabmbar+AC97_PO_SR))&AC97_SR_DCH)return 1;
+    /* A wedged controller must lose bus-master permission before its DMA
+     * memory can be reclaimed. Do not advertise it as ready afterwards. */
+    u32 command=pci_config_read32(dma_controller.bus,dma_controller.dev,dma_controller.fn,4);
+    pci_config_write32(dma_controller.bus,dma_controller.dev,dma_controller.fn,4,(command&0xffffu)&~4u);
+    s_ac97_present=0;KLOG_ERROR(KLOG_CAT_BOOT,"Audio: DMA halt timeout; bus mastering disabled");return 0;
+}
+#endif
 int audio_init(void) {
+    if(s_ac97_present)return 1;
     PciDevice devs[MAX_PCI_DEVICES];
     int count = pci_scan_bus(devs, MAX_PCI_DEVICES);
     int found_idx = -1;
 
     for (int i = 0; i < count; i++) {
-        /* Check for AC'97 controller (Class 0x04 Audio, Subclass 0x01, or Intel 8086:2415) */
-        if ((devs[i].class_code == 0x04 && devs[i].subclass == 0x01) ||
-            (devs[i].vendor_id == 0x8086 && devs[i].device_id == 0x2415)) {
+        /* Register layout implemented here: Intel ICH AC97, not arbitrary
+         * multimedia/audio devices (HDA and USB audio require other drivers). */
+        if (devs[i].vendor_id == 0x8086 &&
+            (devs[i].device_id == 0x2415 || devs[i].device_id == 0x2425 ||
+             devs[i].device_id == 0x2445 || devs[i].device_id == 0x2485 ||
+             devs[i].device_id == 0x24c5 || devs[i].device_id == 0x24d5)) {
             found_idx = i;
             break;
         }
@@ -100,6 +135,9 @@ int audio_init(void) {
     }
 
     PciDevice *pci = &devs[found_idx];
+#ifdef POLLIK_X64
+    dma_controller=*pci;
+#endif
 
     /* Enable I/O Space (bit 0) and Bus Master (bit 2) */
     u32 cmd = pci_config_read32(pci->bus, pci->dev, pci->fn, 0x04);
@@ -112,21 +150,20 @@ int audio_init(void) {
     s_nambar = (u16)(bar0 & ~0x1u);
     s_nabmbar = (u16)(bar1 & ~0x1u);
 
-    if (!s_nambar || !s_nabmbar) {
+    if (!(bar0&1) || !(bar1&1) || bar0>65535 || bar1>65535 || !s_nambar || !s_nabmbar) {
         KLOG_WARN(KLOG_CAT_BOOT, "Audio: Invalid AC'97 BARs");
         return 0;
     }
 
     /* Allocate physical pages for BDL and PCM buffers */
-    s_bdl_phys = pmm_alloc_page();
-    s_pcm_phys = pmm_alloc_page();
-    if (!s_bdl_phys || !s_pcm_phys) {
+    s_bdl = audio_dma_alloc(&s_bdl_phys);
+    s_pcm_buf = audio_dma_alloc(&s_pcm_phys);
+    if (!s_bdl || !s_pcm_buf) {
+        audio_dma_free(s_bdl,s_bdl_phys);audio_dma_free(s_pcm_buf,s_pcm_phys);
+        s_bdl=0;s_pcm_buf=0;s_bdl_phys=s_pcm_phys=0;
         KLOG_ERROR(KLOG_CAT_BOOT, "Audio: Failed to allocate DMA buffers");
         return 0;
     }
-
-    s_bdl = (Ac97BdlEntry *)s_bdl_phys;
-    s_pcm_buf = (s16 *)s_pcm_phys;
 
     memset(s_bdl, 0, PAGE_SIZE);
     memset(s_pcm_buf, 0, PAGE_SIZE);
@@ -139,6 +176,7 @@ int audio_init(void) {
     ac97_write_mixer(AC97_MIX_RESET, 0x0000);
 
     /* Configure volume: 0x0000 = max volume, 0x1F1F = muted/attenuated */
+    s_ac97_present = 1;
     audio_set_volume(s_volume);
 
     /* Set standard sample rate (48000 Hz) if supported */
@@ -184,11 +222,16 @@ void audio_play_tone(u32 freq_hz, u32 duration_ms) {
         speaker_beep(freq_hz, duration_ms);
         return;
     }
+#ifdef POLLIK_X64
+    /* Stop the previous asynchronous DMA before replacing its buffer. */
+    if(!ac97_reset_output())return;
+#endif
 
     /* Fill PCM buffer with 48 kHz stereo/mono tone (square/triangle wave for fast generation) */
     u32 sample_rate = 48000;
     u32 period_samples = sample_rate / freq_hz;
     if (period_samples == 0) period_samples = 1;
+    u32 half_period=period_samples/2;if(!half_period)half_period=1;
 
     u32 total_samples = (sample_rate * duration_ms) / 1000;
     if (total_samples > SAMPLES_PER_BUFFER) total_samples = SAMPLES_PER_BUFFER;
@@ -197,20 +240,28 @@ void audio_play_tone(u32 freq_hz, u32 duration_ms) {
     for (u32 i = 0; i < total_samples; i++) {
         /* Triangle waveform */
         u32 phase = i % period_samples;
-        s16 val = (phase < period_samples / 2)
-            ? (s16)(-amplitude + (2 * amplitude * (s32)phase) / (s32)(period_samples / 2))
-            : (s16)(amplitude - (2 * amplitude * (s32)(phase - period_samples / 2)) / (s32)(period_samples / 2));
+        s16 val = (phase < half_period)
+            ? (s16)(-amplitude + (2 * amplitude * (s32)phase) / (s32)half_period)
+            : (s16)(amplitude - (2 * amplitude * (s32)(phase - half_period)) / (s32)half_period);
+#ifdef POLLIK_X64
+        s_pcm_buf[i*2]=s_pcm_buf[i*2+1]=val;
+#else
         s_pcm_buf[i] = val;
+#endif
     }
 
     /* Setup BDL entry 0 */
     s_bdl[0].ptr = (u32)s_pcm_phys;
     s_bdl[0].samples = (u16)total_samples;
+#ifdef POLLIK_X64
+    s_bdl[0].samples=(u16)(total_samples*2); /* AC97 counts channel samples. */
+#endif
     s_bdl[0].flags = (u16)AC97_BDL_IOC;
 
     /* Reset PCM Out DMA channel */
-    outb((u16)(s_nabmbar + AC97_PO_CR), AC97_CR_RR);
-    while (inb((u16)(s_nabmbar + AC97_PO_CR)) & AC97_CR_RR) { __asm__ volatile("pause"); }
+#ifndef POLLIK_X64
+    if(!ac97_reset_output())return;
+#endif
 
     /* Set BDL base address */
     outl((u16)(s_nabmbar + AC97_PO_BDBAR), (u32)s_bdl_phys);
@@ -224,6 +275,7 @@ void audio_play_tone(u32 freq_hz, u32 duration_ms) {
     /* Start DMA playback */
     outb((u16)(s_nabmbar + AC97_PO_CR), AC97_CR_RP);
 
+    #ifndef POLLIK_X64
     /* Wait for playback completion or timeout */
     u32 timeout = duration_ms * 4000;
     while (!(inw((u16)(s_nabmbar + AC97_PO_SR)) & AC97_SR_CELV) && --timeout) {
@@ -232,6 +284,7 @@ void audio_play_tone(u32 freq_hz, u32 duration_ms) {
 
     /* Stop DMA */
     outb((u16)(s_nabmbar + AC97_PO_CR), 0);
+    #endif
 }
 
 void audio_play_sound(SoundEffect s) {
@@ -344,8 +397,7 @@ int audio_play_wav(const u8 *data, u32 len) {
         s_bdl[0].samples = (u16)chunk;
         s_bdl[0].flags = (u16)AC97_BDL_IOC;
 
-        outb((u16)(s_nabmbar + AC97_PO_CR), AC97_CR_RR);
-        while (inb((u16)(s_nabmbar + AC97_PO_CR)) & AC97_CR_RR) { __asm__ volatile("pause"); }
+        if(!ac97_reset_output())return 0;
 
         outl((u16)(s_nabmbar + AC97_PO_BDBAR), (u32)s_bdl_phys);
         outb((u16)(s_nabmbar + AC97_PO_LVI), 0);
@@ -366,6 +418,7 @@ int audio_play_wav(const u8 *data, u32 len) {
     return 1;
 }
 
+#ifndef POLLIK_X64
 int audio_play_wav_file(const char *path) {
     if (!path || !path[0]) return 0;
     int fd = vfs_open(path, O_RDONLY);
@@ -393,3 +446,4 @@ int audio_play_wav_file(const char *path) {
     kfree(buf);
     return ok;
 }
+#endif

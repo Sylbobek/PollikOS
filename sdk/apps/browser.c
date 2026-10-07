@@ -1,9 +1,11 @@
 #define POLLIK_BROWSER_STANDALONE 1
 #include "../../kernel/browser/browser.h"
+#include "../../kernel/browser/script_type.h"
 #include <pollikos/window.h>
 #include <pollikos/fs.h>
 #include <pollikos/net.h>
 #include <pollikos/time.h>
+#include <pollikos/image.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,6 +18,7 @@
 #define ADDRESS_LIMIT 1023
 #define HTTP_READ_CHUNK 4096
 #define REMOTE_ASSET_MAX 24
+#define IMAGE_LIMIT (4u*1024u*1024u)
 
 BrowserApp g_browser;
 static PollikCanvas canvas;
@@ -37,6 +40,9 @@ typedef struct { char url[ADDRESS_LIMIT+1]; DomNode *inline_script; } RemoteScri
 static char remote_styles[REMOTE_ASSET_MAX][ADDRESS_LIMIT+1];
 static RemoteScript remote_scripts[REMOTE_ASSET_MAX];
 static unsigned remote_style_count,remote_script_count,remote_asset_index;
+static DomNode *remote_images[REMOTE_ASSET_MAX];
+static char remote_image_urls[REMOTE_ASSET_MAX][ADDRESS_LIMIT+1],document_url[ADDRESS_LIMIT+1];
+static unsigned remote_image_count,http_limit=HTML_LIMIT;
 static char remote_css[CSS_LIMIT+1];
 static unsigned remote_css_length;
 static int http_request_kind,remote_resource_stage;
@@ -155,6 +161,9 @@ static void collect_external_css(DomNode *node,const char *page,char *css,unsign
 static void run_page_scripts(DomNode *node,const char *page,int *count,int local_assets) {
     if(!node)return;
     if(node->type==NODE_ELEMENT && !strcmp(node->tag,"script")) {
+        int kind=browser_script_kind(node);
+        if(kind==2){++g_browser.script_errors;puts("[browser] module scripts are unsupported");}
+        if(kind!=1)return;
         const char *src=dom_get_attribute(node,"src");
         if(src && *src && local_assets) {
             char path[USER_PATH_MAX];
@@ -170,6 +179,30 @@ static void run_page_scripts(DomNode *node,const char *page,int *count,int local
     }
     for(DomNode *c=node->first_child;c;c=c->next_sibling)run_page_scripts(c,page,count,local_assets);
 }
+static int decode_image(DomNode *node,const void *bytes,unsigned length){
+ int w,h;unsigned char *pixels=pollikos_image_decode(bytes,length,&w,&h);
+ if(!pixels)return 0;
+ free(node->image);node->image=pixels;node->image_w=w;node->image_h=h;
+ printf("[browser] image decoded %dx%d bytes=%u\n",w,h,length);return 1;
+}
+static void local_images(DomNode *node,const char *page){
+ if(!node)return;
+ if(node->src[0]&&!strcmp(node->tag,"img")){
+  char path[USER_PATH_MAX];
+  if(path_for_reference(page,node->src,path,sizeof(path))){
+   FILE *f=fopen(path,"rb");if(f){
+    if(!fseek(f,0,SEEK_END)){long bytes=ftell(f);
+     if(bytes>0&&(unsigned long)bytes<=IMAGE_LIMIT&&!fseek(f,0,SEEK_SET)){
+      unsigned char *data=malloc((size_t)bytes);
+      if(data&&fread(data,1,(size_t)bytes,f)==(size_t)bytes)(void)decode_image(node,data,(unsigned)bytes);
+      free(data);
+     }
+    }fclose(f);
+   }
+  }
+ }
+ for(DomNode *c=node->first_child;c;c=c->next_sibling)local_images(c,page);
+}
 static int load_html_document(const char *page,const char *html,int n,int remote) {
     char *css=malloc(CSS_LIMIT+1);
     if(!css) {free(css);strcpy(status,"Not enough memory to style the page");return 0;}
@@ -183,6 +216,7 @@ static int load_html_document(const char *page,const char *html,int n,int remote
     free(css);
     browser_js_init(next);
     int scripts=0;run_page_scripts(next,page,&scripts,!remote);
+    if(!remote)local_images(next,page);
     if(document) dom_free_tree(document);
     document=next;
     layout_compute(document,view_w,&page_height);
@@ -213,7 +247,8 @@ static void http_release(void) {
 static int begin_http_request(const char *url,int kind) {
     size_t length=strlen(url);
     if(!length || length>ADDRESS_LIMIT)return 0;
-    http_document=malloc(HTML_LIMIT+1);
+    http_limit=kind==3?IMAGE_LIMIT:HTML_LIMIT;
+    http_document=malloc(http_limit+1);
     if(!http_document)return 0;
     long opened=pollikos_http_open(url);
     if(opened<0) {
@@ -248,7 +283,7 @@ static void poll_remote(void) {
     long n=pollikos_http_read(http_handle,incoming,sizeof(incoming));
     if(n==-USER_EAGAIN)return;
     if(n>0) {
-        if(http_document_length+(unsigned long)n>HTML_LIMIT) {
+        if(http_document_length+(unsigned long)n>http_limit) {
             int kind=http_request_kind;
             http_release();
             if(kind==0) {remote_resource_stage=0;strcpy(status,"Page is larger than the 96 KB browser limit");render_page();}
@@ -276,6 +311,8 @@ static void poll_remote(void) {
             remote_css_length+=http_document_length;remote_css[remote_css_length]=0;
         } else if(kind==2 && http_document_length<WEB_MAX_JS_SIZE) {
             browser_js_execute(http_document);
+        } else if(kind==3 && remote_asset_index<remote_image_count) {
+            (void)decode_image(remote_images[remote_asset_index],http_document,http_document_length);
         }
         http_release();
         ++remote_asset_index;
@@ -327,6 +364,7 @@ static void collect_remote_resources(DomNode *node,const char *page) {
            resolve_web_reference(page,href,remote_styles[remote_style_count],sizeof(remote_styles[0])))
             ++remote_style_count;
     } else if(node->type==NODE_ELEMENT && !strcmp(node->tag,"script") && remote_script_count<REMOTE_ASSET_MAX) {
+        if(browser_script_kind(node)!=1)return;
         const char *src=dom_get_attribute(node,"src");
         RemoteScript *item=&remote_scripts[remote_script_count];
         item->url[0]=0;item->inline_script=0;
@@ -339,6 +377,13 @@ static void collect_remote_resources(DomNode *node,const char *page) {
     for(DomNode *child=node->first_child;child;child=child->next_sibling)
         collect_remote_resources(child,page);
 }
+static void collect_remote_images(DomNode *node,const char *page){
+ if(!node)return;
+ if(!strcmp(node->tag,"img")&&node->src[0]&&remote_image_count<REMOTE_ASSET_MAX&&
+    resolve_web_reference(page,node->src,remote_image_urls[remote_image_count],sizeof(remote_image_urls[0])))
+  remote_images[remote_image_count++]=node;
+ for(DomNode *c=node->first_child;c;c=c->next_sibling)collect_remote_images(c,page);
+}
 static int prepare_remote_document(const char *page,const char *html,int n) {
     DomNode *next=html_parse(html,n);
     if(!next) {strcpy(status,"HTML parser could not create the remote document");return 0;}
@@ -348,6 +393,7 @@ static int prepare_remote_document(const char *page,const char *html,int n) {
     document=next;
     browser_js_init(next);
     remote_style_count=remote_script_count=remote_asset_index=0;
+    remote_image_count=0;snprintf(document_url,sizeof(document_url),"%s",page);
     remote_css_length=0;remote_css[0]=0;
     collect_remote_resources(next,page);
     strcpy(status,"Page loaded; fetching styles and scripts...");
@@ -365,13 +411,9 @@ static void pump_remote_resources(void) {
     }
     while(remote_resource_stage==2) {
         if(remote_asset_index>=remote_script_count) {
-            remote_resource_stage=0;
-            layout_compute(document,view_w,&page_height);scroll_y=0;
-            snprintf(status,sizeof(status),"HTTP page: %u CSS, %u JavaScript resources",
-                     remote_style_count,remote_script_count);
-            puts("[browser] HTTP document loaded");
-            render_page();
-            return;
+            remote_resource_stage=3;remote_asset_index=0;
+            collect_remote_images(document,document_url);
+            break;
         }
         RemoteScript *item=&remote_scripts[remote_asset_index];
         if(item->url[0]) {
@@ -380,6 +422,19 @@ static void pump_remote_resources(void) {
                   item->inline_script->first_child->text) {
             browser_js_execute(item->inline_script->first_child->text);
         }
+        ++remote_asset_index;
+    }
+    while(remote_resource_stage==3){
+        if(remote_asset_index>=remote_image_count){
+            remote_resource_stage=0;
+            layout_compute(document,view_w,&page_height);scroll_y=0;
+            snprintf(status,sizeof(status),"HTTP page: %u CSS, %u JavaScript resources",
+                     remote_style_count,remote_script_count);
+            puts("[browser] HTTP document loaded");
+            render_page();
+            return;
+        }
+        if(begin_http_request(remote_image_urls[remote_asset_index],3))return;
         ++remote_asset_index;
     }
 }

@@ -53,6 +53,7 @@ public static class PollikHypervisor {
     $probeErr = Join-Path $probeDir 'stderr.txt'
     $probeOut = Join-Path $probeDir 'stdout.txt'
     $probeCpu = if ($script:PSBoundParameters.ContainsKey('Cpu')) { $Cpu } else { 'qemu64' }
+    if ($probeCpu -eq 'qemu64') { $probeCpu = 'qemu64,+rdrand' }
     $probe = Start-Process qemu-system-x86_64 -WindowStyle Hidden -PassThru -ArgumentList @(
         '-S','-display','none','-machine','pc','-accel','whpx','-cpu',$probeCpu,'-smp','1',
         '-m','64M','-nodefaults','-monitor','none','-serial','none') `
@@ -71,6 +72,7 @@ if ($Accel -eq 'whpx' -and -not $PSBoundParameters.ContainsKey('Cpu')) {
     $accelSelection[1] += '; default CPU qemu64 (WHPX-compatible); explicit -Cpu is preserved'
 }
 Write-Host "Acceleration selected: $Accel; reason: $($accelSelection[1])"
+$qemuCpu = if ($Cpu -eq 'qemu64') { 'qemu64,+rdrand' } else { $Cpu }
 if (!(Test-Path "build/$ImageName") -or !(Test-Path $dataPath)) {
     if ($Headless) { throw 'Headless measurement requires existing system and data images; refusing to build or format images.' }
     if (-not [string]::IsNullOrWhiteSpace($DataImagePath)) { throw "Requested data image not found: $dataPath" }
@@ -148,7 +150,7 @@ if (-not $Headless) {
 } else {
     Write-Host 'System wallpaper sync: skipped in headless snapshot mode; source data image remains untouched.'
 }
-$qemuArgs = @('-name','Pollik OS v0.1 Alpha','-machine','pc','-accel',$Accel,'-cpu',$Cpu,'-smp','1',
+$qemuArgs = @('-name','PollikOS v0.0.001','-machine','pc','-accel',$Accel,'-cpu',$qemuCpu,'-smp','1',
     '-rtc','base=utc','-m','2G','-device','VGA,vgamem_mb=32,refresh_rate=120') + $displayOptions + @(
     '-drive',"format=raw,file=build/$ImageName,if=ide,index=0",
     '-drive',"format=raw,file=$dataPath,if=ide,index=1",

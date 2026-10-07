@@ -227,7 +227,21 @@ static void test_css_units(void) {
     CHECK(div->style.border_width == 2);
     dom_free_tree(d);
 }
+static void test_inner_html_bounds(void) {
+    const char html[]="<div abcdefghijklmn='a long attribute value' id='target'>text<span title='nested'>child</span></div>";
+    DomNode *d=html_parse(html,sizeof(html)-1);
+    CHECK(d!=0);
+    for(int cap=1;cap<=128;++cap) {
+        unsigned char guarded[144];
+        memset(guarded,0xa5,sizeof(guarded));
+        dom_serialize_inner(d,(char *)guarded,cap);
+        CHECK(strlen((char *)guarded)<(unsigned)cap);
+        for(unsigned i=(unsigned)cap;i<sizeof(guarded);++i)CHECK(guarded[i]==0xa5);
+    }
+    dom_free_tree(d);
+}
 int main(void) {
+    test_inner_html_bounds();
     test_entities();
     test_trade_entity_and_viewport_units();
     test_malformed();

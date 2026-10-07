@@ -348,16 +348,28 @@ void network64_init(void) {
     net_manager_init();
 }
 void network64_poll(void) {
+    extern void audio64_poll(void);
+    extern void audio64_stream_poll(void);
     if (initialized) {
+        audio64_poll();
+        audio64_stream_poll();
         net_manager_poll();
         if (http.tls_started) tls64_poll();
         http_poll();
     }
 }
 int network64_connected(void) { return initialized && net_manager_is_connected(); }
+void network64_set_airplane(int enabled) {
+    if (enabled && net_manager_enabled()) {
+        http_transport_close();
+        if (http.phase != HTTP_IDLE) http.phase=HTTP_ERROR;
+    }
+    net_manager_set_enabled(!enabled);
+}
 
 int64_t network64_http_open(uint64_t owner_pid, const char *url) {
     if (!initialized || !owner_pid || !url) return -(int64_t)USER_EINVAL;
+    if (!net_manager_enabled()) return -(int64_t)USER_EIO;
     if (http.phase!=HTTP_IDLE && http.phase!=HTTP_DONE && http.phase!=HTTP_ERROR)
         return -(int64_t)USER_EAGAIN;
     http_transport_close();

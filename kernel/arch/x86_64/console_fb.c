@@ -1,6 +1,7 @@
 #include "console_fb.h"
 #include "memory.h"
 #include "window.h"
+#include "../../gfx/framebuffer_mode.h"
 
 typedef uint8_t u8;
 typedef uint32_t u32;
@@ -134,6 +135,8 @@ void console_fb_mouse_move(int x, int y) {
 }
 unsigned console_fb_width(void) { return width; }
 unsigned console_fb_height(void) { return height; }
+unsigned console_fb_pitch(void) { return ready?byte_pitch:0; }
+unsigned console_fb_bpp(void) { return ready?bytes_per_pixel*8:0; }
 void console_fb_overlay_begin(void) { mouse_erase(); }
 void console_fb_overlay_end(void) { mouse_draw(); }
 int console_fb_read_pixels(unsigned x, unsigned y, unsigned count, uint32_t *out) {
@@ -170,14 +173,19 @@ int console_fb_init(const volatile uint8_t *vbe) {
     bytes_per_pixel=vbe[25]/8;
     byte_pitch=*(const volatile uint16_t *)(vbe+16);
     phys_addr_t physical=*(const volatile uint32_t *)(vbe+40);
-    if ((attributes&0x91)!=0x91 || !physical || (bytes_per_pixel!=3&&bytes_per_pixel!=4) ||
-        width<640 || height<400 || byte_pitch<width*bytes_per_pixel) return 0;
+    if (!gfx_framebuffer_mode_valid(attributes,width,height,vbe[25],byte_pitch,physical,
+        vbe[27],vbe[31],vbe[32],vbe[33],vbe[34],vbe[35],vbe[36])) {
+        width=height=byte_pitch=bytes_per_pixel=0;return 0;
+    }
     uint64_t size=(uint64_t)byte_pitch*height;
     phys_addr_t first=physical&~(MM_PAGE_SIZE-1);
     uint64_t offset=physical-first;
     uint64_t pages=(offset+size+MM_PAGE_SIZE-1)/MM_PAGE_SIZE;
     for (uint64_t i=0;i<pages;i++)
-        if (vmm64_map_borrowed(vmm64_kernel(),FB_VIRTUAL+i*MM_PAGE_SIZE,first+i*MM_PAGE_SIZE,VM_WRITE|VM_DEVICE)!=VM_OK) return 0;
+        if (vmm64_map_borrowed(vmm64_kernel(),FB_VIRTUAL+i*MM_PAGE_SIZE,first+i*MM_PAGE_SIZE,VM_WRITE|VM_DEVICE)!=VM_OK) {
+            while(i) { --i;memory_require(vmm64_unmap(vmm64_kernel(),FB_VIRTUAL+i*MM_PAGE_SIZE,0,0)==VM_OK,"framebuffer rollback"); }
+            width=height=byte_pitch=bytes_per_pixel=0;return 0;
+        }
     pixels=(volatile uint8_t *)(uintptr_t)(FB_VIRTUAL+offset);
     columns=width/12; rows=height/20;
     if (!columns || !rows) return 0;
