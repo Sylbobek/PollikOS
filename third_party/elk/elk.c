@@ -61,6 +61,32 @@ struct js {
   void *cstk;         // C stack pointer at the beginning of js_eval()
 };
 
+/* Embedding roots stay outside the compacted arena. Each native-call frame
+ * also roots its argument interval, including while later args are parsed. */
+static struct js_root *js_roots;
+struct js_native_frame {
+  struct js *owner;
+  jsoff_t bottom, top;
+  struct js_native_frame *next;
+};
+static struct js_native_frame *js_native_frames;
+void js_root_acquire(struct js *js, struct js_root *root, jsval_t *value) {
+  root->owner=js; root->value=value; root->next=js_roots; js_roots=root;
+}
+void js_root_release(struct js *js, struct js_root *root) {
+  struct js_root **link=&js_roots;
+  while (*link && *link!=root) link=&(*link)->next;
+  if (*link && root->owner==js) { *link=root->next; root->owner=NULL; root->value=NULL; root->next=NULL; }
+}
+void js_root_reset(struct js *js) {
+  struct js_root **link=&js_roots;
+  while (*link) {
+    struct js_root *root=*link;
+    if(root->owner==js){*link=root->next;root->owner=NULL;root->value=NULL;root->next=NULL;}
+    else link=&root->next;
+  }
+}
+
 // A JS memory stores diffenent entities: objects, properties, strings
 // All entities are packed to the beginning of a buffer.
 // The `brk` marks the end of the used memory:
@@ -336,6 +362,10 @@ static bool is_mem_entity(uint8_t t) {
 }
 
 #define GCMASK ~(((jsoff_t) ~0) >> 1)  // Entity deletion marker
+static void js_fixup_root(jsval_t *value,jsoff_t start,jsoff_t size) {
+  if(is_mem_entity(vtype(*value)) && vdata(*value)>start)
+    *value=mkval(vtype(*value),vdata(*value)-size);
+}
 static void js_fixup_offsets(struct js *js, jsoff_t start, jsoff_t size) {
   for (jsoff_t n, v, off = 0; off < js->brk; off += n) {  // start from 0!
     v = loadoff(js, off);
@@ -361,6 +391,12 @@ static void js_fixup_offsets(struct js *js, jsoff_t start, jsoff_t size) {
   jsoff_t off = (jsoff_t) vdata(js->scope);
   if (off > start) js->scope = mkval(T_OBJ, off - size);
   if (js->nogc >= start) js->nogc -= size;
+  for(struct js_root *root=js_roots;root;root=root->next)
+    if(root->owner==js)js_fixup_root(root->value,start,size);
+  for(struct js_native_frame *frame=js_native_frames;frame;frame=frame->next)
+    if(frame->owner==js)for(jsoff_t at=frame->bottom;at<frame->top;at+=sizeof(jsval_t)){
+      jsval_t value=loadval(js,at);js_fixup_root(&value,start,size);saveval(js,at,value);
+    }
   // Fixup code that we're executing now, if required
   if (js->code > (char *) js->mem && js->code - (char *) js->mem < js->size &&
       js->code - (char *) js->mem > start) {
@@ -415,6 +451,14 @@ static void js_unmark_used_entities(struct js *js) {
     scope = upper(js, scope);
   } while (vdata(scope) != 0);  // When global scope is GC-ed, stop
   if (js->nogc) js_unmark_entity(js, js->nogc);
+  for(struct js_root *root=js_roots;root;root=root->next)
+    if(root->owner==js && is_mem_entity(vtype(*root->value)))
+      js_unmark_entity(js,(jsoff_t)vdata(*root->value));
+  for(struct js_native_frame *frame=js_native_frames;frame;frame=frame->next)
+    if(frame->owner==js)for(jsoff_t at=frame->bottom;at<frame->top;at+=sizeof(jsval_t)){
+      jsval_t value=loadval(js,at);
+      if(is_mem_entity(vtype(value)))js_unmark_entity(js,(jsoff_t)vdata(value));
+    }
   // printf("UNMARK: nogc %u\n", js->nogc);
   // js_dump(js);
 }
@@ -693,20 +737,27 @@ static void reverse(jsval_t *args, int nargs) {
 static jsval_t call_c(struct js *js,
                       jsval_t (*fn)(struct js *, jsval_t *, int)) {
   int argc = 0;
+  struct js_native_frame frame={js,js->size,js->size,js_native_frames};
+  js_native_frames=&frame;
+  jsval_t res=js_mkundef();
   while (js->pos < js->clen) {
     if (next(js) == TOK_RPAREN) break;
     jsval_t arg = resolveprop(js, js_expr(js));
-    if (js->brk + sizeof(arg) > js->size) return js_mkerr(js, "call oom");
+    if(is_err(arg)){res=arg;goto done;}
+    if (js->brk + sizeof(arg) > js->size) { res=js_mkerr(js, "call oom"); goto done; }
     js->size -= (jsoff_t) sizeof(arg);
+    frame.bottom=js->size;
     memcpy(&js->mem[js->size], &arg, sizeof(arg));
     argc++;
     // printf("  arg %d -> %s\n", argc, js_str(js, arg));
     if (next(js) == TOK_COMMA) js->consumed = 1;
   }
   reverse((jsval_t *) &js->mem[js->size], argc);
-  jsval_t res = fn(js, (jsval_t *) &js->mem[js->size], argc);
+  res = fn(js, (jsval_t *) &js->mem[js->size], argc);
+done:
   setlwm(js);
   js->size += (jsoff_t) sizeof(jsval_t) * (jsoff_t) argc;  // Restore stack
+  js_native_frames=frame.next;
   return res;
 }
 
@@ -1324,6 +1375,7 @@ static jsval_t js_stmt(struct js *js) {
 struct js *js_create(void *buf, size_t len) {
   struct js *js = NULL;
   if (len < sizeof(*js) + esize(T_OBJ)) return js;
+  js_root_reset((struct js *)buf);
   memset(buf, 0, len);                       // Important!
   js = (struct js *) buf;                    // struct js lives at the beginning
   js->mem = (uint8_t *) (js + 1);            // Then goes memory for JS data

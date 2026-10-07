@@ -411,12 +411,13 @@ static void collect_class(DomNode *n, const char *cls, DomNode **out, int max, i
 }
 static jsval_t wrap_list(DomNode **nodes, int n) {
     jsval_t arr = js_mkobj(runtime);
+    struct js_root array_root={0};js_root_acquire(runtime,&array_root,&arr);
     for (int i = 0; i < n; i++) {
         char k[8]; snprintf(k, sizeof(k), "%d", i);
-        js_set(runtime, arr, k, wrap(nodes[i]));
+        jsval_t child=wrap(nodes[i]);js_set(runtime, arr, k, child);
     }
     js_set(runtime, arr, "length", js_mknum(n));
-    return arr;
+    js_root_release(runtime,&array_root);return arr;
 }
 static jsval_t query_all_fn(struct js *j, jsval_t *a, int count) {
     (void)j; if (count != 1) return js_mkundef();
@@ -787,7 +788,9 @@ static jsval_t wrap(DomNode *n) {
  snprintf(name,sizeof(name),"_n%d",i);
  if(i<binding_count)return get(js_glob(runtime),name);
  if(binding_count==128)return js_mknull();bindings[binding_count++]=n;
- jsval_t obj=js_mkobj(runtime);js_set(runtime,js_glob(runtime),name,obj);
+ jsval_t obj=js_mkobj(runtime);
+ struct js_root object_root={0};js_root_acquire(runtime,&object_root,&obj);
+ js_set(runtime,js_glob(runtime),name,obj);
  js_set(runtime,obj,"__node",js_mknum(i));
  jsval_t style=js_mkobj(runtime);js_set(runtime,obj,"style",style);
  static const char *props[]={"color","backgroundColor","background","display","fontSize","width","height",
@@ -820,11 +823,12 @@ static jsval_t wrap(DomNode *n) {
  js_set(runtime,obj,"disabled",js_mknum(0));
  js_set(runtime,obj,"tagName",js_mkstr(runtime,n->tag,strlen(n->tag)));
  /* Navigation snapshots (real DOM links). */
- js_set(runtime,obj,"parentNode",n->parent?wrap(n->parent):js_mknull());
- js_set(runtime,obj,"firstChild",n->first_child?wrap(n->first_child):js_mknull());
- js_set(runtime,obj,"lastChild",n->last_child?wrap(n->last_child):js_mknull());
- js_set(runtime,obj,"nextSibling",n->next_sibling?wrap(n->next_sibling):js_mknull());
- js_set(runtime,obj,"previousSibling",n->prev_sibling?wrap(n->prev_sibling):js_mknull());
+ /* Read the rooted target only AFTER a recursive wrapper may collect. */
+ jsval_t related=n->parent?wrap(n->parent):js_mknull();js_set(runtime,obj,"parentNode",related);
+ related=n->first_child?wrap(n->first_child):js_mknull();js_set(runtime,obj,"firstChild",related);
+ related=n->last_child?wrap(n->last_child):js_mknull();js_set(runtime,obj,"lastChild",related);
+ related=n->next_sibling?wrap(n->next_sibling):js_mknull();js_set(runtime,obj,"nextSibling",related);
+ related=n->prev_sibling?wrap(n->prev_sibling):js_mknull();js_set(runtime,obj,"previousSibling",related);
  int kid=0; for(DomNode *c=n->first_child;c;c=c->next_sibling) if(c->type==NODE_ELEMENT) kid++;
  js_set(runtime,obj,"childElementCount",js_mknum(kid));
  static char code[2048];
@@ -885,6 +889,7 @@ static jsval_t wrap(DomNode *n) {
    jsval_t er=js_eval(runtime,cvcode,strlen(cvcode));
    if(js_type(er)==JS_ERR){serial("CVJS: ");serial(js_str(runtime,er));serial("\n");}
  }
+ js_root_release(runtime,&object_root);
  return get(js_glob(runtime),name);
 }
 /* Map a camelCase style property to the kebab-case CSS name. */
@@ -1023,6 +1028,7 @@ void js_set_event_key(int key){g_ev_key=key;}
 static void make_event(DomNode *node,const char *type) {
     if (!runtime) return;
     jsval_t ev = js_mkobj(runtime);
+    struct js_root event_root={0};js_root_acquire(runtime,&event_root,&ev);
     js_set(runtime, ev, "type", js_mkstr(runtime, type, strlen(type)));
     js_set(runtime, ev, "clientX", js_mknum(g_ev_x));
     js_set(runtime, ev, "clientY", js_mknum(g_ev_y));
@@ -1030,11 +1036,13 @@ static void make_event(DomNode *node,const char *type) {
     js_set(runtime, ev, "pageY", js_mknum(g_ev_y + g_browser.scroll_y));
     js_set(runtime, ev, "keyCode", js_mknum(g_ev_key));
     js_set(runtime, ev, "which", js_mknum(g_ev_key));
-    js_set(runtime, ev, "target", wrap(node));
-    js_set(runtime, ev, "currentTarget", wrap(node));
+    jsval_t target=wrap(node);
+    js_set(runtime, ev, "target", target);
+    js_set(runtime, ev, "currentTarget", target);
     js_set(runtime, ev, "preventDefault", js_mkundef());
     js_set(runtime, ev, "stopPropagation", js_mkundef());
     js_set(runtime, js_glob(runtime), "event", ev);
+    js_root_release(runtime,&event_root);
 }
 /* Dispatch to the target and its ancestors (bubbling), running JS listeners
  * registered through addEventListener. */

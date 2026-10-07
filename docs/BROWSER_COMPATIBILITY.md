@@ -152,6 +152,71 @@ The process-stress and notes smoke runs preceded the final two-line serializer b
 
 Full x64 boot/storage/selftest suite, full smoke, browser_responsive, physical hardware, native HTTPS end-to-end and universal browser conformance in this checkpoint: NOT RUN.
 
-## Live sites
+## Live sites: final run
 
-The live-site matrix and final status table are appended after the final run. Initial and type-only investigation logs are preserved in build/browser-compat-sites-before and build/browser-compat-types-only. The original matrix counted HTTP 200 loads separately from JS conformance. The strengthened final harness also reports panic and heap errors and requires neither for a successful result.
+```text
+COMMAND python tests/browser_sites.py --accel whpx --cpu qemu64,+rdrand
+RESULT url=https://www.wikipedia.org loaded=True statuses=['200', '200', '200', '200'] JS_errors=4 panic=False heap_errors=0
+RESULT url=https://en.m.wikipedia.org loaded=False statuses=[] JS_errors=0 panic=False heap_errors=0
+RESULT url=http://neverssl.com loaded=False statuses=[] JS_errors=0 panic=False heap_errors=0
+RESULT url=https://www.google.com loaded=True statuses=['200', '200', '200'] JS_errors=11 panic=False heap_errors=0
+RESULT url=https://www.youtube.com loaded=False statuses=['200', '200', '200', '200', '200'] JS_errors=10 panic=True heap_errors=0
+RESULT url=http://frogfind.com loaded=False statuses=[] JS_errors=0 panic=False heap_errors=0
+LIVE_SITE_RESULTS loaded_200=2/6 (not JS/CSS conformance)
+EXIT_CODE 1
+```
+
+Raw log: `build/browser-sites-final.log`; per-guest serial logs and PNG screendumps: `build/browser-site-0` through `build/browser-site-5`. Initial and type-only logs are preserved separately.
+
+Wikipedia and Google load content with HTTP 200 and no heap-error marker in the final run, but still report unsupported JavaScript. The initial/type-only runs reported heap errors; the serializer repair has a deterministic canary reproducer, but attributing every live-site heap error solely to it is not proven.
+
+YouTube still panics the i386 kernel. The read-only QMP stack capture pinpoints `memmove` called from `js_gc`; `js_stmt` is the next caller. The invalid large copy size comes from a damaged GC entity chain. The original cause of that entity-chain damage is **NOT FOUND**. No speculative GC patch, skipped test, disabled JavaScript, fabricated success or retry was introduced.
+
+```text
+COMMAND python (nearest symbols from llvm-nm -n build/kernel.elf for captured return addresses)
+0x15772f js_gc 0x37b
+0x158253 js_stmt 0x1c
+reason=USER WRITE NOT_PRESENT
+reason=USER WRITE PROTECTION_VIOLATION
+reason=USER WRITE NOT_PRESENT [STACK_OVERFLOW_GUARD_PAGE]
+reason=SUPERVISOR WRITE NOT_PRESENT [STACK_OVERFLOW_GUARD_PAGE]
+EIP: 0x00116058  CS: 0x00000008  EFLAGS: 0x00010286
+ESP: 0x0009b11c  EBP: 0x0009b15c  SS: 0x00000010
+EAX: 0x0028b994  EBX: 0x1d915900  ECX: 0x1dba12f8  EDX: 0xe26edd0c
+```
+
+Stack: `build/browser-site-4-stack.txt`. This live failure remains an open bug, not a passed regression.
+
+Wikipedia mobile follows two redirects but does not complete the final response within the harness deadline. The root cause remains unverified. A host curl request succeeds, which is not a guest result:
+
+```text
+COMMAND curl.exe -sS -L --max-time 25 -o build/browser-host-mobile.html -w 'HOST_MOBILE status=%{http_code} size=%{size_download}\n' https://en.m.wikipedia.org
+HOST_MOBILE status=200 size=258926
+```
+
+NeverSSL failed to connect in the final IPv4 guest run after an earlier guest HTTP 200 success. Host default-family curl succeeds, while the explicit IPv4 curl times out. This does not prove a particular upstream outage, but the failure also occurs outside PollikOS on the IPv4 path. FrogFind HTTP times out both in the guest and on this host.
+
+```text
+COMMAND curl.exe -sS --max-time 12 -o NUL -w 'HOST_NEVERSSL status=%{http_code}\n' http://neverssl.com
+HOST_NEVERSSL status=200
+COMMAND curl.exe -4 -sS --max-time 12 -o NUL -w 'HOST_IPV4_NEVERSSL status=%{http_code} ip=%{remote_ip}\n' http://neverssl.com
+HOST_IPV4_NEVERSSL status=000 ip=
+curl: (28) Connection timed out after 12010 milliseconds
+COMMAND curl.exe -sS --max-time 12 -o NUL -w 'HOST_FROGFIND status=%{http_code}\n' http://frogfind.com
+curl: (28) Connection timed out after 12011 milliseconds
+HOST_FROGFIND status=000
+```
+
+## Checkpoint table
+
+| Item | Status | Command / evidence | NOT RUN or remaining |
+|---|---|---|---|
+| qemu64 HTTPS entropy | repaired | `browser_e2e.py`, qemu64 fails; qemu64,+rdrand WHPX passes HTTPS/TLS/HTTP 200 | Native HTTPS E2E; hosts without RDRAND |
+| script type dispatch | repaired | `browser_cooperative.py`: two classic scripts, JSON/data untouched, module reported; `browser_images_x64.py`: data-not-executed assertion and original pixels | Modules remain unsupported |
+| innerHTML bounds | repaired | `browser_html.py`: 24 failed canary assertions before; all pass after | Full parser fuzzing |
+| local HTML/CSS/JS/media behavior | verified subset | `browser_js.py`, `browser_images_x64.py`: existing assertions pass | Full standards compliance |
+| live sites | partial, failed matrix | final `browser_sites.py`: 2/6; HTTP content on Wikipedia/Google, JS errors remain | Mobile response; YouTube GC panic; IPv4 connectivity to NeverSSL/FrogFind |
+| i386 process / notes smoke | verified at earlier checkpoint | exact 5807/54911 process baselines; notes smoke PASS lines above | Not repeated after final serializer fix |
+| builds / size | built | i386 736616 B; native production 432275 B | Full suites listed above NOT RUN |
+
+No full compatibility claim is made. Further browser work must address the GC corruption and modern JavaScript/DOM support before claiming modern sites work. The x86-64 userspace browser provides process isolation; the existing i386 browser still runs in the kernel.

@@ -28,6 +28,15 @@ extern "C" {
 struct js;                 // JS engine (opaque)
 typedef uint64_t jsval_t;  // JS value
 
+/* PollikOS embedding extension: moving GC updates explicitly held C values.
+ * Records belong to the caller and must outlive acquire/release. Existing
+ * engine and ABI structs are unchanged. */
+#define JS_ROOTS_API 1
+struct js_root { struct js *owner; jsval_t *value; struct js_root *next; };
+void js_root_acquire(struct js *, struct js_root *, jsval_t *);
+void js_root_release(struct js *, struct js_root *);
+void js_root_reset(struct js *);
+
 struct js *js_create(void *buf, size_t len);         // Create JS instance
 jsval_t js_eval(struct js *, const char *, size_t);  // Execute JS code
 jsval_t js_glob(struct js *);                        // Return global object

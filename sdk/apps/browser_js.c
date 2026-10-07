@@ -14,6 +14,7 @@ typedef struct { DomNode *node; char event[16]; unsigned global_slot; } JsEventL
 static struct js *runtime;
 static unsigned char arena[131072] __attribute__((aligned(8)));
 static JsNodeBinding bindings[JS_BINDINGS];
+static struct js_root object_roots[JS_BINDINGS],style_roots[JS_BINDINGS];
 static unsigned binding_count;
 static JsEventListener listeners[JS_LISTENERS];
 static unsigned listener_count;
@@ -48,6 +49,8 @@ static jsval_t wrap_node(DomNode *node) {
     i=binding_count++;
     JsNodeBinding *b=&bindings[i];b->node=node;
     b->object=js_mkobj(runtime);b->style=js_mkobj(runtime);
+    js_root_acquire(runtime,&object_roots[i],&b->object);
+    js_root_acquire(runtime,&style_roots[i],&b->style);
     js_set(runtime,b->object,"style",b->style);
     js_set(runtime,b->object,"addEventListener",js_mkundef());
     char text[512];size_t used=0;text[0]=0;node_text(node,text,sizeof(text),&used);
@@ -77,6 +80,13 @@ static void prewrap_interactive(DomNode *node) {
         (void)wrap_node(node);
     for(DomNode *child=node->first_child;child && binding_count<JS_BINDINGS;child=child->next_sibling)
         prewrap_interactive(child);
+}
+void js_dom_node_destroyed(DomNode *node) {
+    for(unsigned i=0;i<binding_count;++i)if(bindings[i].node==node){
+        js_root_release(runtime,&object_roots[i]);js_root_release(runtime,&style_roots[i]);
+        bindings[i].node=0;
+    }
+    for(unsigned i=0;i<listener_count;++i)if(listeners[i].node==node)listeners[i].node=0;
 }
 static jsval_t get_by_id(struct js *js,jsval_t *args,int count) {
     (void)js;if(count<1)return js_mknull();
@@ -144,7 +154,10 @@ static void sync_dom(void) {
     unsigned char stale[JS_BINDINGS]={0};
     for(unsigned i=0;i<binding_count;i++)if(bindings[i].node && binding_text_changed(&bindings[i]))
         for(unsigned j=0;j<binding_count;j++)if(j!=i && bindings[j].node && is_descendant(bindings[i].node,bindings[j].node))stale[j]=1;
-    for(unsigned i=0;i<binding_count;i++)if(stale[i])bindings[i].node=0;
+    for(unsigned i=0;i<binding_count;i++)if(stale[i]){
+        js_root_release(runtime,&object_roots[i]);js_root_release(runtime,&style_roots[i]);
+        bindings[i].node=0;
+    }
     for(unsigned i=0;i<binding_count;i++) {
         JsNodeBinding *b=&bindings[i];if(!b->node)continue;
         jsval_t value=pollik_js_get(runtime,b->object,"textContent");
@@ -167,12 +180,15 @@ static void sync_dom(void) {
 }
 
 void browser_js_init(DomNode *document) {
+    if(runtime)js_root_reset(runtime);
     runtime=0;active_document=document;binding_count=0;listener_count=0;event_prevented=0;event_stopped=0;page_title[0]=0;
     memset(bindings,0,sizeof(bindings));
     memset(listeners,0,sizeof(listeners));
     runtime=js_create(arena,sizeof(arena));if(!runtime)return;
     js_setmaxcss(runtime,8192);
     jsval_t global=js_glob(runtime),doc=js_mkobj(runtime),console=js_mkobj(runtime);
+    struct js_root doc_root={0},console_root={0};
+    js_root_acquire(runtime,&doc_root,&doc);js_root_acquire(runtime,&console_root,&console);
     js_set(runtime,global,"document",doc);js_set(runtime,global,"window",global);
     js_set(runtime,doc,"getElementById",js_mkfun(get_by_id));
     js_set(runtime,doc,"querySelector",js_mkfun(query_selector));
@@ -181,18 +197,22 @@ void browser_js_init(DomNode *document) {
     char title[64];size_t title_len=0;title[0]=0;
     node_text(dom_query_selector(document,"title"),title,sizeof(title),&title_len);
     js_set(runtime,doc,"title",js_mkstr(runtime,title,strlen(title)));
-    js_set(runtime,doc,"body",wrap_node(dom_query_selector(document,"body")));
+    jsval_t body=wrap_node(dom_query_selector(document,"body"));
+    js_set(runtime,doc,"body",body);
     js_set(runtime,global,"console",console);js_set(runtime,console,"log",js_mkfun(log_message));
     js_set(runtime,console,"warn",js_mkfun(log_message));js_set(runtime,console,"error",js_mkfun(log_message));
+    js_root_release(runtime,&console_root);js_root_release(runtime,&doc_root);
 }
 int browser_js_dispatch_click(DomNode *node,int x,int y) {
     if(!runtime || !node)return 1;
     event_prevented=event_stopped=0;
     jsval_t global=js_glob(runtime),event=js_mkobj(runtime);
+    struct js_root event_root={0};js_root_acquire(runtime,&event_root,&event);
     js_set(runtime,event,"type",js_mkstr(runtime,"click",5));
     js_set(runtime,event,"clientX",js_mknum(x));js_set(runtime,event,"clientY",js_mknum(y));
-    js_set(runtime,event,"target",wrap_node(node));
-    js_set(runtime,event,"currentTarget",wrap_node(node));
+    jsval_t target=wrap_node(node);
+    js_set(runtime,event,"target",target);
+    js_set(runtime,event,"currentTarget",target);
     js_set(runtime,event,"preventDefault",js_mkfun(prevent_default));
     js_set(runtime,event,"stopPropagation",js_mkfun(stop_propagation));
     js_set(runtime,global,"event",event);
@@ -204,7 +224,8 @@ int browser_js_dispatch_click(DomNode *node,int x,int y) {
             JsEventListener *listener=&listeners[i];
             if(listener->node!=current || strcmp(listener->event,"click"))continue;
             puts("[browser] JS click listener matched");
-            js_set(runtime,event,"currentTarget",wrap_node(current));
+            jsval_t current_target=wrap_node(current);
+            js_set(runtime,event,"currentTarget",current_target);
             char code[48];snprintf(code,sizeof(code),"_pollik_handler_%u(event);",listener->global_slot);
             jsval_t result=js_eval(runtime,code,strlen(code));
             if(js_type(result)==JS_ERR)puts("[browser] click handler failed");
@@ -212,6 +233,7 @@ int browser_js_dispatch_click(DomNode *node,int x,int y) {
     }
     sync_dom();
     puts("[browser] click dispatched");
+    js_root_release(runtime,&event_root);
     return !event_prevented;
 }
 void browser_js_execute(const char *code) {

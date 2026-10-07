@@ -14,9 +14,11 @@ static int in_service, queue_navigation, close_loading, fail_http;
 static int allocations, view_w, view_h, view_scroll, status_strip, url_cursor, thumb_bottom;
 static int script_calls;
 static const char *override_page;
+static int live_allocations,http_cancellations;
 #define CHECK(x) do { if (!(x)) { printf("FAIL line %d: %s\n", __LINE__, #x); exit(1); } } while (0)
-void *kmalloc(u32 n) { ++ticks; ++allocations; return malloc(n); }
-void kfree(void *p) { free(p); }
+void *kmalloc(u32 n) { ++ticks; ++allocations; void *p=malloc(n);if(p)++live_allocations;return p; }
+void kfree(void *p) { if(p)--live_allocations;free(p); }
+void http_cancel_current(void){++http_cancellations;}
 void serial(const char *s) { (void)s; }
 void number(char *s, u32 n) { int k=0; char b[12]; do {b[k++]='0'+n%10;n/=10;}while(n);int i=0;while(k)s[i++]=b[--k];s[i]=0; }
 void js_init(void) {}
@@ -157,7 +159,12 @@ int main(void) {
     browser_poll();check_loaded();CHECK(requests==1); /* Queued home, not nested HTTP. */
     browser_navigate("http://127.0.0.1/");fail_http=1;browser_poll();check_loaded();
     fail_http=0;browser_navigate("http://127.0.0.1/");close_loading=1;browser_poll();
-    CHECK(!g_browser.open);check_loaded();
+    /* Closing now ends the browser session, per the requested lifecycle:
+     * replace the old retained-document assumption with exact reclamation. */
+    CHECK(!g_browser.open && !g_browser.document && !g_browser.is_loading);
+    CHECK(!g_browser.has_pending_navigation && !live_allocations && http_cancellations==1);
+    browser_open();browser_poll();check_loaded();
+    CHECK(!memcmp(g_browser.url,"about:home",11));
     override_page="<html><body><script type='application/ld+json'>{\"name\":\"metadata\"}</script>"
                   "<script type='application/json'>{\"name\":\"config\"}</script>"
                   "<script type='text/plain'>not JavaScript</script>"
