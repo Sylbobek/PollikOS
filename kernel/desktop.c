@@ -1087,7 +1087,15 @@ static u8 *desktop_decode_theme_wallpaper(int dark, int *width, int *height) {
     u8 *encoded = (u8 *)kmalloc(st.size);
     if (!encoded) { vfs_close(fd); serial("[WALLPAPER] allocation failed decoder=not-run\n"); return 0; }
     u32 read_start = ticks;
-    int got = vfs_read(fd, encoded, st.size);
+    int got = 0;
+    while ((u32)got < st.size) {
+        u32 chunk = st.size - (u32)got;
+        if (chunk > 32768u) chunk = 32768u;
+        int read = vfs_read(fd, encoded + got, chunk);
+        if (read <= 0) break;
+        got += read;
+        compositor_splash_poll();
+    }
     vfs_close(fd);
     desktop_wallpaper_timing("read", read_start);
     if (got != (int)st.size) { kfree(encoded); serial("[WALLPAPER] short read decoder=not-run\n"); return 0; }
@@ -1143,6 +1151,7 @@ static void desktop_paint_theme_wallpaper(u32 *destination, const u8 *rgba,
     int source_y_q16 = 0;
     for (int y = 0; y < height; y++) {
         int sy = crop_y + (source_y_q16 >> 16);
+        if (!(y & 31)) compositor_splash_poll();
         if (sy >= image_height) sy = image_height - 1;
         int source_x_q16 = 0;
         u32 *row = destination + y * width;
@@ -1240,6 +1249,7 @@ void desktop_init(void) {
     compositor_init();
 }
 void desktop_start(void) {
+    media_set_progress_hook(compositor_splash_poll);
     graphics_init(shell.width, shell.height);
     ui_init();
     trash_init();
@@ -1252,6 +1262,8 @@ void desktop_start(void) {
     wm_init(shell.width, shell.height);
     compositor_splash("Loading themes", 98);
     compositor_prepare_wallpapers();
+    compositor_splash_finish();
+    media_set_progress_hook(0);
     if (!welcome_is_first_boot()) {
         close_app(APP_WELCOME);
     }
@@ -1262,7 +1274,8 @@ void desktop_start(void) {
 }
 void app_host_service_loading(void) {
     static int servicing;
-    if (!desktop_ready || servicing) return;
+    if (!desktop_ready) { compositor_splash_poll(); return; }
+    if (servicing) return;
     servicing = 1;
     input_dispatch_poll_window_only();
     desktop_present();

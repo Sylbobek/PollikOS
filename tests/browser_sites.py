@@ -57,6 +57,13 @@ def investigate(url, index, options):
             while 'desktop ready' not in log.read_text():
                 assert time.monotonic() < end, 'desktop startup timed out'
                 time.sleep(.1)
+            # Login may release its framebuffer cache. Finish the kernel's
+            # isolated PMM stress before interacting with the authentication UI.
+            end=time.monotonic()+120
+            while '[TEST] PHASE 2 PASS' not in log.read_text():
+                assert 'PHASE 2 FAIL' not in log.read_text(),log.read_text()[-1000:]
+                assert time.monotonic()<end,'boot process stress did not complete'
+                time.sleep(.1)
             finish_setup(qmp, log)
             key('f6')
             time.sleep(1)

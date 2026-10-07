@@ -264,6 +264,11 @@ static void key(u8 code) {
     }
     if (window_only) {
         if (code == 56) alt_held = 1;
+        if(alt_held && code==62){
+            /* Host window close is safe here; the browser defers DOM teardown
+             * until its loader unwinds. Client editing remains suppressed. */
+            shell.alttab_open=0;close_app(active_app());request_scene_redraw();
+        }
         if (code == 184) {
             alt_held = 0;
             if (shell.alttab_open) { shell.alttab_open = 0; request_scene_redraw(); }

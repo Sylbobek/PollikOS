@@ -4,6 +4,7 @@
 
 static CalcModel model;
 void calculator_init(void) { calc_model_init(&model); }
+void calculator_close(void) { memset(&model,0,sizeof(model));calculator_init(); }
 static void changed(void) {
     if (model.evaluated) { serial("[CALC] "); serial(model.result); serial("\n"); }
     /* Editing changes only the readout, not the 24 cached button faces. */

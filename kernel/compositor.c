@@ -10,10 +10,14 @@
 #include "trash.h"
 #include "cursor_sprites.h"
 #include "control_center.h"
+#include "desktop.h"
 
 static u32 *pixels, *wallpaper;
 static int wallpaper_theme = -1;
 static u32 *theme_wallpapers[2]; /* scaled once at boot; theme switch is a pointer swap */
+static u32 *auth_backdrop;
+static u32 auth_backdrop_pages;
+static int auth_backdrop_theme = -1, auth_backdrop_attempted;
 #define DOCK_CACHE_WIDTH (NUM_APPS * 68 + 144)
 static u32 dock_background[DOCK_CACHE_WIDTH * 145];
 static int dock_background_valid;
@@ -966,6 +970,70 @@ void compositor_invalidate_dock(void) {
     dock_background_valid = 0;
     request_scene_redraw();
 }
+
+/* Blur at quarter resolution once per locked session/theme, then cache the
+ * smoothly upscaled result. No PNG decoding or blur work on password edits. */
+static void compositor_auth_backdrop(int width, int height) {
+    const u32 *source = theme_wallpapers[shell.theme];
+    if (!source) source = wallpaper;
+    if (auth_backdrop_theme != shell.theme) auth_backdrop_attempted = 0;
+    if (!auth_backdrop_attempted) {
+        auth_backdrop_attempted = 1;
+        auth_backdrop_theme = shell.theme;
+        int sw = (width + 3) / 4, sh = (height + 3) / 4;
+        u32 size = (u32)sw * sh * sizeof(u32);
+        u32 *small = kmalloc(size), *temp = kmalloc(size);
+        if (!auth_backdrop) {
+            auth_backdrop_pages = ((u32)width * height * sizeof(u32) + PMM_PAGE_SIZE - 1u) / PMM_PAGE_SIZE;
+            auth_backdrop = (u32 *)pmm_alloc_pages(auth_backdrop_pages);
+        }
+        if (small && temp && auth_backdrop) {
+            for (int y = 0; y < sh; y++)
+                for (int x = 0; x < sw; x++) small[y * sw + x] = source[y * 4 * width + x * 4];
+            /* Separable 7x7 box, clamped at every edge. Scratch is released
+             * immediately; only the full-size presentation cache survives. */
+            for (int pass = 0; pass < 2; pass++) {
+                for (int y = 0; y < sh; y++) {
+                    for (int x = 0; x < sw; x++) {
+                        int r = 0, g = 0, b = 0;
+                        for (int k = -3; k <= 3; k++) {
+                            int sx = x + (pass == 0 ? k : 0);
+                            int sy = y + (pass == 1 ? k : 0);
+                            if (sx < 0) sx = 0;
+                            if (sx >= sw) sx = sw - 1;
+                            if (sy < 0) sy = 0;
+                            if (sy >= sh) sy = sh - 1;
+                            u32 c = small[sy * sw + sx];
+                            r += (c >> 16) & 255; g += (c >> 8) & 255; b += c & 255;
+                        }
+                        temp[y * sw + x] = (u32)((r / 7 << 16) | (g / 7 << 8) | (b / 7));
+                    }
+                }
+                u32 *swap = small; small = temp; temp = swap;
+            }
+            for (int y = 0; y < height; y++) {
+                int sy = y / 4, ny = sy + 1 < sh ? sy + 1 : sy;
+                int shade = 64 + y * 48 / height;
+                for (int x = 0; x < width; x++) {
+                    int sx = x / 4, nx = sx + 1 < sw ? sx + 1 : sx;
+                    u32 a = blend(small[sy * sw + sx], small[sy * sw + nx], (x & 3) * 64);
+                    u32 b = blend(small[ny * sw + sx], small[ny * sw + nx], (x & 3) * 64);
+                    u32 tinted = blend(blend(a, b, (y & 3) * 64), 0x765591, 112);
+                    auth_backdrop[y * width + x] = blend(tinted, 0x100b20, shade);
+                }
+            }
+            serial("AUTH: filesystem wallpaper blur cached\n");
+        } else {
+            if (auth_backdrop) pmm_free_pages((uintptr_t)auth_backdrop, auth_backdrop_pages);
+            auth_backdrop = 0;
+            serial("AUTH: blur cache unavailable; using wallpaper\n");
+        }
+        if (small) kfree(small);
+        if (temp) kfree(temp);
+    }
+    memcpy(pixels, auth_backdrop ? auth_backdrop : source, (u32)width * height * sizeof(u32));
+}
+
 void compositor_paint(int full) {
     perf_begin();
     int width = shell.width, height = shell.height;
@@ -976,6 +1044,7 @@ void compositor_paint(int full) {
         GraphicsClip screen = {0, 0, width, height};
         g_damage_count = 0;
         graphics_set_clip(screen);
+        compositor_auth_backdrop(width, height);
         auth_render(width, height);
         g_perf_stats.composed_pixels = (u32)width * (u32)height;
         g_perf_stats.effective_rects = 1;
@@ -986,6 +1055,12 @@ void compositor_paint(int full) {
         shell.scene_dirty = 0;
         return;
     }
+    if (auth_backdrop) {
+        pmm_free_pages((uintptr_t)auth_backdrop, auth_backdrop_pages);
+        auth_backdrop = 0;
+    }
+    auth_backdrop_theme = -1;
+    auth_backdrop_attempted = 0;
     /* Clock changes repaint only the 32-pixel menu strip, preserving the
      * cached windows, desktop icons, and Dock while the user is idle. */
     if (full == 3 && !shell.scene_dirty && !shell.alttab_open && !ui_anim_has_active() && !control_center_active()) {
@@ -1238,28 +1313,179 @@ void compositor_prepare_wallpapers(void) {
 }
 void compositor_wallpaper_changed(void) {
     wallpaper_theme = -1;
+    auth_backdrop_theme = -1;
     dock_background_valid = 0;
     request_scene_redraw();
 }
-/* Boot splash: a calm animated-looking screen that owns the display while the
- * kernel brings subsystems online, so early heavy init never shows as a frozen
- * or tearing desktop. Fully repainted each call and presented immediately. */
+/* A cooperative boot animation: never paint inside an IRQ. PNG decoding and
+ * file/scaling loops service it while their real initialization work proceeds. */
+static int splash_active, splash_busy, splash_target;
+static u32 splash_value, splash_from, splash_transition, splash_last_frame;
+static u32 splash_frames, splash_clock_rate, splash_mask_pages;
+static u32 splash_background_time, splash_background_glow;
+static u64 splash_origin;
+static u8 *splash_mask;
+
+static void splash_clock_init(void) {
+    u32 a, b, c, d;
+    if (!hal_cpu_has_cpuid()) return;
+    hal_cpuid(1, 0, &a, &b, &c, &d);
+    if (!(d & 16u)) return;
+    /* PIT channel 2 works before the scheduler enables timer interrupts.
+     * Gate the speaker off during a bounded 10 ms one-shot calibration. */
+    u8 speaker = inb(0x61);
+    outb(0x61, speaker & (u8)~3u);
+    outb(0x43, 0xb0);
+    outb(0x42, 11932 & 255); outb(0x42, 11932 >> 8);
+    u64 begin = hal_read_tsc_serialized();
+    outb(0x61, (speaker & (u8)~2u) | 1u);
+    u32 limit = 2000000;
+    while (!(inb(0x61) & 32u) && --limit) hal_cpu_relax();
+    u64 delta = hal_read_tsc_serialized() - begin;
+    outb(0x61, speaker);
+    if (limit && delta <= 0xffffffffu) {
+        u32 rate = (u32)delta / 10u;
+        if (rate >= 1000u && rate <= 10000000u) splash_clock_rate = rate;
+    }
+    splash_origin = hal_read_tsc_serialized();
+}
+
+static u32 splash_time_ms(void) {
+    if (!splash_clock_rate) return ticks * 1000u / 120u;
+    u64 delta = hal_read_tsc_serialized() - splash_origin;
+    u32 hi = (u32)(delta >> 32), lo = (u32)delta, rem, ignored, result;
+    __asm__("divl %4" : "=a"(ignored), "=d"(rem) : "a"(hi), "d"(0), "r"(splash_clock_rate));
+    __asm__("divl %4" : "=a"(result), "=d"(rem) : "a"(lo), "d"(rem), "r"(splash_clock_rate));
+    return result;
+}
+
+static void splash_render(u32 now) {
+    int w = shell.width, h = shell.height;
+    static const u32 colors[] = {0x493263, 0x344566, 0x563c59};
+    u32 phase = now % 4500u, part = phase / 1500u;
+    int t = (int)((phase % 1500u) * 256u / 1500u);
+    t = t * t * (768 - 2 * t) / 65536;
+    u32 glow = blend(colors[part], colors[(part + 1) % 3], t), palette[256];
+    for (int i = 0; i < 256; i++) palette[i] = blend(0x090b15, glow, i);
+    int ly = h / 2 - 46;
+    int title_scale = text_width("Pollik OS", 3) > w - 48 ? 2 : 3;
+    int bar_w = w < 360 ? w - 112 : 228;
+    int bx = (w - bar_w - 46) / 2, by = ly + 66;
+    int full = !splash_frames || ((u32)(now - splash_background_time) >= 100u &&
+                                 glow != splash_background_glow);
+    if (full) {
+        splash_background_time = now;
+        splash_background_glow = glow;
+        if (splash_mask) {
+            /* The slowly changing glow needs only quarter-resolution sampling;
+             * row copies keep full-HD background refresh inexpensive. */
+            for (int y = 0; y < h; y += 4) {
+                for (int x = 0; x < w; x += 4)
+                    rect(x, y, x + 4 <= w ? 4 : w - x, 1, palette[splash_mask[y * w + x]]);
+                for (int row = y + 1; row < y + 4 && row < h; row++)
+                    memcpy(pixels + row * w, pixels + y * w, (u32)w * sizeof(u32));
+            }
+        } else {
+            for (int y = 0; y < h; y++) rect(0, y, w, 1, blend(0x090b15, glow, y * 112 / h));
+        }
+    } else {
+        for (int i = 0; i < 256; i++) palette[i] = blend(0x090b15, splash_background_glow, i);
+        for (int y = by - 8; y < by + 16; y++) {
+            for (int x = bx; x < bx + bar_w + 54; x++) {
+                pixels[y * w + x] = splash_mask ? palette[splash_mask[(y & ~3) * w + (x & ~3)]] :
+                    blend(0x090b15, splash_background_glow, y * 112 / h);
+            }
+        }
+    }
+    centered(0, ly, w, "Pollik OS", 0xf5efff, title_scale);
+    roundrect(bx, by, bar_w, 6, 3, 0x3c334c);
+    int fill = (int)(splash_value * (u32)bar_w / 25600u);
+    if (fill > 0) {
+        roundrect(bx, by, fill, 6, 3, 0xc7acf3);
+        int highlight = (int)(now % 1200u) * bar_w / 1200;
+        for (int x = 3; x < fill - 3; x++) {
+            int distance = x - highlight;
+            if (distance < 0) distance = -distance;
+            if (distance < 24) rect(bx + x, by + 1, 1, 3,
+                                    blend(0xc7acf3, 0xf7efff, (24 - distance) * 8));
+        }
+    }
+    char percentage[16];
+    number(percentage, splash_value / 256u);
+    int n = (int)strlen(percentage); percentage[n] = '%'; percentage[n + 1] = 0;
+    text(bx + bar_w + 12, by - 5, percentage, 0xcfc2e3, 1);
+    if (full) framebuffer_present(pixels, 0, 0, w, h);
+    else framebuffer_present(pixels, bx, by - 8, bar_w + 54, 24);
+    splash_frames++;
+    splash_last_frame = now;
+}
+
+void compositor_splash_poll(void) {
+    if (!splash_active || splash_busy) return;
+    u32 now = splash_time_ms();
+    if (splash_frames && (u32)(now - splash_last_frame) < 33u) return;
+    splash_busy = 1;
+    u32 elapsed = now - splash_transition;
+    if (elapsed >= 180u || !splash_clock_rate) splash_value = (u32)splash_target * 256u;
+    else {
+        u32 t = elapsed * 256u / 180u;
+        t = t * t * (768u - 2u * t) / 65536u;
+        splash_value = splash_from + (((u32)splash_target * 256u - splash_from) * t / 256u);
+    }
+    set_target(pixels, shell.width, shell.height, shell.width);
+    splash_render(now);
+    splash_busy = 0;
+}
+
 void compositor_splash(const char *stage, int progress) {
+    (void)stage;
     int w = shell.width, h = shell.height;
     if (!pixels || w <= 0 || h <= 0) return;
     if (progress < 0) progress = 0;
     if (progress > 100) progress = 100;
-    graphics_init(w, h);
-    set_target(pixels, w, h, w);
-    graphics_set_clip((GraphicsClip){0, 0, w, h});
-    for (int y = 0; y < h; y++)
-        rect(0, y, w, 1, blend(0x0a0d18, 0x1d2340, y * 256 / h));
-    int cx = w / 2, ly = h / 2 - 54;
-    centered(0, ly, w, "Pollik OS", 0xf3f2fb, 3);
-    if (stage) centered(0, ly + 48, w, stage, 0x8f99ad, 1);
-    int bar_w = 260, bar_h = 8, bx = cx - bar_w / 2, by = ly + 86;
-    roundrect(bx, by, bar_w, bar_h, bar_h / 2, 0x232a44);
-    int fill = bar_w * progress / 100;
-    if (fill > 0) roundrect(bx, by, fill, bar_h, bar_h / 2, 0x6366f1);
-    framebuffer_present(pixels, 0, 0, w, h);
+    int first = !splash_active;
+    if (first) {
+        splash_clock_init();
+        graphics_init(w, h);
+        splash_mask_pages = ((u32)w * h + PMM_PAGE_SIZE - 1u) / PMM_PAGE_SIZE;
+        splash_mask = (u8 *)pmm_alloc_pages(splash_mask_pages);
+        if (splash_mask) {
+            u32 step = (512u << 16) / (u32)w;
+            for (int y = 0; y < h; y++) {
+                int dy = y * 512 / h - 224;
+                u32 position = 0;
+                for (int x = 0; x < w; x++, position += step) {
+                    int dx = (int)(position >> 16) - 256;
+                    int glow = 224 - (dx * dx + dy * dy) / 256;
+                    if (glow < 0) glow = 0;
+                    splash_mask[y * w + x] = (u8)(glow * glow / 256);
+                }
+            }
+        }
+        splash_active = 1;
+    }
+    if (progress < splash_target) progress = splash_target;
+    splash_from = splash_value;
+    splash_target = progress;
+    splash_transition = splash_time_ms();
+    compositor_splash_poll();
+    if (first) serial("GFX: boot splash presented\n");
+}
+
+void compositor_splash_finish(void) {
+    compositor_splash(0, 100);
+    /* Finish the short interpolation only after all boot work succeeds. */
+    if (splash_clock_rate) {
+        for (u32 limit = 5000000u; splash_value < 25600u && limit; limit--) {
+            compositor_splash_poll(); hal_cpu_relax();
+        }
+    }
+    if (splash_value < 25600u) {
+        splash_value = 25600u;
+        splash_render(splash_time_ms());
+    }
+    splash_active = 0;
+    if (splash_mask) pmm_free_pages((uintptr_t)splash_mask, splash_mask_pages);
+    splash_mask = 0;
+    serial("GFX: boot animation complete 100%\n");
 }

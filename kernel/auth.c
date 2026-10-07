@@ -4,6 +4,7 @@
 #include "pollikfs.h"
 #include "vfs.h"
 #include "gui/apps.h"
+#include "audio.h"
 #include "include/bearssl/bearssl.h"
 #ifdef POLLIK_INSTALL_MEDIA
 #include "installer.h"
@@ -66,6 +67,7 @@ static void clear_input(void) {
     input_len = input_cursor = 0;
     input_anchor = -1;
     input_dragging = 0;
+    show_password = 0;
 }
 
 static int constant_equal(const u8 *a, const u8 *b, u32 length) {
@@ -252,6 +254,7 @@ static void submit(void) {
         serial("INSTALL: complete; remove media and restart\n");
 #else
         state = AUTH_UNLOCKED;
+        audio_play_sound(SOUND_LOGIN);
 #endif
     } else if (state == AUTH_LOGIN) {
         u8 candidate[32];
@@ -262,6 +265,7 @@ static void submit(void) {
         if (accepted) {
             state = AUTH_UNLOCKED;
             serial("AUTH: login accepted\n");
+            audio_play_sound(SOUND_LOGIN);
         } else {
             copy_text(message, "Incorrect password", sizeof(message));
             serial("AUTH: login rejected\n");
@@ -382,17 +386,52 @@ void auth_key_ex(u8 code, int shift, int control) {
 }
 void auth_key(u8 code, int shift) { auth_key_ex(code, shift, 0); }
 
+static void draw_password_toggle(u32 color, int glass) {
+    if (glass) rounded(eye_x, eye_y, eye_w, eye_h, 13, 0xffffff, show_password ? 72 : 24);
+    else rounded(eye_x, eye_y, eye_w, eye_h, 8, ui_theme()->accent, show_password ? 48 : 16);
+    /* Supersampled almond outline, pupil and crossed-out hidden state. */
+    for (int y = 0; y < 18; y++) {
+        for (int x = 0; x < 24; x++) {
+            int coverage = 0;
+            for (int sy = 1; sy < 8; sy += 2) {
+                for (int sx = 1; sx < 8; sx += 2) {
+                    int dx = x * 8 + sx - 96, dy = y * 8 + sy - 72;
+                    int top = dx * dx + (dy + 72) * (dy + 72);
+                    int bottom = dx * dx + (dy - 72) * (dy - 72);
+                    int ink = (top <= 112 * 112 && bottom <= 112 * 112 &&
+                               (top >= 100 * 100 || bottom >= 100 * 100)) ||
+                              dx * dx + dy * dy <= 18 * 18;
+                    if (!show_password) {
+                        int diagonal = dx - dy;
+                        if (diagonal > -16 && diagonal < 16) ink = 0;
+                        if (diagonal >= -7 && diagonal <= 7 && dx >= -56 && dx <= 56) ink = 1;
+                    }
+                    coverage += ink;
+                }
+            }
+            if (coverage) rounded(eye_x + 1 + x, eye_y + 4 + y, 1, 1, 0, color, coverage * 16);
+        }
+    }
+}
+
 static void draw_field(int x, int y, int w, int secret) {
     ThemeColors *theme = ui_theme();
+    int glass = state == AUTH_LOGIN;
     u32 bg = theme->surface_elevated;
-    u32 fg = theme->text;
-    u32 placeholder = theme->text_muted;
-    u32 accent = theme->accent;
+    u32 fg = glass ? 0xffffff : theme->text;
+    u32 placeholder = glass ? 0xe2ddeb : theme->text_muted;
+    u32 accent = glass ? 0xd4bfff : theme->accent;
     /* Continuous 2px accent stroke: paint the ring colour as the base, then
      * repaint the interior. This keeps every corner pixel solid, unlike a thin
      * coverage-based outline that fades on the arc. */
-    roundrect(x, y, w, 42, UI_RADIUS_MEDIUM, accent);
-    roundrect(x + 2, y + 2, w - 4, 42 - 4, UI_RADIUS_MEDIUM - 2, bg);
+    if (glass) {
+        rounded(x, y + 3, w, 42, 21, 0x090612, 48);
+        rounded(x, y, w, 42, 21, 0xffffff, 76);
+        rounded(x + 1, y + 1, w - 2, 40, 20, 0x20152f, 88);
+    } else {
+        roundrect(x, y, w, 42, UI_RADIUS_MEDIUM, accent);
+        roundrect(x + 2, y + 2, w - 4, 42 - 4, UI_RADIUS_MEDIUM - 2, bg);
+    }
     secret_field_active = secret;
     field_x = x; field_y = y; field_w = w; field_active = 1;
     eye_x = x + w - 32; eye_y = y + 8; eye_w = 26; eye_h = 26;
@@ -433,9 +472,7 @@ static void draw_field(int x, int y, int w, int secret) {
         text(x + 14, y + 13, secret ? "Password" : "Username", placeholder, 1);
     }
     if (secret) {
-        roundrect(eye_x, eye_y, eye_w, eye_h, 6, bg);
-        roundrect(eye_x + 5, eye_y + 9, 16, 8, 4, placeholder);
-        roundrect(eye_x + 11, eye_y + 11, 4, 4, 2, accent);
+        draw_password_toggle(show_password ? fg : placeholder, glass);
     }
 }
 
@@ -464,25 +501,41 @@ static int auth_input_index_at(int x) {
     return end;
 }
 
-/* Smooth vertical gradient. Kept low-contrast on purpose so 8-bit
- * quantization never shows as hard horizontal bands. */
-static void draw_backdrop(int width, int height, int dark) {
-    u32 top = dark ? 0x0e111a : 0xb8b1ef;
-    u32 bottom = dark ? 0x07090f : 0x49438e;
-    for (int y = 0; y < height; y++) {
-        int t = y * 256 / (height ? height : 1);
-        rect(0, y, width, 1, blend(top, bottom, t));
-    }
-}
-
 void auth_render(int width, int height) {
     if (!auth_is_active()) return;
     field_active = 0;
     int dark = ui_is_dark();
     graphics_set_clip((GraphicsClip){0, 0, width, height});
 
-    /* Keep the sign-in backdrop on the same colors as the desktop wallpaper. */
-    draw_backdrop(width, height, dark);
+    /* The compositor restores the cached, blurred filesystem wallpaper. */
+    if (state == AUTH_LOGIN) {
+        int avatar_y = height * 40 / 100 - 116;
+        if (avatar_y < 40) avatar_y = 40;
+        int avatar_x = width / 2 - 44;
+        rounded(avatar_x - 3, avatar_y + 3, 94, 94, 47, 0x100a20, 64);
+        rounded(avatar_x, avatar_y, 88, 88, 44, 0xffffff, 108);
+        rounded(avatar_x + 2, avatar_y + 2, 84, 84, 42, 0x655080, 80);
+        roundrect(avatar_x + 30, avatar_y + 18, 28, 28, 14, 0xf0e9fa);
+        roundrect(avatar_x + 20, avatar_y + 50, 48, 28, 14, 0xf0e9fa);
+        int name_scale = text_width(auth_username(), 2) > width - 48 ? 1 : 2;
+        centered(16, avatar_y + 106, width - 32, auth_username(), 0xffffff, name_scale);
+        int fw = width < 360 ? width - 96 : 248;
+        int fx = (width - fw - 52) / 2;
+        int fy = avatar_y + 150;
+        draw_field(fx, fy, fw, 1);
+        button_x = fx + fw + 10; button_y = fy;
+        button_w = button_h = 42;
+        rounded(button_x, button_y, 42, 42, 21, 0xffffff, 96);
+        /* Small arrow is the same submit action as Enter. */
+        rect(button_x + 12, button_y + 20, 17, 2, 0xffffff);
+        for (int i = 0; i < 7; i++) {
+            rect(button_x + 23 + i, button_y + 14 + i, 2, 1, 0xffffff);
+            rect(button_x + 23 + i, button_y + 27 - i, 2, 1, 0xffffff);
+        }
+        if (message[0]) centered(16, fy + 58, width - 32, message, 0xffcad8, 1);
+        centered(0, height - 48, width, "Pollik OS", 0xe1d6f5, 1);
+        return;
+    }
 
     const char *title = "PollikOS Setup";
     const char *body = "Install PollikOS on the attached data disk";
@@ -563,10 +616,12 @@ void auth_render(int width, int height) {
  * the cursor on its own cheap path, keeping login as smooth as the desktop. */
 int auth_pointer(int x, int y, int button_down) {
     entropy ^= (u32)(x * 257 + y * 17) ^ ticks;
-    int show = button_down && secret_field_active && x >= eye_x && x < eye_x + eye_w &&
-               y >= eye_y && y < eye_y + eye_h;
-    int changed = show != show_password;
-    show_password = show;
+    int changed = 0;
+    if (button_down && !pointer_was_down && secret_field_active &&
+        x >= eye_x && x < eye_x + eye_w && y >= eye_y && y < eye_y + eye_h) {
+        show_password = !show_password;
+        changed = 1;
+    }
     int inside_field = field_active && x >= field_x && x < field_x + field_w &&
                        y >= field_y && y < field_y + 42 &&
                        !(secret_field_active && x >= eye_x && x < eye_x + eye_w && y >= eye_y && y < eye_y + eye_h);

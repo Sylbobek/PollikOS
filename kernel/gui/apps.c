@@ -57,7 +57,7 @@ static const GuiApp registry[APP_COUNT] = {
 #ifndef POLLIK_INSTALL_MEDIA
     [APP_CALCULATOR] = { .name = "Calculator", .icon = ICON(APP_CALCULATOR),
         .min_width=320,.min_height=440,LIGHT_BODY,.init=calculator_init,
-        .render=calculator_render,.key=calculator_key,.click=calculator_click }
+        .render=calculator_render,.key=calculator_key,.click=calculator_click,.close=calculator_close }
 #endif
 };
 

@@ -1,4 +1,4 @@
-param([switch]$SelfTest, [switch]$PerturbSchedule, [switch]$CrashWriteLog, [switch]$Production)
+param([switch]$SelfTest, [switch]$PerturbSchedule, [switch]$CrashWriteLog, [switch]$Production, [switch]$LegacyBrowserJS)
 $ErrorActionPreference = 'Stop'
 if($Production -and ($SelfTest -or $CrashWriteLog -or $PerturbSchedule)){throw '-Production is a separate release variant'}
 if ($PerturbSchedule -and !$SelfTest) { throw '-PerturbSchedule requires -SelfTest' }
@@ -96,6 +96,14 @@ try {
         'sdk_errno'         = @{ Sources = @('sdk/examples/errno.c');          Optimization = '-O2' }
         'sdk_write'         = @{ Sources = @('sdk/examples/write.c');          Optimization = '-O2' }
     }
+    $browserLibraries=@()
+    if($LegacyBrowserJS){$sdkApplications['browser'].Defines+=@('POLLIK_BROWSER_ELK=1')}
+    if(!$LegacyBrowserJS){
+        Invoke-Checked python @('tools/build_quickjs.py','--native','--output',"$output/quickjs")
+        $sdkApplications['browser'].Sources=@('sdk/apps/browser.c','sdk/apps/browser_quickjs.c','kernel/browser/html_parser.c','kernel/browser/css_engine.c','kernel/browser/layout.c','kernel/browser/render.c')
+        $browserLibraries=@("$output/quickjs/libquickjs.a")
+        Write-Host 'Native browser JavaScript: pinned QuickJS (single-thread profile)'
+    }
     foreach ($application in $sdkApplications.Keys) {
         $definition = $sdkApplications[$application]
         $objects = @()
@@ -105,7 +113,8 @@ try {
                 -Optimization $definition.Optimization -Defines $definition.Defines
             $objects += $object
         }
-        Invoke-PollikosLink -Objects $objects -Output "$userOutput/$application.elf" -RuntimeDir $runtimeDir
+        $libraries=if($application -eq 'browser'){$browserLibraries}else{@()}
+        Invoke-PollikosLink -Objects $objects -Output "$userOutput/$application.elf" -RuntimeDir $runtimeDir -Libraries $libraries
         [void](Test-PollikosElf -Path "$userOutput/$application.elf")
     }
     # The pollikcc driver itself builds the ABI -O0 variant, the multi-source

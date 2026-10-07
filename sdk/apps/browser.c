@@ -10,6 +10,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include "window_ui.h"
+#ifndef POLLIK_BROWSER_ELK
+#include "browser_js_backend.h"
+#endif
 
 #define BROWSER_W 920
 #define BROWSER_H 640
@@ -556,6 +559,10 @@ int main(int argc,char **argv) {
     int running=1;
     while(running) {
         poll_remote();
+#ifndef POLLIK_BROWSER_ELK
+        browser_js_poll();
+        if(g_browser.layout_dirty)render_page();
+#endif
         pollikos_input_event_t e;
         if(pollikos_input_read(&e)==(int64_t)sizeof(e)) {
             if(e.kind&POLLIKOS_INPUT_WINDOW_CLOSE) running=0;
@@ -609,5 +616,8 @@ int main(int argc,char **argv) {
     puts("[browser] closing");
     http_release();
     if(document) dom_free_tree(document);
+#ifndef POLLIK_BROWSER_ELK
+    browser_js_destroy();
+#endif
     return pollikos_window_destroy()<0?2:0;
 }

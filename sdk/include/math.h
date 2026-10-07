@@ -1,5 +1,8 @@
 #ifndef POLLIKOS_MATH_H
 #define POLLIKOS_MATH_H
+#define INFINITY (__builtin_huge_valf())
+#define NAN (__builtin_nanf(""))
+#define HUGE_VAL (__builtin_huge_val())
 /* Common scalar double/float math. Long double and several special functions
  * from the full C libm remain unavailable. */
 double fabs(double value);

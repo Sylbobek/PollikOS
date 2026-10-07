@@ -11,7 +11,8 @@ typedef enum {
     SOUND_STARTUP = 1,
     SOUND_CLICK,
     SOUND_ALERT,
-    SOUND_TRASH
+    SOUND_TRASH,
+    SOUND_LOGIN
 } SoundEffect;
 
 int audio_init(void);

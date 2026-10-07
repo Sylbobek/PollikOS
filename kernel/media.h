@@ -6,6 +6,8 @@
  * Returns an owned w*h*4 buffer, or 0. Free with media_free(). */
 u8 *media_decode(const u8 *data, u32 len, int *w, int *h);
 void media_free(void *p);
+/* Optional cooperative callback for long image decoding; must not decode images. */
+void media_set_progress_hook(void (*hook)(void));
 
 /* Animated GIF playback (own LZW decoder; stb only gives the first frame). */
 typedef struct MediaGif MediaGif;

@@ -3,6 +3,7 @@
 #include "klog.h"
 #include "audio.h"
 #include "gui/apps.h"
+#include "gui/app_host.h"
 
 static int g_screen_w = 1024;
 static int g_screen_h = 768;
@@ -141,6 +142,7 @@ static int perf_tick_wait(u32 start, u32 count) {
     /* Bounded even if IRQs/PIT are broken. */
     for (u32 limit = 50000000; limit; limit--) {
         if ((u32)(ticks - start) >= count) return 1;
+        if (!(limit & 65535u)) app_host_service_loading();
         hal_cpu_relax();
     }
     return 0;

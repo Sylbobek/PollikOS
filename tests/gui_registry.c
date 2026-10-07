@@ -50,6 +50,7 @@ SIMPLE_RENDER(settings, APP_SETTINGS)
 SIMPLE_RENDER(pollikmark, APP_POLLIKMARK)
 SIMPLE_RENDER(calculator, APP_CALCULATOR)
 void calculator_init(void) { init_order[total]=APP_CALCULATOR;record(APP_CALCULATOR,INIT,0,0,0,0); }
+void calculator_close(void) {record(APP_CALCULATOR,CLOSE,0,0,0,0);}
 void calculator_key(u8 code,char ch,int shift,int control) {record(APP_CALCULATOR,KEY,code,ch,shift,control); }
 void pollikmark_init(void) {
     init_order[total] = APP_POLLIKMARK;
@@ -145,7 +146,7 @@ static int metadata(void) {
         BIT(INIT) | BIT(RENDER) | BIT(KEY) | BIT(CLICK) | BIT(DRAG) | BIT(RESIZE) | BIT(SCROLL) | BIT(CURSOR),
         BIT(RENDER) | BIT(CLICK) | BIT(DRAG) | BIT(CLOSE), ((1u << OPS) - 1),
         BIT(INIT) | BIT(RENDER) | BIT(KEY) | BIT(CLICK) | BIT(OPEN) | BIT(CLOSE) | BIT(RESIZE) | BIT(POLL),
-        BIT(INIT) | BIT(RENDER) | BIT(KEY) | BIT(CLICK)
+        BIT(INIT) | BIT(RENDER) | BIT(KEY) | BIT(CLICK) | BIT(CLOSE)
     };
     reset();
     for (int id = 0; id < APP_COUNT; ++id) {
@@ -311,7 +312,7 @@ static int lifecycle(void) {
         for (int op = OPEN; op <= CLOSE; ++op) {
             reset();
             dispatch[op - OPEN](id);
-            if (id == APP_BROWSER || id == APP_POLLIKMARK || ((id == APP_FILES || id == APP_SETTINGS) && op == CLOSE)) CHECK(only(id, op));
+            if (id == APP_BROWSER || id == APP_POLLIKMARK || ((id == APP_FILES || id == APP_SETTINGS || id == APP_CALCULATOR) && op == CLOSE)) CHECK(only(id, op));
             else CHECK(total == 0); /* Includes persistent Terminal/Notes close. */
         }
         for (unsigned s = 0; s < sizeof sizes / sizeof sizes[0]; ++s) {

@@ -8,11 +8,13 @@ static int is_png_or_jpeg(const u8 *data,u32 len) {
         (len>=3&&data[0]==0xff&&data[1]==0xd8&&data[2]==0xff);
 }
 static void load(DomNode *n,const char *base,int *count) {
- if(!n)return;
+ if(!n||browser_load_cancelled())return;
  browser_work_checkpoint();
+ if(browser_load_cancelled())return;
  if(!memcmp(n->tag,"img",4)&&n->src[0]&&*count<8) {
   (*count)++;char url[256];HttpResponse r;
   if(http_resolve_url(base,n->src,url,sizeof(url))&&http_get(url,&r)) {
+   if(browser_load_cancelled()){http_response_free(&r);return;}
    int w=0,h=0;
    if(r.status_code==200 && g_image_pixels<8388608u) {
     MediaGif *gif=media_gif_open((const u8*)r.body,r.body_len);

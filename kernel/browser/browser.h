@@ -249,6 +249,7 @@ void css_apply_property(ComputedStyle *s, const char *prop, const char *val);
 void layout_compute(DomNode *root, int viewport_w, int *out_total_h);
 
 void browser_load_images(DomNode *,const char *);
+int browser_load_cancelled(void);
 int browser_advance_media(DomNode *);
 /* Painter */
 void render_dom(DomNode *node, int origin_x, int origin_y, int viewport_w, int viewport_h, int scroll_y);

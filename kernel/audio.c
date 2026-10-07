@@ -1,4 +1,5 @@
 #include "audio.h"
+#include "audio_chime.h"
 #ifdef POLLIK_X64
 #include "arch/x86_64/audio_platform.h"
 #else
@@ -222,10 +223,8 @@ void audio_play_tone(u32 freq_hz, u32 duration_ms) {
         speaker_beep(freq_hz, duration_ms);
         return;
     }
-#ifdef POLLIK_X64
     /* Stop the previous asynchronous DMA before replacing its buffer. */
     if(!ac97_reset_output())return;
-#endif
 
     /* Fill PCM buffer with 48 kHz stereo/mono tone (square/triangle wave for fast generation) */
     u32 sample_rate = 48000;
@@ -259,9 +258,6 @@ void audio_play_tone(u32 freq_hz, u32 duration_ms) {
     s_bdl[0].flags = (u16)AC97_BDL_IOC;
 
     /* Reset PCM Out DMA channel */
-#ifndef POLLIK_X64
-    if(!ac97_reset_output())return;
-#endif
 
     /* Set BDL base address */
     outl((u16)(s_nabmbar + AC97_PO_BDBAR), (u32)s_bdl_phys);
@@ -287,14 +283,55 @@ void audio_play_tone(u32 freq_hz, u32 duration_ms) {
     #endif
 }
 
+#ifndef POLLIK_X64
+static s16 *s_chime_pcm;
+#define CHIME_PAGES 24u
+static int audio_play_chime(int login) {
+    if (!audio_output()) return 0;
+    /* Stop the previous DMA before touching its descriptors/sample memory. */
+    if (!ac97_reset_output()) return 1;
+    if (!s_chime_pcm) s_chime_pcm = (s16 *)pmm_alloc_pages(CHIME_PAGES);
+    if (!s_chime_pcm) return 0;
+    u32 frames = audio_chime_frames(login);
+    u32 blocks = (frames + 1023u) / 1024u;
+    for (u32 i = 0; i < frames; i++) {
+        s16 sample = audio_chime_sample(login, i);
+        s_chime_pcm[i * 2] = s_chime_pcm[i * 2 + 1] = sample;
+    }
+    for (u32 i = 0; i < blocks; i++) {
+        u32 count = frames - i * 1024u;
+        if (count > 1024u) count = 1024u;
+        s_bdl[i].ptr = (u32)(uintptr_t)(s_chime_pcm + i * 2048u);
+        s_bdl[i].samples = (u16)(count * 2u);
+        s_bdl[i].flags = AC97_BDL_IOC;
+    }
+    if (ac97_read_mixer(AC97_MIX_EXT_AUDIO_ID) & 1u)
+        ac97_write_mixer(AC97_MIX_FRONT_DAC_RATE, 48000);
+    outl((u16)(s_nabmbar + AC97_PO_BDBAR), (u32)s_bdl_phys);
+    outb((u16)(s_nabmbar + AC97_PO_LVI), (u8)(blocks - 1u));
+    outw((u16)(s_nabmbar + AC97_PO_SR), 0x1c);
+    outb((u16)(s_nabmbar + AC97_PO_CR), AC97_CR_RP);
+    KLOG_INFO(KLOG_CAT_BOOT, login ? "Audio: login chime started" : "Audio: startup chime started");
+    return 1;
+}
+#endif
+
 void audio_play_sound(SoundEffect s) {
+    if (!s_volume || sound_is_muted()) return;
     switch (s) {
         case SOUND_STARTUP:
-            /* Pleasant rising chord C5 -> E5 -> G5 -> C6 */
-            audio_play_tone(523, 60);
-            audio_play_tone(659, 60);
-            audio_play_tone(784, 80);
-            audio_play_tone(1046, 120);
+#ifndef POLLIK_X64
+            if (audio_play_chime(0)) break;
+#endif
+            audio_play_tone(392, 24);
+            audio_play_tone(587, 36);
+            break;
+        case SOUND_LOGIN:
+#ifndef POLLIK_X64
+            if (audio_play_chime(1)) break;
+#endif
+            audio_play_tone(587, 20);
+            audio_play_tone(784, 30);
             break;
         case SOUND_CLICK:
             audio_play_tone(1400, 15);
@@ -377,6 +414,7 @@ int audio_play_wav(const u8 *data, u32 len) {
     u32 sample_idx = 0;
 
     while (sample_idx < total_samples) {
+        if(!ac97_reset_output())return 0;
         u32 chunk = total_samples - sample_idx;
         if (chunk > SAMPLES_PER_BUFFER) chunk = SAMPLES_PER_BUFFER;
 
@@ -396,8 +434,6 @@ int audio_play_wav(const u8 *data, u32 len) {
         s_bdl[0].ptr = (u32)s_pcm_phys;
         s_bdl[0].samples = (u16)chunk;
         s_bdl[0].flags = (u16)AC97_BDL_IOC;
-
-        if(!ac97_reset_output())return 0;
 
         outl((u16)(s_nabmbar + AC97_PO_BDBAR), (u32)s_bdl_phys);
         outb((u16)(s_nabmbar + AC97_PO_LVI), 0);

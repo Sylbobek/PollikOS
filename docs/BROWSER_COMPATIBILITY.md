@@ -1,5 +1,7 @@
 # Browser connection and script-type checkpoint
 
+Superseded for the GC crash and application-close behavior by [BROWSER_STABILITY_AND_LIFECYCLE.md](BROWSER_STABILITY_AND_LIFECYCLE.md). Historical command outputs below are unchanged.
+
 2026-10-07. This is a partial repair, not full web standards support.
 
 ## Implemented

@@ -10,6 +10,9 @@ BrowserApp g_browser;
 /* is_loading is UI/queued state; load_active protects all mutable DOM/JS work,
  * including home/error paths which historically clear is_loading early. */
 static int load_active;
+static int close_pending;
+int browser_load_cancelled(void){return close_pending;}
+static void finish_closed_session(void);
 void browser_work_checkpoint(void) {
     if (load_active) net_service_wait();
 }
@@ -87,7 +90,18 @@ void browser_close(void) {
     g_browser.minimized = 0;
     g_browser.has_pending_navigation = 0;
     if (!load_active) g_browser.is_loading = 0;
-    /* In-flight work owns its DOM/socket until return; closing hides, not frees. */
+    close_pending=1;
+    if(load_active)http_cancel_current();
+    else finish_closed_session();
+}
+static void finish_closed_session(void) {
+    int x=g_browser.x,y=g_browser.y,w=g_browser.w,h=g_browser.h;
+    int reopen=g_browser.open;
+    DomNode *old=g_browser.document;g_browser.document=0;
+    dom_free_tree(old);
+    browser_init();g_browser.x=x;g_browser.y=y;g_browser.w=w;g_browser.h=h;
+    close_pending=0;
+    if(reopen)browser_open();
 }
 
 /* The base URL all relative references resolve against. */
@@ -131,8 +145,9 @@ static void extract_dom_title(DomNode *node, char *out, int max_len) {
  * deliberately bounded, while transport still goes through the regular
  * DNS/TCP/TLS/HTTP path. */
 static void execute_dom_scripts(DomNode *node) {
-    if (!node) return;
+    if (!node || close_pending) return;
     browser_work_checkpoint();
+    if(close_pending)return;
     if (node->tag[0] == 's' && node->tag[1] == 'c' && node->tag[2] == 'r' && node->tag[3] == 'i' && node->tag[4] == 'p' && node->tag[5] == 't') {
         int kind=browser_script_kind(node);
         if(kind==2){++g_browser.script_errors;serial("JS: module scripts are unsupported\n");}
@@ -163,8 +178,9 @@ static void execute_dom_scripts(DomNode *node) {
 }
 
 static void load_stylesheets(DomNode *node,char *css,int *used,int *count) {
-    if(!node)return;
+    if(!node || close_pending)return;
     browser_work_checkpoint();
+    if(close_pending)return;
     /* Remote pages often include dozens of tracking stylesheets. Keeping only
      * the first two small files preserves common site styling and bounds the
      * synchronous legacy browser's network wait. */
@@ -345,6 +361,7 @@ static void browser_load_now(const char *raw_url) {
 
     HttpResponse resp;
     int err = http_get(target_url, &resp);
+    if(close_pending){http_response_free(&resp);return;}
 
     if (err && !resp.error && resp.body && resp.body_len > 0) {
         if (resp.final_url[0]) {
@@ -451,6 +468,7 @@ void browser_navigate(const char *url) {
 
 void browser_poll(void) {
     if (load_active) return;
+    if(!g_browser.open)return;
     if (!g_browser.has_pending_navigation) {
         /* Event loop: drain due timers / rAF only when the document is stable. */
         if (!g_browser.is_loading && g_browser.document && js_has_pending_tasks()) {
@@ -467,9 +485,10 @@ void browser_poll(void) {
     NetWaitService previous = net_set_wait_service(app_host_service_loading);
     app_host_invalidate(APP_BROWSER);
     browser_work_checkpoint();
-    browser_load_now(url);
+    if(!close_pending)browser_load_now(url);
     net_set_wait_service(previous);
     load_active = 0;
+    if(close_pending){finish_closed_session();return;}
     /* location changes from JS stay queued; do not lose their loading state. */
     g_browser.is_loading = g_browser.has_pending_navigation;
     browser_mark_dirty();

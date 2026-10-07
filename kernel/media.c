@@ -13,6 +13,9 @@
 #define STBI_NO_THREAD_LOCALS
 #define STBI_MAX_DIMENSIONS 4096
 #define STBI_ASSERT(x) ((void)0)
+static void (*media_progress_hook)(void);
+void media_set_progress_hook(void (*hook)(void)) { media_progress_hook = hook; }
+#define STBI_PROGRESS() do { if (media_progress_hook) media_progress_hook(); } while (0)
 #define MEDIA_STBI_MAGIC 0x4d494d47u
 #define MEDIA_STBI_PMM_THRESHOLD (256u * 1024u)
 typedef struct { u32 magic, size, pages, pmm_backed; } MediaStbiBlock;

@@ -103,6 +103,7 @@ void settings_click(int x, int y);
 int settings_drag(int x,int y,int active);
 void settings_close(void);
 void calculator_init(void);
+void calculator_close(void);
 void calculator_render(int width,int height,int active);
 void calculator_key(u8 code,char ch,int shift,int control);
 void calculator_click(int x,int y);

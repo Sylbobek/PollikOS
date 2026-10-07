@@ -3,6 +3,9 @@
 #include "tls.h"
 #include "net_util.h"
 #include "../mem.h"
+static TcpSocket *request_socket;
+static int request_active;
+void http_cancel_current(void){if(request_socket)tcp_abort(request_socket);}
 
 void http_response_init(HttpResponse *resp) {
     if (!resp)
@@ -338,7 +341,7 @@ static int framed_complete(const u8 *data,int n,int head) {
     return length>=0 ? n-end>=length : 0;
 }
 
-int http_request_timeout(const char *method, const char *url, const char *extra_headers, const u8 *post_data, int post_len, u32 response_timeout_ticks, HttpResponse *resp) {
+static int http_request_run(const char *method, const char *url, const char *extra_headers, const u8 *post_data, int post_len, u32 response_timeout_ticks, HttpResponse *resp) {
     if (!resp) return 0;
     http_response_init(resp);
     if (!url || !method || post_len < 0 || (post_len && !post_data)) { resp->error=1;return 0; }
@@ -381,6 +384,7 @@ redirect_loop:
     }
 
     TcpSocket *tcp_sock = net_manager_connect_tcp(remote_ip, port);
+    request_socket=tcp_sock;
     if (!tcp_sock) {
         resp->error = 3;
         serial("HTTP: TCP connect failed\n");
@@ -494,6 +498,7 @@ redirect_loop:
         tls_close(tls_sock);
     else
         tcp_close(tcp_sock);
+    request_socket=0;
 
     if (resp->error || raw_len <= 0) {
         if (raw_buf)
@@ -650,6 +655,13 @@ redirect_loop:
     return 1;
 }
 
+int http_request_timeout(const char *method, const char *url, const char *extra_headers, const u8 *post_data, int post_len, u32 timeout, HttpResponse *resp) {
+    if(request_active){http_response_init(resp);if(resp)resp->error=1;return 0;}
+    request_active=1;request_socket=0;
+    int result=http_request_run(method,url,extra_headers,post_data,post_len,timeout,resp);
+    request_socket=0;request_active=0;
+    return result;
+}
 int http_request(const char *method, const char *url, const char *extra_headers, const u8 *post_data, int post_len, HttpResponse *resp) {
     return http_request_timeout(method, url, extra_headers, post_data, post_len, 1500, resp);
 }

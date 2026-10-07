@@ -10,6 +10,9 @@ size_t strlen(const char *text);
 size_t strnlen(const char *text, size_t maximum);
 int strcmp(const char *left, const char *right);
 int strncmp(const char *left, const char *right, size_t count);
+/* POSIX ASCII case comparison; non-ASCII bytes compare unchanged. */
+int strcasecmp(const char *left,const char *right);
+int strncasecmp(const char *left,const char *right,size_t count);
 char *strcpy(char *destination, const char *source);
 char *strncpy(char *destination, const char *source, size_t count);
 char *strchr(const char *text, int character);

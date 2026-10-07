@@ -4317,7 +4317,13 @@ static const int stbi__zdist_extra[32] =
 static int stbi__parse_huffman_block(stbi__zbuf *a)
 {
    char *zout = a->zout;
+   unsigned int progress_count = 0;
    for(;;) {
+#ifdef STBI_PROGRESS
+      if ((++progress_count & 4095u) == 0) STBI_PROGRESS();
+#else
+      (void)progress_count;
+#endif
       int z = stbi__zhuffman_decode(a, &a->z_length);
       if (z < 256) {
          if (z < 0) return stbi__err("bad huffman code","Corrupt PNG"); // error in huffman codes
@@ -4744,6 +4750,9 @@ static int stbi__create_png_image_raw(stbi__png *a, stbi_uc *raw, stbi__uint32 r
 
    for (j=0; j < y; ++j) {
       // cur/prior filter buffers alternate
+#ifdef STBI_PROGRESS
+      if ((j & 31u) == 0) STBI_PROGRESS();
+#endif
       stbi_uc *cur = filter_buf + (j & 1)*img_width_bytes;
       stbi_uc *prior = filter_buf + (~j & 1)*img_width_bytes;
       stbi_uc *dest = a->out + stride*j;

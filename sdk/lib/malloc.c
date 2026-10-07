@@ -170,6 +170,13 @@ void free(void *memory) {
     if (!(block->size & 1)) corrupt("pollikc: double free\n");
     arena_release(block);
 }
+size_t malloc_usable_size(void *memory) {
+    if(!memory)return 0;
+    block_t *block=header_of(memory);
+    if(block->magic==MAPPED_MAGIC)return (size_t)block->size-BLOCK_HEADER;
+    if(block->magic!=ARENA_MAGIC || !(block->size&1))corrupt("pollikc: invalid allocation size query\n");
+    return (size_t)(block->size&~UINT64_C(1))-BLOCK_HEADER;
+}
 void *calloc(size_t count, size_t size) {
     if (count && size > SIZE_MAX/count) { errno = ENOMEM; return NULL; }
     size_t bytes = count*size;
