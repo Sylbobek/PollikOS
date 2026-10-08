@@ -19,5 +19,5 @@ static const char browser_start_page[]=
 "<div class='tile'><a href='https://example.org'>Example</a><p>A simple place to start.</p></div>"
 "<div class='tile'><a href='https://en.wikipedia.org/wiki/Main_Page'>Wikipedia</a><p>Learn something new.</p></div>"
 "<div class='tile'><a href='https://news.ycombinator.com'>Hacker News</a><p>Technology and ideas.</p></div>"
-"</div><small>Ctrl+L address · Ctrl+D bookmark · Ctrl+S save page · Alt+Left back</small></main></body></html>";
+"</div><small>Ctrl+L address | Ctrl+D bookmark | Ctrl+S save page | Alt+Left back</small></main></body></html>";
 #endif

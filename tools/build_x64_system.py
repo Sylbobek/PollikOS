@@ -13,6 +13,10 @@ def build(output):
     records=manifest(source)
     apps=('pollish','tcc','desktop.pol','files.pol','terminal.pol','notes.pol','browser.pol','calculator.pol','windowdemo.pol')
     selected=dict(FILES)
+    selected['/usr/share/licenses/PollikOS-AGPL-3.0.txt']=(ROOT/'LICENSE').read_bytes()
+    for library in ('libdom','libcss','libhubbub','libparserutils','libwapcaplet'):
+        selected['/usr/share/licenses/'+library+'.txt']=(ROOT/'third_party'/library/'COPYING').read_bytes()
+    selected['/usr/share/licenses/quickjs.txt']=(ROOT/'third_party/quickjs/LICENSE').read_bytes()
     selected['/bin/media.pol']=(output/'userspace/media_player.elf').read_bytes()
     selected['/bin/video.pol']=(output/'userspace/video_player.elf').read_bytes()
     selected['/usr/lib/libpollikvideo.a']=(output/'codecs/libpollikvideo.a').read_bytes()

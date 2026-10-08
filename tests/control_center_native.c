@@ -98,10 +98,11 @@ int main(void){
     opened=-1;control_center_key(28);CHECK(opened==-1&&cc_shown);control_center_key(14);control_center_key(14);
     CHECK(app_at(0)==-1);control_center_key_ex(30,0,1);control_center_key(33);control_center_key(23);
     control_center_click(search_left()+SEARCH_WIDTH-16,top()+124);CHECK(cc_context==APP_FILES);
-    control_center_click(search_left()+20,top()+198);CHECK(saved_pins==(1u<<APP_FILES));
+    CHECK(context_left()>search_left()+SEARCH_WIDTH&&!cc_detail_kind&&!cc_detail_slide);
+    control_center_click(context_left()+20,top()+context_top()+96);CHECK(saved_pins==(1u<<APP_FILES));
     control_center_close();control_center_toggle();settle();
     CHECK(app_at(0)==APP_FILES);control_center_click(search_left()+SEARCH_WIDTH-16,top()+124);
-    control_center_click(search_left()+20,top()+164);CHECK(admin_requested==APP_FILES&&!cc_shown);
+    control_center_click(context_left()+20,top()+context_top()+60);CHECK(admin_requested==APP_FILES&&!cc_shown);
     for(int action=0;action<3;action++){
         control_center_toggle();settle();
         control_center_click(left()+30,top()+412);CHECK(cc_list==4);

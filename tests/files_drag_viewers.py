@@ -40,6 +40,12 @@ def main():
                 data = g.memory(*g.symbol('g_files_entries'))
                 return [data[i * 72:i * 72 + 64].split(b'\0')[0].decode() for i in range(count)]
 
+            def settle():
+                # An acknowledged PS/2 movement is serviced by the GUI owner
+                # after its directory callback; idle frames need not advance.
+                px, py = scalar('mx'), scalar('my')
+                g.move(px + (1 if px < 1022 else -1), py)
+
             def files():
                 key('f2')
                 g.wait(lambda: scalar('g_focused_window') == 1, 'Files focused')
@@ -52,18 +58,27 @@ def main():
                 expected = ('/home', '/home/Desktop', '/home/Desktop/Documents', '/home/Trash', '/Applications')[index]
                 g.wait(lambda: g.memory(*g.symbol('g_files_current_path')).split(b'\0')[0].decode() == expected,
                        'folder navigation')
+                settle()
                 return w
 
             def select(name):
                 g.wait(lambda: name in entries(), 'directory lists ' + name)
+                settle()
                 names = entries()
                 assert name in names, (name, names)
                 index = names.index(name)
                 # A fresh sidebar navigation resets selection. Keyboard input
                 # scrolls the real list until the requested row is visible.
-                for _ in range(index + 1):
+                selected = scalar('g_files_selected')
+                if selected == 0xffffffff:
                     key('down')
-                g.wait(lambda: scalar('g_files_selected') == index, 'selection reaches ' + name)
+                    g.wait(lambda: scalar('g_files_selected') == 0, 'first selection')
+                    selected = 0
+                while selected != index:
+                    following = selected + (1 if selected < index else -1)
+                    key('down' if selected < index else 'up')
+                    g.wait(lambda: scalar('g_files_selected') == following, 'selection advances')
+                    selected = following
                 w = g.window(1)
                 row = index - scalar('first_row')
                 return w[2] + (156 if w[4] < 600 else 196) + 54, w[3] + 136 + row * 40 + 16
@@ -86,6 +101,31 @@ def main():
 
             def doc_bytes():
                 return g.memory(scalar('document_data'), scalar('document_size'))
+
+            def screenshot(app, name):
+                w = g.window(app)
+                surface = g.words('g_surfaces', app)
+                lx, ly = (240, 146) if app == 1 else (30, 65)
+                tw, th = 100, 18
+                shot = BUILD / ('files-redesign-' + name + '.ppm')
+                deadline = time.monotonic() + 30
+                while True:
+                    # A newly opened document can still have the previous
+                    # document's caption cached until its first paint.
+                    block = g.memory(surface[0] + (ly * surface[3] + lx) * 4,
+                                     ((th - 1) * surface[3] + tw) * 4)
+                    raw = b''.join(block[row * surface[3] * 4:row * surface[3] * 4 + tw * 4]
+                                   for row in range(th))
+                    expected = Image.frombytes('RGB', (tw, th), raw, 'raw', 'BGRX')
+                    colors = expected.tobytes()
+                    g.screendump(shot)
+                    picture = Image.open(shot)
+                    actual = picture.crop((w[2] + lx, w[3] + ly, w[2] + lx + tw, w[3] + ly + th))
+                    if len({colors[i:i+3] for i in range(0,len(colors),3)}) > 1 and actual.tobytes() == colors:
+                        picture.save(shot.with_suffix('.png'))
+                        return
+                    assert time.monotonic() < deadline, (name, 'caption has not been presented')
+                    time.sleep(.12)
 
             g.wait(lambda: '[TEST] PHASE 2 PASS' in g.log.read_text(), 'boot stress', 120)
             for c in 'test123':
@@ -131,20 +171,24 @@ def main():
             video = struct.unpack_from('<7I', g.memory(*g.symbol('video_view')))
             assert photo[0] and photo[4:6] == (256, 160) and video[3] and video[4] > 0
             key('spc')
-            assert struct.unpack_from('<7I', g.memory(*g.symbol('video_view')))[6] == 0
+            g.wait(lambda: struct.unpack_from('<7I', g.memory(*g.symbol('video_view')))[6] == 0, 'space pauses video')
             key('spc')
+            g.wait(lambda: struct.unpack_from('<7I', g.memory(*g.symbol('video_view')))[6] == 1, 'space resumes video')
             print('PASS Photos, Video and Documents coexist; video has native play/pause', flush=True)
             for app, name in ((1, 'files'), (8, 'photos'), (9, 'video'), (10, 'documents')):
-                key({1: 'f2', 8: 'f9', 9: 'f10', 10: 'f11'}[app])
+                if app == 10:
+                    place(1)
+                    open_entry('move-me.txt', 10)
+                else:
+                    key({1: 'f2', 8: 'f9', 9: 'f10'}[app])
                 g.wait(lambda: scalar('g_focused_window') == app, name + ' focused')
-                time.sleep(.25)
-                shot = BUILD / ('files-redesign-' + name + '.ppm')
-                g.screendump(shot)
-                Image.open(shot).save(shot.with_suffix('.png'))
+                screenshot(app, name)
             # The snapshot overlay stays attached across a real BIOS reboot.
             previous = g.log.read_text().count('desktop ready')
+            passes = g.log.read_text().count('[TEST] PHASE 2 PASS')
             g.qmp('system_reset')
             g.wait(lambda: g.log.read_text().count('desktop ready') > previous, 'reboot', 120)
+            g.wait(lambda: g.log.read_text().count('[TEST] PHASE 2 PASS') > passes, 'reboot stress', 120)
             previous = g.log.read_text().count('AUTH: login accepted')
             for c in 'test123':
                 key(c)

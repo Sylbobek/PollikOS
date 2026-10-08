@@ -1,6 +1,7 @@
 #ifndef POLLIK_X64_PROCESS_INTERNAL_H
 #define POLLIK_X64_PROCESS_INTERNAL_H
 void process64_complete_elevation(int accepted);
+const char *process64_elevation_name(void);
 #include "user.h"
 
 /* Process-manager hooks used by the scheduler; not part of the userspace ABI. */

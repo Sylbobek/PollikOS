@@ -40,6 +40,7 @@ static char message[96];
 
 static int pointer_was_down;
 static int button_x, button_y, button_w, button_h;
+static int cancel_x,cancel_y,cancel_w,cancel_h;
 static int eye_x, eye_y, eye_w, eye_h, secret_field_active, show_password;
 static int field_x, field_y, field_w, field_active, input_dragging;
 
@@ -136,9 +137,10 @@ void auth_change_password(void) {
 }
 void auth_run_admin(int app_id) {
     if(!gui_app_get(app_id)||auth_is_active())return;
+    app_host_capture_admin_background();
     admin_app=app_id;auth_lock();
-    copy_text(message,"Administrator password. Esc cancels.",sizeof(message));
 }
+static void cancel_admin(void){admin_app=-1;clear_input();security_session_resume();state=AUTH_UNLOCKED;message[0]=0;}
 static void submit(void) {
     message[0] = 0;
     if (state == AUTH_SETUP_INTRO) {
@@ -272,7 +274,7 @@ static void auth_insert(const char *text, int count) {
     message[0] = 0;
 }
 void auth_key_ex(u8 code, int shift, int control) {
-    if(code==1&&admin_app>=0){admin_app=-1;clear_input();security_session_resume();state=AUTH_UNLOCKED;message[0]=0;return;}
+    if(code==1&&admin_app>=0){cancel_admin();return;}
     static const char keys[128] = {
         [2]='1',[3]='2',[4]='3',[5]='4',[6]='5',[7]='6',[8]='7',[9]='8',[10]='9',[11]='0',
         [12]='-',[13]='=',[16]='q',[17]='w',[18]='e',[19]='r',[20]='t',[21]='y',[22]='u',[23]='i',
@@ -451,6 +453,7 @@ static int auth_input_index_at(int x) {
 void auth_render(int width, int height) {
     if (!auth_is_active()) return;
     field_active = 0;
+    cancel_w=cancel_h=0;
     int dark = ui_is_dark();
     graphics_set_clip((GraphicsClip){0, 0, width, height});
 
@@ -459,13 +462,18 @@ void auth_render(int width, int height) {
         int avatar_y = height * 40 / 100 - 116;
         if (avatar_y < 40) avatar_y = 40;
         int avatar_x = width / 2 - 44;
+        if(admin_app>=0){
+            const GuiApp *app=gui_app_get(admin_app);
+            centered(16,avatar_y-54,width-32,app?app->name:"Application",0xffffff,2);
+            centered(16,avatar_y-26,width-32,"Run as administrator",0xe1d6f5,1);
+        }
         rounded(avatar_x - 3, avatar_y + 3, 94, 94, 47, 0x100a20, 64);
         rounded(avatar_x, avatar_y, 88, 88, 44, 0xffffff, 108);
         rounded(avatar_x + 2, avatar_y + 2, 84, 84, 42, 0x655080, 80);
         roundrect(avatar_x + 30, avatar_y + 18, 28, 28, 14, 0xf0e9fa);
         roundrect(avatar_x + 20, avatar_y + 50, 48, 28, 14, 0xf0e9fa);
         int name_scale = text_width(auth_username(), 2) > width - 48 ? 1 : 2;
-        centered(16, avatar_y + 106, width - 32, auth_username(), 0xffffff, name_scale);
+        centered(16, avatar_y + 106, width - 32, admin_app>=0?"Administrator password":auth_username(), 0xffffff, admin_app>=0?1:name_scale);
         int fw = width < 360 ? width - 96 : 248;
         int fx = (width - fw - 52) / 2;
         int fy = avatar_y + 150;
@@ -480,6 +488,10 @@ void auth_render(int width, int height) {
             rect(button_x + 23 + i, button_y + 27 - i, 2, 1, 0xffffff);
         }
         if (message[0]) centered(16, fy + 58, width - 32, message, 0xffcad8, 1);
+        if(admin_app>=0){cancel_w=180;cancel_h=42;cancel_x=(width-cancel_w)/2;cancel_y=fy+112;
+            rounded(cancel_x,cancel_y,cancel_w,cancel_h,14,0xffffff,64);
+            centered(cancel_x,cancel_y+13,cancel_w,"Cancel",0xffffff,1);
+        }
         centered(0, height - 48, width, "Pollik OS", 0xe1d6f5, 1);
         return;
     }
@@ -564,6 +576,7 @@ void auth_render(int width, int height) {
 int auth_pointer(int x, int y, int button_down) {
     account_entropy_event(account_platform_time());
     int changed = 0;
+    if(button_down&&!pointer_was_down&&admin_app>=0&&cancel_w&&x>=cancel_x&&x<cancel_x+cancel_w&&y>=cancel_y&&y<cancel_y+cancel_h){cancel_admin();pointer_was_down=1;return 1;}
     if (button_down && !pointer_was_down && secret_field_active &&
         x >= eye_x && x < eye_x + eye_w && y >= eye_y && y < eye_y + eye_h) {
         show_password = !show_password;

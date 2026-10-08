@@ -23,7 +23,8 @@ class AppConsole(RecordingConsole):
             assert "Could not save the account" not in self.text(),self.text()[-3000:]
             assert "Account database is invalid" not in self.text(),self.text()[-3000:]
             for marker in ('NOTES_IO_FAIL','FILES_IO_FAIL'):
-                assert marker not in self.text(),self.text()[-3000:]
+                position=self.text().find(marker)
+                assert position<0 or '\n' not in self.text()[position:],self.text()[-3000:]
         return changed
 
 
@@ -41,13 +42,12 @@ def run():
         fixture.ensure_directory('/home/gui-files')
         fixture.install_file('/home/gui-files/source.txt',b'GUI copy test')
         fixture.install_file('/home/notes-gui-original.txt',b'original GUI note')
-        fixture.save(disk)
         for name, target in [("notes_io", "/bin/notes_io.pol"),
                              ("files_io", "/bin/files_io.pol"),
                              ("notes_gui", "/bin/notes_gui.pol"),("files_gui", "/bin/files_gui.pol"),
                              ]:
-            subprocess.run(["python", "sdk/tools/pollikinstall.py", str(disk), target,
-                            f"build/{name}.pol"], cwd=ROOT, check=True)
+            fixture.install_file(target,(ROOT/f"build/{name}.pol").read_bytes())
+        fixture.save(disk)
         serial,monitor_port = port(),port()
         process = subprocess.Popen(["qemu-system-x86_64", "-accel", "tcg", "-cpu", "qemu64",
             "-m", "128", "-vga", "std", "-display", "none", "-nic", "none",
@@ -112,8 +112,12 @@ def run():
             mark=len(console.transcript);console.send('/bin/files_gui.pol /home/gui-files')
             console.wait_for('[files] ready',120,mark)
             before=capture('files-before').crop((187,533,837,599)).tobytes()
-            key('ctrl-n');after=capture('files-prompt').crop((187,533,837,599)).tobytes()
-            assert before!=after,'Files prompt did not reach the actual framebuffer'
+            key('ctrl-n');deadline=time.monotonic()+15
+            while True:
+                after=capture('files-prompt').crop((187,533,837,599)).tobytes()
+                if before!=after:break
+                assert time.monotonic()<deadline,'Files prompt did not reach the actual framebuffer'
+                console.pump(.1);time.sleep(.1)
             type_text('dest');key('ret');key('down');key('ctrl-c');key('up');key('ret');key('ctrl-v')
             key('delete');key('ctrl-z');key('ctrl-r');key('ctrl-a');type_text('renamed.txt');key('ret')
             key('ctrl-x');key('backspace');key('ctrl-v');capture('files-complete')

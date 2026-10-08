@@ -7,11 +7,15 @@
 #include "../../security.h"
 #include "tty.h"
 #include "scheduler.h"
+#include "process_internal.h"
+#include "console_fb.h"
+#include "mouse.h"
 #include "../../pollikfs.h"
 #include "../../vfs.h"
 #include "../../hal.h"
 
 typedef AccountRecord Account64;
+static int elevation_error;
 extern void kernel64_debug_bytes(const char *data,size_t length);
 
 static size_t text_length(const char *text) {
@@ -34,9 +38,19 @@ static int read_line(const char *prompt,char *buffer,size_t capacity,int secret)
     if (!capacity) return 0;
     zero(buffer,capacity);
     output(prompt);
+    uint64_t blink=scheduler64_ticks()/50;
+    if(secret==2)console_fb_elevation_draw(process64_elevation_name(),0,elevation_error,1);
     for (;;) {
         u8 key;
-        if (!tty64_pop(&key,1)) {
+        int has_key=(int)tty64_pop(&key,1);
+        if(secret==2){
+            MouseEvent64 event;
+            while(mouse64_pop(&event))if((event.kind&USER_INPUT_MOUSE_BUTTON)&&(event.changed&USER_MOUSE_BUTTON_LEFT)&&(event.buttons&USER_MOUSE_BUTTON_LEFT)){
+                int action=console_fb_elevation_button(event.x,event.y);if(action){key=action==1?27:'\r';has_key=1;}
+            }
+            uint64_t now=scheduler64_ticks()/50;if(now!=blink){blink=now;console_fb_elevation_draw(process64_elevation_name(),(unsigned)length,elevation_error,(int)(!(now&1)));}
+        }
+        if (!has_key) {
             hal_cpu_idle_once_disabled();
             continue;
         }
@@ -50,12 +64,14 @@ static int read_line(const char *prompt,char *buffer,size_t capacity,int secret)
         if ((key==8 || key==127) && length) {
             buffer[--length]=0;
             if (!secret) output("\b \b");
+            if(secret==2)console_fb_elevation_draw(process64_elevation_name(),(unsigned)length,elevation_error,1);
             continue;
         }
         if (key>=32 && key<127 && length+1<capacity) {
             buffer[length++]=(char)key;
             if (!secret) kernel64_debug_bytes((const char *)&key,1);
             else output("*");
+            if(secret==2){elevation_error=0;console_fb_elevation_draw(process64_elevation_name(),(unsigned)length,0,1);}
         }
     }
 }
@@ -151,12 +167,14 @@ int auth64_elevate(void) {
     output("[AUTH64] Run as administrator. Full application permissions.\r\n");
     if(account_load(&account)!=1)return 0;
     int accepted=0;
+    elevation_error=0;
     for(unsigned attempt=0;failures<5;attempt++) {
         if(!read_line("Administrator password (Esc cancels): ",password,sizeof(password),2))break;
         accepted=account_verify(&account,password);
         zero(password,sizeof(password));
         if(accepted){failures=0;break;}
         failures++;
+        elevation_error=1;
         output("Incorrect password.\r\n");
         uint64_t until=scheduler64_ticks()+100u*(attempt+1);
         while(scheduler64_ticks()<until)hal_cpu_idle_once_disabled();

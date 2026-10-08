@@ -273,8 +273,9 @@ void browser_js_init(DomNode *root){
     if(!node_class)JS_NewClassID(&node_class);JSClassDef definition={"PollikDOMNode",NULL,NULL,NULL,NULL};JS_NewClass(runtime,node_class,&definition);
     JSValue global=JS_GetGlobalObject(context),doc=wrap(root),console=JS_NewObject(context);
     /* QuickJS retains these entries for lazy property initialization. */
-    static const JSCFunctionListEntry functions[]={JS_CFUNC_MAGIC_DEF("getElementById",1,doc_method,D_ID),JS_CFUNC_MAGIC_DEF("querySelector",1,doc_method,D_QUERY),
-        JS_CFUNC_MAGIC_DEF("querySelectorAll",1,doc_method,D_ALL),JS_CFUNC_MAGIC_DEF("createElement",1,doc_method,D_CREATE),
+    /* wrap(root) already installs querySelector/querySelectorAll. QuickJS's
+     * lazy function-list API requires new properties and aborts on duplicates. */
+    static const JSCFunctionListEntry functions[]={JS_CFUNC_MAGIC_DEF("getElementById",1,doc_method,D_ID),JS_CFUNC_MAGIC_DEF("createElement",1,doc_method,D_CREATE),
         JS_CGETSET_MAGIC_DEF("title",doc_get,doc_set,D_TITLE),JS_CGETSET_MAGIC_DEF("body",doc_get,NULL,D_BODY)};
     JS_SetPropertyFunctionList(context,doc,functions,sizeof(functions)/sizeof(functions[0]));JS_SetPropertyStr(context,global,"document",doc);
     JS_SetPropertyStr(context,global,"window",JS_DupValue(context,global));JS_SetPropertyStr(context,console,"log",JS_NewCFunction(context,log_message,"log",1));

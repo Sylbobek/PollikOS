@@ -20,7 +20,7 @@ def main():
     command = [clang, "-std=c11", "-O0", "-g", "-fno-builtin",
                "-Wall", "-Wextra", "-Werror"]
     if os.name == "nt":
-        command.append("-fuse-ld=lld")
+        command += ["-fuse-ld=lld", "-D_UINTPTR_T_DEFINED"]
     command += ["tests/gui_registry.c", "kernel/gui/apps.c", "-o", str(executable)]
     print("Compile: " + subprocess.list2cmdline(command), flush=True)
     subprocess.run(command, cwd=ROOT, check=True)

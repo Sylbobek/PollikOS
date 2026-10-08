@@ -356,7 +356,7 @@ static void key(u8 code) {
             return;
         }
     }
-    if (code >= 59 && code < 59 + APP_COUNT) { open_app(code - 59); serial("APP keyboard open\n"); return; }
+    if (code >= 59 && code <= 68 && code < 59 + APP_COUNT) { open_app(code - 59); serial("APP keyboard open\n"); return; }
     if (code == 87) { if (top >= 0) toggle_maximize(top); return; }
     if (code == 1) {
         if (top == APP_POLLIKMARK) gui_app_key(top, code, shift, control);

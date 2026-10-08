@@ -75,6 +75,7 @@ static void files_refresh_entries(void) {
 
 void files_open_path(const char *path) {
     if (!path || !path[0]) return;
+    if(len(path)>=128){ui_notify("Files","Folder path is too long",ICON_WARNING);return;}
     u32 p = 0;
     while (path[p] && p < 127) { g_files_current_path[p] = path[p]; p++; }
     g_files_current_path[p] = 0;
@@ -97,13 +98,15 @@ static int files_has_extension(const char *name, const char *extension) {
     return 1;
 }
 
-static void files_entry_path(const FilesEntry *entry, char path[128]) {
+static int files_entry_path(const FilesEntry *entry, char path[128]) {
+    if(len(g_files_current_path)+len(entry->name)+2>128){path[0]=0;return 0;}
     u32 p = 0;
     while (g_files_current_path[p] && p < 127) { path[p] = g_files_current_path[p]; p++; }
     if (p > 0 && path[p - 1] != '/' && p < 127) path[p++] = '/';
     u32 n = 0;
     while (entry->name[n] && p < 127) path[p++] = entry->name[n++];
     path[p] = 0;
+    return 1;
 }
 
 static void files_launch_pol(const char *path) {
@@ -280,7 +283,7 @@ void files_click(int x, int y) {
             }
 
             char full_path[128];
-            files_entry_path(entry, full_path);
+            if(!files_entry_path(entry, full_path)){ui_notify("Files","File path is too long",ICON_WARNING);return;}
             int double_click = g_files_last_click_valid &&
                 str_equal(g_files_last_click_path, full_path) &&
                 (u32)(ticks - g_files_last_click_tick) <= 75u;
@@ -355,7 +358,8 @@ int files_drag_path(int x,int y,char path[128],char name[64],int *is_dir){
     GuiAppSize s=gui_app_size(APP_FILES);AppRect list=files_list(s.width,s.height);
     if(!app_hit(list,x,y)||(y-list.y)%FILES_ROW_HEIGHT>=FILES_ROW_BODY)return 0;
     int row=first_row+(y-list.y)/FILES_ROW_HEIGHT;if(row!=g_files_selected)return 0;
-    files_entry_path(&g_files_entries[row],path);copy(name,g_files_entries[row].name);*is_dir=g_files_entries[row].is_dir;
+    if(!files_entry_path(&g_files_entries[row],path))return 0;
+    copy(name,g_files_entries[row].name);*is_dir=g_files_entries[row].is_dir;
     return 1;
 }
 void files_cancel_click(void){g_files_last_click_valid=0;}
@@ -367,7 +371,7 @@ int files_drop_target(int x,int y,char path[128]){
     if(!app_hit(list,x,y))return 0;
     int row=first_row+(y-list.y)/FILES_ROW_HEIGHT;
     if(row<g_files_count&&(y-list.y)%FILES_ROW_HEIGHT<FILES_ROW_BODY&&g_files_entries[row].is_dir)
-        files_entry_path(&g_files_entries[row],path);
+        return files_entry_path(&g_files_entries[row],path);
     else copy(path,g_files_current_path);
     return 1;
 }

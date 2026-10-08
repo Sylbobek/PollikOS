@@ -16,4 +16,9 @@ int console_fb_read_pixels(unsigned x, unsigned y, unsigned count, uint32_t *pix
 int console_fb_write_pixels(unsigned x, unsigned y, unsigned count, const uint32_t *pixels_in);
 void console_fb_draw_window_frame(unsigned x, unsigned y, unsigned width, unsigned height,
                                   const char *title);
+void console_fb_elevation_capture(void);
+void console_fb_elevation_save_background(void);
+void console_fb_elevation_draw(const char *application,unsigned length,int error,int caret);
+int console_fb_elevation_button(int x,int y); /* 1 Cancel, 2 submit. */
+void console_fb_elevation_end(void);
 #endif

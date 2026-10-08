@@ -331,9 +331,9 @@ static void poll_remote(void) {
         http_document[http_document_length]=0;
         int kind=http_request_kind;
         if(kind==0) {
-            printf("[browser] page status=%ld url=%s\n",pollikos_http_status(http_handle),http_url);
             char final_url[ADDRESS_LIMIT+1];
             if(pollikos_http_url(http_handle,final_url,sizeof(final_url))>=0){strcpy(http_url,final_url);strcpy(address,final_url);if(history_count)strcpy(page_history[history_index],final_url);}
+            printf("[browser] page status=%ld url=%s\n",pollikos_http_status(http_handle),http_url);
             int loaded=prepare_remote_document(http_url,http_document,(int)http_document_length);
             http_release();
             if(!loaded) {remote_resource_stage=0;render_page();return;}
@@ -452,7 +452,7 @@ static void pump_remote_resources(void) {
             layout_compute(document,view_w,&page_height);scroll_y=0;
             snprintf(status,sizeof(status),"HTTP page: %u CSS, %u JavaScript resources",
                      remote_style_count,remote_script_count);
-            puts("[browser] HTTP document loaded");
+            printf("[browser] HTTP document loaded: %s\n",browser_js_title());
             render_page();
             return;
         }
@@ -498,7 +498,7 @@ static void show_bookmarks(void) {
         char escaped[ADDRESS_LIMIT*6+1];size_t at=0;
         for(const char *p=bookmarks[i];*p;p++){const char *entity=*p=='&'?"&amp;":*p=='<'?"&lt;":*p=='>'?"&gt;":*p=='\"'?"&quot;":*p=='\''?"&#39;":NULL;
             if(entity){size_t n=strlen(entity);memcpy(escaped+at,entity,n);at+=n;}else escaped[at++]=*p;}escaped[at]=0;
-        if(used+at*2+32>=65536)break;
+        if(at*2+sizeof("<p><a href=\"\"></a></p></body></html>")>65536-used)break;
         used+=(size_t)snprintf(html+used,65536-used,"<p><a href=\"%s\">%s</a></p>",escaped,escaped);
     }
     strcpy(html+used,"</body></html>");
@@ -683,7 +683,7 @@ static void input_key(uint32_t key,uint32_t modifiers) {
 }
 
 int main(int argc,char **argv) {
-    int64_t pixels=pollikos_window_create(BROWSER_W,BROWSER_H,"Pollik Browser");
+    int64_t pixels=pollikos_window_create(BROWSER_W,BROWSER_H,"Pollik Web");
     if(pixels<0) { puts("[browser] cannot create window");return 1; }
     canvas=(PollikCanvas){(u32 *)(uintptr_t)pixels,BROWSER_W,BROWSER_H};
     view_x=12;view_y=100;view_w=BROWSER_W-24;view_h=BROWSER_H-139;

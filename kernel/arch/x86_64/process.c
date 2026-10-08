@@ -71,12 +71,15 @@ void process64_internal_transition(Process64 *p, Thread64State next) {
 }
 static const Credentials kernel_credentials={0};
 static uint64_t elevation_requester,elevation_session;
+static char elevation_path[USER_PATH_MAX],elevation_name[USER_WINDOW_TITLE_MAX];
+const char *process64_elevation_name(void){return elevation_name[0]?elevation_name:"Application";}
 void process64_complete_elevation(int accepted) {
     for(size_t i=0;i<process64_capacity();i++) {
         Process64 *p=slots[i];
         if(p && p->pid==elevation_requester && p->credentials.session==elevation_session &&
            elevation_session==security_session_id() && !process64_internal_dead(p)) {
             p->admin_spawn_session=accepted?elevation_session:0;
+            for(unsigned n=0;n<sizeof(p->admin_spawn_path);n++)p->admin_spawn_path[n]=accepted?elevation_path[n]:0;
             p->thread.frame.rax=accepted?0:(uint64_t)-(int64_t)USER_EPERM;
             break;
         }
@@ -510,6 +513,10 @@ static int64_t spawn_request(Process64 *parent, UserFrame *frame, int with_group
     char path[USER_PATH_MAX];
     int64_t error = path64_user(parent, frame->rdi, path);
     if (error) return error;
+    if(elevated&&parent->admin_spawn_path[0]){
+        unsigned n=0;while(path[n]&&path[n]==parent->admin_spawn_path[n])n++;
+        if(path[n]!=parent->admin_spawn_path[n])return -USER_EPERM;
+    }
     size_t argc = 0, envc = 0, storage_used = 0;
     error = copy_user_string_array(&parent->space, frame->rsi, spawn_argv,
                                    STARTUP_MAX_ARGS, &storage_used, &argc);
@@ -886,7 +893,19 @@ int process64_trap(UserFrame *frame, uint64_t cr2) {
             unsigned requested=frame->rdi==USER_SESSION_LOCK?SESSION_LOCKED:
                 frame->rdi==USER_SESSION_LOGOUT?SESSION_LOGOUT:
                 frame->rdi==USER_SESSION_PASSWORD?SESSION_PASSWORD:
-                frame->rdi==USER_SESSION_ELEVATE?SESSION_ELEVATE:SESSION_NONE;
+                (frame->rdi==USER_SESSION_ELEVATE||frame->rdi==USER_SESSION_ELEVATE_APP)?SESSION_ELEVATE:SESSION_NONE;
+            if(requested==SESSION_ELEVATE){
+                if(!security_has(&process->credentials,CAP_SESSION)){frame->rax=(uint64_t)-(int64_t)USER_EPERM;goto session_done;}
+                for(unsigned n=0;n<sizeof(elevation_path);n++)elevation_path[n]=0;
+                for(unsigned n=0;n<sizeof(elevation_name);n++)elevation_name[n]=0;
+                if(frame->rdi==USER_SESSION_ELEVATE_APP){
+                    int64_t error=path64_user(process,frame->rsi,elevation_path);
+                    if(error){frame->rax=(uint64_t)error;goto session_done;}
+                    const char *name=elevation_path;for(unsigned n=0;elevation_path[n];n++)if(elevation_path[n]=='/')name=elevation_path+n+1;
+                    unsigned n=0;while(name[n]&&name[n]!='.'&&n<sizeof(elevation_name)-1){elevation_name[n]=name[n];n++;}
+                    if(elevation_name[0]>='a'&&elevation_name[0]<='z')elevation_name[0]-=32;
+                }
+            }
             frame->rax=security_session_request(&process->credentials,requested)?0:(uint64_t)-(int64_t)USER_EPERM;
             if(requested==SESSION_ELEVATE && frame->rax==0) {
                 elevation_requester=process->pid;elevation_session=process->credentials.session;
@@ -895,6 +914,7 @@ int process64_trap(UserFrame *frame, uint64_t cr2) {
             if(security_session_state()!=SESSION_ACTIVE && process->credentials.session)
                 scheduler64_park(&process->thread,frame);
         }
+        session_done:;
     } else if (frame->rax == USER_ABI_INFO) {
         uint32_t requested_size = 0;
         if (copy_from_user64(&process->space, &requested_size, frame->rdi,

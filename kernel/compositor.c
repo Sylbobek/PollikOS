@@ -6,6 +6,7 @@
 #include "klog.h"
 #include "desktop_items.h"
 #include "auth.h"
+#include "../common/blur.h"
 #include "ui_animation.h"
 #include "trash.h"
 #include "cursor_sprites.h"
@@ -18,6 +19,7 @@ static u32 *theme_wallpapers[2]; /* scaled once at boot; theme switch is a point
 static u32 *auth_backdrop;
 static u32 auth_backdrop_pages;
 static int auth_backdrop_theme = -1, auth_backdrop_attempted;
+static int auth_scene_snapshot;
 #define DOCK_CACHE_WIDTH (NUM_APPS * 68 + 144)
 static u32 dock_background[DOCK_CACHE_WIDTH * 145];
 static int dock_background_valid;
@@ -974,13 +976,14 @@ void compositor_invalidate_dock(void) {
 /* Blur at quarter resolution once per locked session/theme, then cache the
  * smoothly upscaled result. No PNG decoding or blur work on password edits. */
 static void compositor_auth_backdrop(int width, int height) {
-    const u32 *source = theme_wallpapers[shell.theme];
+    const u32 *source = auth_scene_snapshot?pixels:theme_wallpapers[shell.theme];
     if (!source) source = wallpaper;
     if (auth_backdrop_theme != shell.theme) auth_backdrop_attempted = 0;
     if (!auth_backdrop_attempted) {
         auth_backdrop_attempted = 1;
         auth_backdrop_theme = shell.theme;
-        int sw = (width + 3) / 4, sh = (height + 3) / 4;
+        int scale=auth_scene_snapshot?2:4,radius=auth_scene_snapshot?1:3;
+        int sw = (width + scale-1) / scale, sh = (height + scale-1) / scale;
         u32 size = (u32)sw * sh * sizeof(u32);
         u32 *small = kmalloc(size), *temp = kmalloc(size);
         if (!auth_backdrop) {
@@ -989,49 +992,37 @@ static void compositor_auth_backdrop(int width, int height) {
         }
         if (small && temp && auth_backdrop) {
             for (int y = 0; y < sh; y++)
-                for (int x = 0; x < sw; x++) small[y * sw + x] = source[y * 4 * width + x * 4];
+                for (int x = 0; x < sw; x++) small[y * sw + x] = source[y * scale * width + x * scale];
             /* Separable 7x7 box, clamped at every edge. Scratch is released
              * immediately; only the full-size presentation cache survives. */
-            for (int pass = 0; pass < 2; pass++) {
-                for (int y = 0; y < sh; y++) {
-                    for (int x = 0; x < sw; x++) {
-                        int r = 0, g = 0, b = 0;
-                        for (int k = -3; k <= 3; k++) {
-                            int sx = x + (pass == 0 ? k : 0);
-                            int sy = y + (pass == 1 ? k : 0);
-                            if (sx < 0) sx = 0;
-                            if (sx >= sw) sx = sw - 1;
-                            if (sy < 0) sy = 0;
-                            if (sy >= sh) sy = sh - 1;
-                            u32 c = small[sy * sw + sx];
-                            r += (c >> 16) & 255; g += (c >> 8) & 255; b += c & 255;
-                        }
-                        temp[y * sw + x] = (u32)((r / 7 << 16) | (g / 7 << 8) | (b / 7));
-                    }
-                }
-                u32 *swap = small; small = temp; temp = swap;
-            }
+            pollik_box_blur(small,temp,sw,sh,radius);
             for (int y = 0; y < height; y++) {
-                int sy = y / 4, ny = sy + 1 < sh ? sy + 1 : sy;
+                int sy = y / scale, ny = sy + 1 < sh ? sy + 1 : sy;
                 int shade = 64 + y * 48 / height;
                 for (int x = 0; x < width; x++) {
-                    int sx = x / 4, nx = sx + 1 < sw ? sx + 1 : sx;
-                    u32 a = blend(small[sy * sw + sx], small[sy * sw + nx], (x & 3) * 64);
-                    u32 b = blend(small[ny * sw + sx], small[ny * sw + nx], (x & 3) * 64);
-                    u32 tinted = blend(blend(a, b, (y & 3) * 64), 0x765591, 112);
-                    auth_backdrop[y * width + x] = blend(tinted, 0x100b20, shade);
+                    int sx = x / scale, nx = sx + 1 < sw ? sx + 1 : sx;
+                    u32 a = blend(small[sy * sw + sx], small[sy * sw + nx], (x % scale) * 256/scale);
+                    u32 b = blend(small[ny * sw + sx], small[ny * sw + nx], (x % scale) * 256/scale);
+                    u32 color=blend(a,b,(y % scale)*256/scale);
+                    auth_backdrop[y * width + x] = auth_scene_snapshot?blend(color,0x100b20,112):blend(blend(color,0x765591,112),0x100b20,shade);
                 }
             }
-            serial("AUTH: filesystem wallpaper blur cached\n");
+            serial(auth_scene_snapshot?"AUTH: frozen desktop blur cached\n":"AUTH: filesystem wallpaper blur cached\n");
         } else {
             if (auth_backdrop) pmm_free_pages((uintptr_t)auth_backdrop, auth_backdrop_pages);
             auth_backdrop = 0;
+            auth_scene_snapshot=0;
+            source=theme_wallpapers[shell.theme]?theme_wallpapers[shell.theme]:wallpaper;
             serial("AUTH: blur cache unavailable; using wallpaper\n");
         }
         if (small) kfree(small);
         if (temp) kfree(temp);
     }
     memcpy(pixels, auth_backdrop ? auth_backdrop : source, (u32)width * height * sizeof(u32));
+}
+void compositor_capture_admin_background(void){
+    auth_scene_snapshot=1;auth_backdrop_attempted=0;
+    compositor_auth_backdrop(shell.width,shell.height);
 }
 
 void compositor_paint(int full) {
@@ -1056,11 +1047,13 @@ void compositor_paint(int full) {
         return;
     }
     if (auth_backdrop) {
+        if(auth_scene_snapshot)memset(auth_backdrop,0,auth_backdrop_pages*PMM_PAGE_SIZE);
         pmm_free_pages((uintptr_t)auth_backdrop, auth_backdrop_pages);
         auth_backdrop = 0;
     }
     auth_backdrop_theme = -1;
     auth_backdrop_attempted = 0;
+    auth_scene_snapshot=0;
     /* Clock changes repaint only the 32-pixel menu strip, preserving the
      * cached windows, desktop icons, and Dock while the user is idle. */
     if (full == 3 && !shell.scene_dirty && !shell.alttab_open && !ui_anim_has_active() && !control_center_active()) {

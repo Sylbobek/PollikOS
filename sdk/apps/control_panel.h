@@ -14,6 +14,7 @@ static AppSearchInput panel_input;
 #define panel_query panel_input.text
 static unsigned panel_pins;
 static int panel_context=-1,panel_hover=-1,panel_blink;
+static int panel_context_row;
 static long panel_edit_started;
 static long panel_profile_started;
 static int panel_profile_origin;
@@ -24,7 +25,7 @@ static const struct {const char *name,*path;int icon;} panel_apps[]={
 };
 static int panel_matches(unsigned id){return panel_query[0]?app_search_matches(panel_apps[id].name,panel_query):(panel_pins&(1u<<panel_apps[id].icon))!=0;}
 static int panel_app_at(int row){for(unsigned i=0;i<sizeof(panel_apps)/sizeof(panel_apps[0]);i++)if(panel_matches(i)&&row--==0)return (int)i;return -1;}
-static void panel_load_pins(void){char text[24]={0};FILE *f=fopen("/home/.config/launcher.conf","rb");panel_pins=0;if(f){fread(text,1,sizeof(text)-1,f);fclose(f);panel_pins=app_search_parse_pins(text);}}
+static void panel_load_pins(void){char text[24]={0};FILE *f=fopen("/home/.config/launcher.conf","rb");panel_pins=APP_SEARCH_DEFAULT_PINS;if(f){fread(text,1,sizeof(text)-1,f);fclose(f);panel_pins=app_search_parse_pins(text);}}
 static void panel_pin(unsigned id){
  unsigned pins=panel_pins^(1u<<panel_apps[id].icon);char text[24];int n=snprintf(text,sizeof(text),"pins=%u\n",pins);
  mkdir("/home/.config",0700);FILE *f=fopen("/home/.config/launcher.conf.pending","wb");if(!f)return;
@@ -35,7 +36,9 @@ static int panel_query_width(int count){char text[32];int i=0;while(panel_query[
 static void panel_edited(void){panel_edit_started=pollikos_monotonic_ms();panel_blink=1;panel_selected=0;}
 static int panel_search_width(PollikCanvas *c){return c->width>=636?220:(int)c->width-404;}
 static int panel_left(PollikCanvas *c){int sw=panel_search_width(c);return ((int)c->width-380-sw-12)/2+sw+12;}
-static void panel_profile_set(int open){panel_profile_origin=panel_profile_slide;panel_profile=open;panel_profile_started=pollikos_monotonic_ms();}
+static void panel_profile_set(int open){if(open){panel_context=-1;panel_list=0;}panel_profile_origin=panel_profile_slide;panel_profile=open;panel_profile_started=pollikos_monotonic_ms();}
+static int panel_context_x(PollikCanvas *c){return panel_left(c)+8;}
+static int panel_context_y(PollikCanvas *c){int y=40+112+panel_context_row*30,limit=(int)c->height-128;return y>limit?limit:y;}
 static void panel_toggle(void){panel_capture=0;panel_profile=panel_profile_slide=0;panel_search_focus=0;
  app_search_reset(&panel_input);panel_selected=0;panel_context=panel_hover=-1;panel_origin=panel_slide;panel_open=!panel_open;
  if(panel_open)panel_load_pins();panel_started=pollikos_monotonic_ms();}
@@ -87,11 +90,6 @@ static void panel_draw(PollikCanvas *c){
   for(int dot=0;dot<3;dot++)pollik_ui_fill(c,sx+sw-15,y+118+row*30+dot*4,2,2,0xb4bdcf);row++;
  }
  if(!row&&panel_query[0])pollik_ui_text(c,sx+16,y+117,"No results",0xb4bdcf);
- if(panel_context>=0){
-  panel_round(c,sx+8,y+110,sw-16,104,0x494c63);
-  pollik_ui_text(c,sx+16,y+120,"Open",0xf0f2f7);pollik_ui_text(c,sx+16,y+154,"Run as admin",0xf0f2f7);
-  pollik_ui_text(c,sx+16,y+188,panel_pins&(1u<<panel_apps[panel_context].icon)?"Unpin":"Pin",0xf0f2f7);
- }
  /* The canvas clips each span. Restore menu bar after the panel slides up. */
  panel_round(c,x,y,380,380,0x252a3b);
  pollik_ui_text(c,x+18,y+12,"Control Center",0xf0f2f7);
@@ -99,8 +97,6 @@ static void panel_draw(PollikCanvas *c){
   panel_round(c,x+12+i*180,y+42,176,68,0x34394d);
   pollik_ui_text(c,x+24+i*180,y+50,i?"Bluetooth":"Wi-Fi",0xf0f2f7);
   pollik_ui_text(c,x+24+i*180,y+76,"No adapter",0xb4bdcf);
-  panel_round(c,x+155+i*180,y+50,24,26,0x494c63);
-  pollik_ui_text(c,x+163+i*180,y+52,">",0xffffff);
  }
  int blocked=(int)pollikos_device(USER_DEVICE_AIRPLANE_GET,0);
  panel_round(c,x+12,y+120,356,34,blocked?0x6854bf:0x34394d);
@@ -113,7 +109,6 @@ static void panel_draw(PollikCanvas *c){
  pollik_ui_fill(c,x+16,y+215,348,1,0x54596c);
  int volume=(int)pollikos_device(USER_DEVICE_VOLUME_GET,0);char text[20];snprintf(text,sizeof(text),"Volume %d",volume);
  pollik_ui_text(c,x+24,y+224,text,0xf0f2f7);
- panel_round(c,x+334,y+220,28,28,panel_list==3?0x6854bf:0x494c63);pollik_ui_text(c,x+344,y+224,">",0xffffff);
  pollik_ui_fill(c,x+24,y+264,300,5,0x4b5064);pollik_ui_fill(c,x+24,y+264,volume*3,5,0xa797f0);
  panel_round(c,x+18+volume*3,y+257,12,19,0xffffff);
  if(panel_list==3){
@@ -125,12 +120,17 @@ static void panel_draw(PollikCanvas *c){
  }else pollik_ui_text(c,x+24,y+294,pollikos_device(USER_DEVICE_OUTPUT_GET,0)?"Output: AC'97 PCM":"Output: PC Speaker",0xb4bdcf);
  panel_round(c,x+12,y+336,356,34,0x34394d);
  panel_round(c,x+28,y+341,12,12,0xb4bdcf);panel_round(c,x+22,y+354,24,11,0xb4bdcf);
- pollik_ui_text(c,x+62,y+343,"Profile",0xf0f2f7);pollik_ui_text(c,x+340,y+343,panel_profile?"v":"^",0xf0f2f7);
+ pollik_ui_text(c,x+62,y+343,"Profile",0xf0f2f7);
  if(panel_profile_slide){
   int my=y+330-panel_profile_slide;
   panel_round(c,x+12,my,356,panel_profile_slide,0x494c63);
   const char *labels[]={"Turn off","Restart","Logout"};
   for(int i=0;i<3;i++)if(i*32+24<=panel_profile_slide)pollik_ui_text(c,x+24,my+6+i*32,labels[i],0xf0f2f7);
+ }
+ if(panel_context>=0){int mx=panel_left(c)+8,my=114+panel_context_row*30,limit=(int)c->height-128;if(my>limit)my=limit;
+  panel_round(c,mx,my,236,120,0x252a3b);
+  const char *items[]={"Open","Run as admin",panel_pins&(1u<<panel_apps[panel_context].icon)?"Unpin":"Pin"};
+  for(int i=0;i<3;i++){panel_round(c,mx+8,my+8+i*36,220,32,0x34394d);pollik_ui_text(c,mx+20,my+15+i*36,items[i],0xf0f2f7);}
  }
 }
 static void panel_launch(unsigned id){
@@ -138,7 +138,7 @@ static void panel_launch(unsigned id){
 }
 static void panel_launch_admin(unsigned id){
  const char *argv[]={panel_apps[id].path,0};
- if(pollikos_session_control(USER_SESSION_ELEVATE)<0)return;
+ if(pollikos_session_elevate(panel_apps[id].path)<0)return;
  long pid=pollikos_spawn_rights(panel_apps[id].path,argv,0,USER_CAP_ADMIN_ALL);
  if(pid>0){printf("[desktop] administrator launched %s pid=%ld\n",panel_apps[id].path,pid);panel_toggle();}
  else puts("[desktop] administrator launch failed");
@@ -160,6 +160,10 @@ static int panel_pointer(PollikCanvas *c,int px,int py,int pressed){
  if(pressed&&py>=0&&py<38&&px>=(int)c->width/2-70&&px<(int)c->width/2+70){panel_toggle();return 1;}
  if(!panel_open&&!panel_slide)return 0;
  if(!pressed)return 1;
+ if(panel_context>=0){int mx=px-panel_context_x(c),my=py-panel_context_y(c);unsigned id=(unsigned)panel_context;
+  if(mx>=0&&mx<236&&my>=0&&my<120){if(my>=8&&my<112&&(my-8)%36<32){int action=(my-8)/36;panel_context=-1;if(action==2)panel_pin(id);else if(action==1)panel_launch_admin(id);else panel_launch(id);}return 1;}
+  panel_context=-1;
+ }
  int sw=panel_search_width(c),ly=py-y;
  if(px>=x-sw-12&&px<x-12&&ly>=0&&ly<330){
   if(panel_slide!=256)return 1;if(panel_profile)panel_profile_set(0);
@@ -168,11 +172,7 @@ static int panel_pointer(PollikCanvas *c,int px,int py,int pressed){
    int at=0,position=px-(x-sw-12)-16+panel_query_width(start);
    while(panel_query[at]&&panel_query_width(at+1)<position)at++;app_search_select(&panel_input,at,0);panel_edited();return 1;}
   panel_search_focus=0;
-  if(panel_context>=0){unsigned id=(unsigned)panel_context;panel_context=-1;
-   if(ly>=110&&ly<212){int action=(ly-110)/34;if(action==2)panel_pin(id);else if(action==1)panel_launch_admin(id);else panel_launch(id);}
-   return 1;
-  }
-  if(ly>=112){int id=panel_app_at((ly-112)/30);if(id>=0){if(px>=x-12-32)panel_context=id;else panel_launch((unsigned)id);}}
+  if(ly>=112){int id=panel_app_at((ly-112)/30);if(id>=0){if(px>=x-12-32){panel_profile=panel_profile_slide=0;panel_list=0;panel_context=id;panel_context_row=(ly-112)/30;}else panel_launch((unsigned)id);}}
   return 1;
  }
  if(px<x||px>=x+380||py<y||py>=y+380){if(panel_open)panel_toggle();return 1;}
@@ -189,12 +189,13 @@ static int panel_pointer(PollikCanvas *c,int px,int py,int pressed){
  }
  if(ly>=42&&ly<110){
   int radio=lx>=192?2:1;
-  if((lx>=155&&lx<179)||(lx>=335&&lx<359)){
+  if(lx>=12&&lx<368){
+   panel_profile=panel_profile_slide=0;
    panel_list=panel_list==radio?0:radio;
    (void)pollikos_device(radio==1?USER_DEVICE_WIFI_SCAN:USER_DEVICE_BT_SCAN,0);
-  }else (void)pollikos_device(radio==1?USER_DEVICE_WIFI_SET:USER_DEVICE_BT_SET,1);
+  }
  }else if(ly>=120&&ly<154){(void)pollikos_device(USER_DEVICE_AIRPLANE_SET,!pollikos_device(USER_DEVICE_AIRPLANE_GET,0));}
- else if(lx>=334&&ly>=220&&ly<250)panel_list=panel_list==3?0:3;
+ else if(lx>=12&&lx<368&&ly>=220&&ly<250){panel_profile=panel_profile_slide=0;panel_list=panel_list==3?0:3;}
  else if(ly>=252&&ly<281){panel_capture=1;int volume=(lx-24)/3;if(volume<0)volume=0;if(volume>100)volume=100;(void)pollikos_device(USER_DEVICE_VOLUME_SET,volume);}
  else if(panel_list==3&&ly>=290&&ly<318){(void)pollikos_device(USER_DEVICE_OUTPUT_SET,lx>=192);}
  return 1;

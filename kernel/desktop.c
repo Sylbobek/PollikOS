@@ -23,8 +23,9 @@
 #include "../common/app_search.h"
 
 static int desktop_ready;
+void app_host_capture_admin_background(void){compositor_paint(1);compositor_capture_admin_background();}
 unsigned app_host_launcher_pins(void){
-    char text[24]={0};int fd=vfs_open("/home/.config/launcher.conf",O_RDONLY);if(fd<0)return 0;
+    char text[24]={0};int fd=vfs_open("/home/.config/launcher.conf",O_RDONLY);if(fd<0)return APP_SEARCH_DEFAULT_PINS;
     int n=vfs_read(fd,text,sizeof(text)-1);vfs_close(fd);if(n<=0)return 0;return app_search_parse_pins(text);
 }
 int app_host_launcher_set_pins(unsigned pins){
@@ -1305,7 +1306,7 @@ int desktop_poll(int network_changed) {
         if (w->open && w->visible && !w->minimized) active_mask |= 1u << id;
     }
     u64 phase_start = wm_time_us();
-    u32 changed_apps = gui_apps_poll_mask(active_mask);
+    u32 changed_apps = auth_is_active()?0:gui_apps_poll_mask(active_mask);
     u32 app_update_us = (u32)(wm_time_us() - phase_start);
     for (int id = 0; id < APP_COUNT; id++) {
         Window *w = wm_get_window(id);

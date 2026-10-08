@@ -21,6 +21,7 @@ static AppSearchInput cc_input;
 #define cc_query cc_input.text
 static unsigned cc_pins;
 static int cc_context=-1,cc_hover=-1,cc_hot=-1,cc_blink;
+static int cc_context_row;
 static u32 cc_edit_started;
 enum { WIDTH=400,HEIGHT=448,DURATION=240,DETAIL_DURATION=180,
        SEARCH_WIDTH=220,SEARCH_HEIGHT=452,DETAIL_WIDTH=248,DETAIL_GAP=16 };
@@ -38,11 +39,14 @@ static int detail_width(void){int w=ui_bridge_screen_width()-left()-WIDTH-DETAIL
 static int detail_height(int kind){return kind==3?204:kind==4?184:176;}
 static int detail_top(int kind){return kind==3?228:kind==4?248:18;}
 static int detail_left(void){return left()+WIDTH+DETAIL_GAP+(256-cc_detail_slide)*12/256;}
+static int context_left(void){return search_left()+SEARCH_WIDTH+8;}
+static int context_top(void){int y=116+cc_context_row*30,limit=ui_bridge_screen_height()-top()-128;if(y>limit)y=limit;return y<18?18:y;}
 static void damage(void){
     int x=search_left()-8;
     int right=left()+WIDTH+DETAIL_GAP+detail_width()+16;
     if(right>ui_bridge_screen_width())right=ui_bridge_screen_width();
-    request_partial_redraw(x,32,right-x,HEIGHT+48);
+    int h=HEIGHT+48;if(cc_context>=0&&context_top()+132>h)h=context_top()+132;
+    request_partial_redraw(x,32,right-x,h);
 }
 static void detail_set(int kind){
     cc_list=kind;cc_detail_origin=cc_detail_slide;cc_detail_started=wm_time_ms();cc_hot=-1;
@@ -93,21 +97,6 @@ static void panel(int x,int y,int w,int h,int radius){
     ui_bridge_roundrect(x,y,w,h,radius,panel_color());
 }
 static void card(int y,int h){ui_bridge_roundrect(left()+16,top()+y,WIDTH-32,h,16,card_color());}
-static void detail_button(int x,int y,int kind){
-    ThemeColors *t=ui_theme();int active=cc_list==kind,hover=cc_hot==kind;
-    u32 fill=blend(card_color(),t->accent,active?80:hover?44:20);
-    u32 arrow=active||hover?t->accent_hover:t->text_secondary;
-    u32 edge=blend(fill,arrow,180);
-    int bx=left()+x,by=top()+y;
-    ui_bridge_roundrect(bx,by,30,30,10,fill);
-    /* A 8x12 chevron centered on the button, independent of font bearings. */
-    for(int row=0;row<12;row++){
-        int step=row<6?row:11-row;
-        int px=bx+(active?16-step:11+step),py=by+9+row;
-        ui_bridge_rect(px,py,3,1,edge);
-        ui_bridge_rect(px+1,py,1,1,arrow);
-    }
-}
 static void slider(int y,int value,int minimum){
     ThemeColors *t=ui_theme();int x=left()+30,w=WIDTH-60;
     int offset=(w-1)*(value-minimum)/(100-minimum);
@@ -179,18 +168,11 @@ void control_center_draw(void){
         row++;
     }
     if(!row&&cc_query[0])ui_bridge_text(sx+20,y+125,"No applications",t->text_muted,1);
-    if(cc_context>=0){
-        ui_bridge_roundrect(sx+8,y+112,SEARCH_WIDTH-16,106,8,t->surface_secondary);
-        ui_bridge_text(sx+18,y+122,"Open",t->text,1);
-        ui_bridge_text(sx+18,y+156,"Run as admin",t->text,1);
-        ui_bridge_text(sx+18,y+190,cc_pins&(1u<<cc_context)?"Unpin":"Pin to recommended",t->text,1);
-    }
     panel(x,y,WIDTH,HEIGHT,24);
     for(int i=0;i<2;i++){
-        ui_bridge_roundrect(x+16+i*184,y+18,176,70,16,card_color());
+        ui_bridge_roundrect(x+16+i*184,y+18,176,70,16,blend(card_color(),t->accent,cc_list==i+1?36:cc_hot==i+1?18:0));
         label(30+i*184,28,i?"Bluetooth":"Wi-Fi",t->text);
         label(30+i*184,58,"No adapter",t->text_secondary);
-        detail_button(154+i*184,26,i+1);
     }
     card(104,60);label(30,116,"Connection",t->text);
     NetworkInterface *iface=net_manager_get_active_iface();
@@ -202,8 +184,12 @@ void control_center_draw(void){
     card(284,92);label(30,298,"Volume",cc_hot==3||cc_list==3?t->accent_hover:t->text);
     number(b,audio_get_volume());label(322,298,b,t->text_secondary);slider(340,audio_get_volume(),0);
     card(392,40);avatar(x+28,y+400,t->text_secondary);label(64,402,"Profile",t->text);
-    detail_button(346,396,4);
     detail_draw(clip);
+    if(cc_context>=0){int mx=context_left(),my=y+context_top();
+        panel(mx,my,236,120,16);
+        const char *actions[]={"Open","Run as admin",cc_pins&(1u<<cc_context)?"Unpin":"Pin to recommended"};
+        for(int i=0;i<3;i++){ui_bridge_roundrect(mx+8,my+8+i*36,220,32,10,card_color());ui_bridge_text(mx+20,my+15+i*36,actions[i],t->text,1);}
+    }
     graphics_set_clip(old);
 }
 static int update_slider(int x){
@@ -219,7 +205,7 @@ int control_center_pointer(int x,int y,int down){
     if(hover<0||app_at(hover)<0)hover=-1;
     if(hover!=cc_hover){cc_hover=hover;damage();}
     int lx=x-left(),ly=y-top(),hot=-1;
-    if(ly>=26&&ly<56){if(lx>=154&&lx<184)hot=1;else if(lx>=338&&lx<368)hot=2;}
+    if(ly>=18&&ly<88){if(lx>=16&&lx<192)hot=1;else if(lx>=200&&lx<376)hot=2;}
     if(lx>=16&&lx<WIDTH-16&&ly>=284&&ly<330)hot=3;
     if(lx>=16&&lx<WIDTH-16&&ly>=392&&ly<432)hot=4;
     if(cc_detail_slide==256&&x>=detail_left()+16&&x<detail_left()+detail_width()-16){
@@ -234,6 +220,17 @@ int control_center_pointer(int x,int y,int down){
 int control_center_click(int x,int y){
     if(!cc_shown)return 0;
     int lx=x-left(),ly=y-top();
+    if(cc_context>=0){
+        int mx=x-context_left(),my=ly-context_top(),id=cc_context;
+        if(mx>=0&&mx<236&&my>=0&&my<120){
+            if(my>=8&&my<112&&(my-8)%36<32){int action=(my-8)/36;damage();cc_context=-1;
+                if(action==2){unsigned pins=cc_pins^(1u<<id);if(app_host_launcher_set_pins(pins))cc_pins=pins;damage();}
+                else {control_center_close();if(action==1)auth_run_admin(id);else app_host_open(id);}
+            }
+            return 1;
+        }
+        damage();cc_context=-1;
+    }
     if(cc_detail_kind && x>=detail_left() && x<detail_left()+detail_width() &&
        ly>=detail_top(cc_detail_kind) && ly<detail_top(cc_detail_kind)+detail_height(cc_detail_kind)){
         if(cc_animating || cc_detail_slide!=256 || cc_detail_kind!=cc_list)return 1;
@@ -257,15 +254,8 @@ int control_center_click(int x,int y){
             app_search_select(&cc_input,position,0);edited();return 1;
         }
         cc_search_focus=0;
-        if(cc_context>=0){int id=cc_context;cc_context=-1;
-            if(ly>=112&&ly<214){int action=(ly-112)/34;
-                if(action==2){unsigned pins=cc_pins^(1u<<id);if(app_host_launcher_set_pins(pins))cc_pins=pins;}
-                else {control_center_close();if(action==1)auth_run_admin(id);else app_host_open(id);return 1;}
-            }
-            damage();return 1;
-        }
         if(ly>=116){int id=app_at((ly-116)/30);
-            if(id>=0){if(x>=search_left()+SEARCH_WIDTH-36){cc_context=id;damage();}else{control_center_close();app_host_open(id);}return 1;}
+            if(id>=0){if(x>=search_left()+SEARCH_WIDTH-36){damage();cc_list=cc_detail_kind=cc_detail_slide=cc_detail_origin=0;cc_context=id;cc_context_row=(ly-116)/30;damage();}else{control_center_close();app_host_open(id);}return 1;}
         }
         damage();return 1;
     }
@@ -275,7 +265,7 @@ int control_center_click(int x,int y){
     cc_search_focus=0;
     if(ly>=392&&ly<432&&lx>=16&&lx<WIDTH-16){detail_set(cc_list==4?0:4);return 1;}
     if(ly>=18&&ly<88){
-        if((lx>=154&&lx<184)||(lx>=338&&lx<368)){int list=lx>=204?2:1;detail_set(cc_list==list?0:list);}
+        if((lx>=16&&lx<192)||(lx>=200&&lx<376)){int list=lx>=200?2:1;detail_set(cc_list==list?0:list);}
         return 1; /* Unsupported radio is never displayed as enabled. */
     }
     if(ly>=284&&ly<330&&lx>=16&&lx<WIDTH-16){detail_set(cc_list==3?0:3);return 1;}

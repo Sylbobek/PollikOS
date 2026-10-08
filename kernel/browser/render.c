@@ -195,6 +195,11 @@ static void render_node_text(DomNode *node, int sx, int sy, int cx1, int cy1, in
         for (const char *q = node->text; *q; q++) if (*q == '\n') { nl = 1; break; }
         if (align != TEXT_ALIGN_LEFT && !nl) {
             int tw = sys_text_width(node->text, scale);
+#ifdef POLLIK_BROWSER_STANDALONE
+            /* A centered paragraph can still wrap. The one-line fast path
+             * must not paint an overlong line past its laid-out width. */
+            if (tw <= avail_w) {
+#endif
             int ox = sx;
             if (tw < cw) {
                 if (align == TEXT_ALIGN_CENTER) ox = sx + (cw - tw) / 2;
@@ -204,6 +209,9 @@ static void render_node_text(DomNode *node, int sx, int sy, int cx1, int cy1, in
             if (is_link)
                 sys_draw_rect_clipped(ox, sy + get_font_height(scale) + 1, tw, 1, color, cx1, cy1, cx2, cy2);
             return;
+#ifdef POLLIK_BROWSER_STANDALONE
+            }
+#endif
         }
     }
     char word[128];

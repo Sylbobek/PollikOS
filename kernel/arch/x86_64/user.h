@@ -88,6 +88,7 @@ typedef struct Process64 {
     Thread64 thread;
     Credentials credentials;
     uint64_t admin_spawn_session; /* One authenticated spawn; never a user-set credential. */
+    char admin_spawn_path[USER_PATH_MAX];
     Process64State state;
     int exit_status;
     size_t slot;

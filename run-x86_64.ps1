@@ -5,6 +5,7 @@ param(
     [string]$DataImage = '',
     [switch]$NoNetwork,
     [switch]$Audio,
+    [switch]$PersistData,
     [int]$MemoryMiB = 8192
 )
 $ErrorActionPreference = 'Stop'
@@ -20,16 +21,18 @@ $image = (Resolve-Path -LiteralPath $image).Path
 $DataImage = (Resolve-Path -LiteralPath $DataImage).Path
 $display = if ($Headless) { 'none' } else { 'gtk,zoom-to-fit=off' }
 $nativeMachine = if($Audio){'pc,pcspk-audiodev=native_audio'}else{'pc'}
+$dataSnapshot = if($PersistData){'off'}else{'on'}
 $qemuArgs = @('-name','PollikOS v0.0.001','-machine',$nativeMachine,'-accel',$Accel,
     '-cpu','qemu64,+rdrand','-rtc','base=utc','-smp','1','-m',"$MemoryMiB",'-vga','std','-display',$display,
     '-drive',"file=$image,format=raw,if=ide,index=0,snapshot=on",
-    '-drive',"file=$DataImage,format=raw,if=ide,index=1,snapshot=on",
+    '-drive',"file=$DataImage,format=raw,if=ide,index=1,snapshot=$dataSnapshot",
     '-serial','stdio')
 if($NoNetwork){$qemuArgs+=@('-nic','none')}
 else{$qemuArgs+=@('-netdev','user,id=native_net','-device','rtl8139,netdev=native_net')}
 if($Audio){$qemuArgs+=@('-audiodev','dsound,id=native_audio','-device','AC97,audiodev=native_audio')}
 Write-Host 'Native x86-64 kernel and .pol applications; desktop migration is incomplete.'
-Write-Host 'Both disks use snapshots: changes in this session are temporary.'
+if($PersistData){Write-Host 'Data disk writes persist across restarts; the boot disk uses a temporary snapshot.'}
+else{Write-Host 'Both disks use snapshots: changes in this session are temporary. Use -PersistData to retain files and bookmarks.'}
 Write-Host "Guest RAM: $MemoryMiB MiB. Disk profile: 30 GiB; PollikFS v2 usable filesystem remains about 32 MiB."
 Write-Host ('qemu-system-x86_64 ' + (($qemuArgs | ForEach-Object { '"' + $_ + '"' }) -join ' '))
 if (!$NoLaunch) { & qemu-system-x86_64 @qemuArgs }

@@ -250,9 +250,12 @@ __attribute__((noreturn)) static void console64_run(void) {
             if (!scheduler64_run(10, 0, session_completion)) halt();
             int state=security_session_state();
             if(state==SESSION_ACTIVE) continue;
+            int graphical_elevation=state==SESSION_ELEVATE&&console_fb_width()>=400&&console_fb_height()>=440;
+            if(graphical_elevation)console_fb_elevation_capture();
             window64_session_hide(1);
-            gui_session_active=0;
-            console_fb_write("\033[2J\033[H",7);
+            if(graphical_elevation)console_fb_elevation_save_background();
+            gui_session_active=graphical_elevation;
+            if(!graphical_elevation)console_fb_write("\033[2J\033[H",7);
             tty64_init();
             if(state==SESSION_LOGOUT) {
                 uint64_t old_session=security_session_id();
@@ -277,7 +280,7 @@ __attribute__((noreturn)) static void console64_run(void) {
             else if(!auth64_login()) halt();
             timer64_stop();
             tty64_init();
-            console_fb_write("\033[2J\033[H",7);
+            if(graphical_elevation)console_fb_elevation_end();else console_fb_write("\033[2J\033[H",7);
             window64_session_hide(0);
             gui_session_active=1;
             serial64("[SESSION64] session resumed\n");

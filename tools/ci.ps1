@@ -30,6 +30,7 @@ try {
         Run-Check 'build-x64-selftest' ./build-x86_64.ps1 @('-SelfTest')
         Run-Check 'guest-x64-selftest' python @('tests/kernel_checkpoint.py')
         Run-Check 'build-x64' ./build-x86_64.ps1 @()
+        Run-Check 'web-engine-x64' python @('tests/web_engine_x64.py')
         Run-Check 'apps-x64' python @('tests/x86_64_app_checkpoint.py')
         $previousVariant=$env:POLLIK_X64_VARIANT
         try {

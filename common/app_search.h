@@ -1,5 +1,6 @@
 #ifndef POLLIK_APP_SEARCH_H
 #define POLLIK_APP_SEARCH_H
+#define APP_SEARCH_DEFAULT_PINS ((1u<<1)|(1u<<2)|(1u<<3)|(1u<<5))
 typedef struct { char text[32];int cursor,anchor; } AppSearchInput;
 enum { APP_SEARCH_LEFT=256,APP_SEARCH_RIGHT,APP_SEARCH_HOME,APP_SEARCH_END };
 static inline void app_search_reset(AppSearchInput *e){e->text[0]=0;e->cursor=0;e->anchor=-1;}

@@ -37,10 +37,11 @@ def i386():
                 g.wait(lambda:scalar('cc_blink')==0,'caret off');g.wait(lambda:scalar('cc_blink')==1,'caret on')
                 key('backspace');g.wait(lambda:not g.memory(address,32).split(b'\0')[0],'selected query deleted')
                 for ch in 'calc':key(ch)
-                click(108+204,38+124);click(108+20,38+198);assert scalar('cc_pins')==128
-                click(108+24,38+60);key('ctrl-a');key('backspace');assert scalar('cc_pins')==128
+                click(108+204,38+124);click(356,38+116+96);assert scalar('cc_pins')==174
+                click(108+24,38+60);key('ctrl-a');key('backspace');assert scalar('cc_pins')==174
                 print('PASS i386: caret blink, selection/replacement and saved recommendations',flush=True)
-                click(108+40,38+124)
+                for _ in range(4):key('down')
+                key('ret')
             else:key('ret')
             g.wait(lambda:scalar('g_focused_window')==7 and not scalar('cc_shown'),'search launches Calculator')
             if action==0:
@@ -52,12 +53,20 @@ def i386():
                 assert 'touch: failed' in terminal_command('touch /etc/admin-probe')
                 open_panel();click(108+24,38+60)
                 for ch in 'term':key(ch)
-                click(108+204,38+124);click(108+20,38+164)
+                click(108+204,38+124);g.wait(lambda:scalar('cc_context')==2,'context opens to the right')
+                assert scalar('cc_detail_slide')==0
+                click(356,38+116+60)
                 g.wait(lambda:'AUTH: session locked' in g.log.read_text(),'administrator password')
                 assert not any(g.words('admin_sessions',2))
-                key('esc');open_panel();click(108+24,38+60)
+                g.wait(lambda:scalar('cancel_w')!=0 and scalar('auth_scene_snapshot')==1,'frozen administrator prompt')
+                backdrop=scalar('auth_backdrop');assert backdrop
+                frozen=g.memory(backdrop+4096,128);key('a');key('backspace');assert g.memory(backdrop+4096,128)==frozen
+                shot=BUILD/'admin-prompt-i386.ppm';g.screendump(shot);Image.open(shot).save(shot.with_suffix('.png'))
+                click(scalar('cancel_x')+90,scalar('cancel_y')+21)
+                assert not any(g.words('admin_sessions',2))
+                open_panel();click(108+24,38+60)
                 for ch in 'term':key(ch)
-                click(108+204,38+124);click(108+20,38+164)
+                click(108+204,38+124);click(356,38+116+60)
                 for ch in 'test123':key(ch)
                 key('ret');g.wait(lambda:'AUTH: administrator application authorized' in g.log.read_text(),'administrator authorized',30)
                 g.wait(lambda:scalar('g_focused_window')==2,'administrator Terminal focus')
@@ -164,16 +173,19 @@ def x64():
                     key('ctrl-a');presented((ox+search_x+17,oy+40+49),(0x68,0x54,0xbf))
                     key('backspace')
                     for ch in 'calc':key(ch)
-                    click(ox+search_x+205,oy+40+124);click(ox+search_x+20,oy+40+192)
+                    click(ox+search_x+205,oy+40+124);click(ox+panel_x+28,oy+40+112+96)
                     click(ox+search_x+20,oy+40+54);key('ctrl-a');key('backspace')
                     print('PASS x64: field selection/replacement and saved recommendations',flush=True)
+                    for _ in range(4):key('down')
                 start=len(c.transcript);key('ret');c.wait_for('[calculator] ready',120,start)
                 if action==0:
                     open_panel();click(ox+search_x+20,oy+40+54)
                     for ch in 'files':key(ch)
                     click(ox+search_x+205,oy+40+124)
-                    start=len(c.transcript);click(ox+search_x+20,oy+40+162)
+                    start=len(c.transcript);click(ox+panel_x+28,oy+40+112+60)
                     c.wait_for('Administrator password (Esc cancels):',120,start)
+                    presented((430,474),(0x49,0x43,0x57))
+                    shot=BUILD/'admin-prompt-x64.ppm';call('screendump',{'filename':str(shot)});Image.open(shot).save(shot.with_suffix('.png'))
                     c.send('test123');c.wait_for('[desktop] administrator launched /bin/files.pol',120,start)
                     c.wait_for('[files] ready',120,start)
                     print('PASS x64: GUI Run as admin authenticates and launches native Files',flush=True)

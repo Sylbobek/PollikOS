@@ -295,6 +295,18 @@ static void layout_node_recursive(DomNode *node, int cur_x, int cur_y, int avail
         int floorw = node->style.min_width + (node->style.box_border_box ? 0 : pl + pr + 2 * bw);
         if (box_w < floorw) box_w = floorw;
     }
+#ifdef POLLIK_BROWSER_STANDALONE
+    /* Resolve automatic margins after max/min-width and the border box.
+     * Otherwise width:auto + max-width never centers a constrained block. */
+    int auto_left=node->style.margin_left<0,auto_right=node->style.margin_right<0;
+    if(auto_left || auto_right) {
+        int spare=avail_w-box_w-(auto_left?0:ml)-(auto_right?0:mr);
+        if(spare<0)spare=0;
+        if(auto_left)ml=auto_right?spare/2:spare;
+        if(auto_right)mr=auto_left?spare-ml:spare;
+        box_x=cur_x+ml;
+    }
+#endif
 
     int inner_w = box_w - pl - pr - 2 * bw;
     if (inner_w < 0) inner_w = 0;

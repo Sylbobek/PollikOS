@@ -71,6 +71,7 @@ void input_set_pointer_acceleration(int enabled);
 int input_get_pointer_acceleration(void);
 void compositor_init(void);
 void compositor_prepare_wallpapers(void);
+void compositor_capture_admin_background(void);
 void compositor_wallpaper_changed(void);
 void compositor_paint(int full);
 void compositor_draw_cursor(int full);

@@ -5,7 +5,7 @@ from x86_64_console import Console,ROOT,newest_image
 from x86_64_security_session import port,connect,RecordingConsole
 B=ROOT/'build/x86_64/kernel'
 def run():
-    libraries=ROOT/'build/browser-upstream'
+    libraries=B/'web'
     command=['powershell','-NoProfile','-File','sdk/tools/pollikcc.ps1',
         '-DPOLLIK_BROWSER_STANDALONE=1','-DPOLLIK_BROWSER_UPSTREAM=1',
         'sdk/tests/web_engine.c','sdk/apps/browser_html.c','sdk/apps/browser_css.c',

@@ -55,6 +55,17 @@ Opcja `--https https://example.org` dodaje publiczny HTTPS przez sieć gościa.
 Test używa wyłącznie kopii dysku. Wyniki konkretnego uruchomienia zapisują się
 w `build/x86_64/<wariant>/browser-images-native.log` i plikach PNG.
 
+8 października 2026: normalny wariant przeszedł natywne HTTP/HTML/CSS/JS,
+PNG/JPEG (po 3 072 piksele każdego obrazu), 5 163 piksele stylu zmienionego
+przez JS, timery/fetch/DOMContentLoaded i zapisy aplikacji. Publiczny
+`https://example.org` zwrócił 200 po poprawnie zweryfikowanym handshake TLS.
+Wcześniejsze przerwanie inicjalizacji QuickJS usunięto: dokument nie rejestruje
+ponownie metod `querySelector`/`querySelectorAll` już nadanych przez wrapper DOM.
+Zrzut strony startowej potwierdzono na rzeczywistym framebufferze gościa.
+
 Budowanie: `powershell -File build-x86_64.ps1` lub wariant `-Production`.
+Launcher: `powershell -File run-x86_64.ps1 -PersistData` zachowuje zapisy na
+dysku danych po zamknięciu QEMU. Bez tej opcji launcher używa tymczasowego
+snapshotu; pliki i zakładki znikają po restarcie, zgodnie z jego komunikatem.
 Test normalnego wariantu: ustaw `POLLIK_X64_VARIANT=kernel`.
 Żaden z tych testów nie stanowi certyfikacji całego Internetu ani sprzętu.

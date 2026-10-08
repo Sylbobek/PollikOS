@@ -4,6 +4,7 @@
  * Clang from treating kernel memory declarations as host libc declarations.
  */
 #include "../kernel/gui/apps.h"
+#include "../kernel/security.h"
 #include "../kernel/browser/browser.h"
 #include "../kernel/gui/pollikmark.h"
 extern int printf(const char *format, ...);
@@ -11,7 +12,7 @@ static int mark_poll_result;
 
 _Static_assert(APP_WELCOME == 0 && APP_FILES == 1 && APP_TERMINAL == 2 &&
                APP_NOTES == 3 && APP_SETTINGS == 4 && APP_BROWSER == 5 &&
-               APP_POLLIKMARK == 6 && APP_CALCULATOR == 7 && APP_COUNT == 8, "stable registry IDs");
+               APP_POLLIKMARK == 6 && APP_CALCULATOR == 7 && APP_PHOTOS == 8 && APP_VIDEO == 9 && APP_DOCUMENTS == 10 && APP_COUNT == 11, "stable registry IDs");
 
 enum { INIT, RENDER, KEY, CLICK, DRAG, OPEN, CLOSE, RESIZE, SCROLL, CURSOR, POLL, OPS };
 static int calls[APP_COUNT][OPS], total, last_app, last_op;
@@ -49,6 +50,23 @@ SIMPLE_RENDER(notes, APP_NOTES)
 SIMPLE_RENDER(settings, APP_SETTINGS)
 SIMPLE_RENDER(pollikmark, APP_POLLIKMARK)
 SIMPLE_RENDER(calculator, APP_CALCULATOR)
+SIMPLE_RENDER(photos, APP_PHOTOS)
+SIMPLE_RENDER(video, APP_VIDEO)
+SIMPLE_RENDER(documents, APP_DOCUMENTS)
+#define VIEWER_STUB(name,id) \
+    void name##_key(u8 code,char ch,int shift,int control){record(id,KEY,code,ch,shift,control);} \
+    void name##_close(void){record(id,CLOSE,0,0,0,0);}
+VIEWER_STUB(photos,APP_PHOTOS)
+VIEWER_STUB(video,APP_VIDEO)
+VIEWER_STUB(documents,APP_DOCUMENTS)
+void photos_click(int x,int y){record(APP_PHOTOS,CLICK,x,y,0,0);}
+void video_click(int x,int y){record(APP_VIDEO,CLICK,x,y,0,0);}
+int photos_poll(void){record(APP_PHOTOS,POLL,0,0,0,0);return poll_result;}
+int video_poll(void){record(APP_VIDEO,POLL,0,0,0,0);return poll_result;}
+void documents_scroll(int delta){record(APP_DOCUMENTS,SCROLL,delta,0,0,0);}
+void files_refresh(void){record(APP_FILES,OPEN,0,0,0,0);}
+uint64_t security_session_id(void){return 1;}
+int security_session_state(void){return SESSION_ACTIVE;}
 void calculator_init(void) { init_order[total]=APP_CALCULATOR;record(APP_CALCULATOR,INIT,0,0,0,0); }
 void calculator_close(void) {record(APP_CALCULATOR,CLOSE,0,0,0,0);}
 void calculator_key(u8 code,char ch,int shift,int control) {record(APP_CALCULATOR,KEY,code,ch,shift,control); }
@@ -139,14 +157,17 @@ static int text_equal(const char *a, const char *b) {
 }
 #define BIT(op) (1u << (op))
 static int metadata(void) {
-    static const char *names[] = {"Welcome To pollikos", "Files", "Terminal", "Notes", "Settings", "Browser", "PollikMark3D", "Calculator"};
+    static const char *names[] = {"Welcome To pollikos", "Files", "Terminal", "Notes", "Settings", "Browser", "PollikMark3D", "Calculator", "Photos", "Video", "Documents"};
     static const unsigned callbacks[] = {
-        BIT(RENDER) | BIT(CLICK), BIT(RENDER) | BIT(KEY) | BIT(CLICK) | BIT(CLOSE) | BIT(SCROLL) | BIT(POLL),
+        BIT(RENDER) | BIT(CLICK), BIT(RENDER) | BIT(KEY) | BIT(CLICK) | BIT(CLOSE) | BIT(SCROLL) | BIT(OPEN),
         BIT(RENDER) | BIT(KEY) | BIT(CLICK) | BIT(DRAG) | BIT(SCROLL),
         BIT(INIT) | BIT(RENDER) | BIT(KEY) | BIT(CLICK) | BIT(DRAG) | BIT(RESIZE) | BIT(SCROLL) | BIT(CURSOR),
         BIT(RENDER) | BIT(CLICK) | BIT(DRAG) | BIT(CLOSE), ((1u << OPS) - 1),
         BIT(INIT) | BIT(RENDER) | BIT(KEY) | BIT(CLICK) | BIT(OPEN) | BIT(CLOSE) | BIT(RESIZE) | BIT(POLL),
-        BIT(INIT) | BIT(RENDER) | BIT(KEY) | BIT(CLICK) | BIT(CLOSE)
+        BIT(INIT) | BIT(RENDER) | BIT(KEY) | BIT(CLICK) | BIT(CLOSE),
+        BIT(RENDER)|BIT(KEY)|BIT(CLICK)|BIT(CLOSE)|BIT(POLL),
+        BIT(RENDER)|BIT(KEY)|BIT(CLICK)|BIT(CLOSE)|BIT(POLL),
+        BIT(RENDER)|BIT(KEY)|BIT(CLOSE)|BIT(SCROLL)
     };
     reset();
     for (int id = 0; id < APP_COUNT; ++id) {
@@ -233,7 +254,7 @@ static int keyboard(void) {
                         CHECK(only(id, KEY) && arg[0] == code);
                         continue;
                     }
-                    if (id != APP_TERMINAL && id != APP_NOTES && id != APP_BROWSER && id != APP_POLLIKMARK && id != APP_CALCULATOR) {
+                    if (id != APP_TERMINAL && id != APP_NOTES && id != APP_BROWSER && id != APP_POLLIKMARK && id != APP_CALCULATOR && id < APP_PHOTOS) {
                         CHECK(total == 0);
                         continue;
                     }
@@ -242,7 +263,7 @@ static int keyboard(void) {
                         ch = (char)(ch - 'a' + 'A');
                     CHECK(only(id, KEY));
                     CHECK(arg[0] == code && arg[1] == ch);
-                    if (id == APP_BROWSER || id == APP_POLLIKMARK || id == APP_TERMINAL || id == APP_NOTES || id == APP_CALCULATOR) {
+                    if (id == APP_BROWSER || id == APP_POLLIKMARK || id == APP_TERMINAL || id == APP_NOTES || id == APP_CALCULATOR || id >= APP_PHOTOS) {
                         CHECK(arg[2] == shift && arg[3] == control);
                     } else {
                         CHECK(arg[2] == control);
@@ -261,7 +282,7 @@ static int pointer_routing(void) {
             int x = points[p][0], y = points[p][1];
             reset();
             gui_app_click(id, x, y);
-            if (id == APP_WELCOME || id == APP_FILES || id == APP_TERMINAL || id == APP_NOTES || id == APP_SETTINGS || id == APP_BROWSER || id == APP_POLLIKMARK || id == APP_CALCULATOR) {
+            if (id == APP_WELCOME || id == APP_FILES || id == APP_TERMINAL || id == APP_NOTES || id == APP_SETTINGS || id == APP_BROWSER || id == APP_POLLIKMARK || id == APP_CALCULATOR || id == APP_PHOTOS || id == APP_VIDEO) {
                 CHECK(only(id, CLICK));
                 CHECK(arg[0] == x && arg[1] == y);
             } else CHECK(total == 0);
@@ -287,7 +308,7 @@ static int pointer_routing(void) {
         for (unsigned d = 0; d < sizeof deltas / sizeof deltas[0]; ++d) {
             reset();
             gui_app_scroll(id, deltas[d]);
-            if (id == APP_NOTES || id == APP_BROWSER || id == APP_FILES || id == APP_TERMINAL) {
+            if (id == APP_NOTES || id == APP_BROWSER || id == APP_FILES || id == APP_TERMINAL || id == APP_DOCUMENTS) {
                 CHECK(only(id, SCROLL));
                 CHECK(arg[0] == deltas[d] * ((id == APP_NOTES || id == APP_TERMINAL) ? 3 : 1));
             } else CHECK(total == 0);
@@ -312,7 +333,7 @@ static int lifecycle(void) {
         for (int op = OPEN; op <= CLOSE; ++op) {
             reset();
             dispatch[op - OPEN](id);
-            if (id == APP_BROWSER || id == APP_POLLIKMARK || ((id == APP_FILES || id == APP_SETTINGS || id == APP_CALCULATOR) && op == CLOSE)) CHECK(only(id, op));
+            if (id == APP_BROWSER || id == APP_POLLIKMARK || id == APP_FILES || ((id == APP_SETTINGS || id == APP_CALCULATOR || id >= APP_PHOTOS) && op == CLOSE)) CHECK(only(id, op));
             else CHECK(total == 0); /* Includes persistent Terminal/Notes close. */
         }
         for (unsigned s = 0; s < sizeof sizes / sizeof sizes[0]; ++s) {
@@ -343,32 +364,23 @@ static int polling(void) {
         poll_result = results[i];
         mark_poll_result = results[j];
         u32 mask = gui_apps_poll();
-        CHECK(total == 3 && calls[APP_FILES][POLL] == 1 &&
+        CHECK(total == 4 && calls[APP_PHOTOS][POLL] == 1 && calls[APP_VIDEO][POLL] == 1 &&
               calls[APP_BROWSER][POLL] == 1 && calls[APP_POLLIKMARK][POLL] == 1);
         CHECK(mask == ((results[i] ? (1u << APP_BROWSER) : 0u) |
-                       (results[i] ? (1u << APP_FILES) : 0u) |
+                       (results[i] ? ((1u << APP_PHOTOS) | (1u << APP_VIDEO)) : 0u) |
                        (results[j] ? (1u << APP_POLLIKMARK) : 0u)));
     }
     /* Only apps whose bit is set in active_mask may run their poll callback;
      * a closed/hidden app must never be polled in the background. */
-    static const u32 masks[] = {0, 1u << APP_FILES, 1u << APP_BROWSER,
-                                1u << APP_POLLIKMARK, (1u << APP_FILES) | (1u << APP_BROWSER)};
-    for (unsigned m = 0; m < sizeof masks / sizeof masks[0]; ++m) {
-        reset();
-        poll_result = 1;
-        mark_poll_result = 1;
-        u32 mask = gui_apps_poll_mask(masks[m]);
-        int expected_files = (masks[m] >> APP_FILES) & 1u;
-        int expected_browser = (masks[m] >> APP_BROWSER) & 1u;
-        int expected_mark = (masks[m] >> APP_POLLIKMARK) & 1u;
-        CHECK(calls[APP_FILES][POLL] == expected_files);
-        CHECK(calls[APP_BROWSER][POLL] == expected_browser);
-        CHECK(calls[APP_POLLIKMARK][POLL] == expected_mark);
-        CHECK(total == expected_files + expected_browser + expected_mark);
-        u32 expected_mask = (expected_files ? (1u << APP_FILES) : 0u) |
-                            (expected_browser ? (1u << APP_BROWSER) : 0u) |
-                            (expected_mark ? (1u << APP_POLLIKMARK) : 0u);
-        CHECK(mask == expected_mask);
+    static const u32 masks[]={0,1u<<APP_FILES,1u<<APP_BROWSER,1u<<APP_POLLIKMARK,1u<<APP_PHOTOS,1u<<APP_VIDEO,0xffffffffu};
+    const int polled[]={APP_BROWSER,APP_POLLIKMARK,APP_PHOTOS,APP_VIDEO};
+    for(unsigned m=0;m<sizeof masks/sizeof masks[0];m++){
+        reset();poll_result=mark_poll_result=1;u32 mask=gui_apps_poll_mask(masks[m]),expected=0;int count=0;
+        for(unsigned i=0;i<sizeof polled/sizeof polled[0];i++){
+            int id=polled[i],enabled=(masks[m]>>id)&1u;CHECK(calls[id][POLL]==enabled);
+            if(enabled){expected|=1u<<id;count++;}
+        }
+        CHECK(!calls[APP_FILES][POLL]&&mask==expected&&total==count);
     }
     return 1;
 }

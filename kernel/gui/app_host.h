@@ -52,6 +52,7 @@ void app_host_set_sound_freq(u32 freq);
 void app_host_save_settings(void);
 unsigned app_host_launcher_pins(void);
 int app_host_launcher_set_pins(unsigned pins);
+void app_host_capture_admin_background(void);
 int app_host_wallpaper_count(void);
 const char *app_host_wallpaper_name(int index);
 const char *app_host_selected_wallpaper(void);

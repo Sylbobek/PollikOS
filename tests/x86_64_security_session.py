@@ -27,8 +27,8 @@ def login(c,password,start):
     c.wait_for('[AUTH64] Sign-in successful.',timeout=180,start=start)
 def prompt(c,start=0):c.wait_for_prompt(timeout=300,start=start)
 def run():
-    subprocess.run(['powershell','-NoProfile','-File','sdk/tools/pollikcc.ps1','sdk/tests/security_session.c','-o','build/security_session.pol'],cwd=ROOT,check=True)
-    subprocess.run(['powershell','-NoProfile','-File','sdk/tools/pollikcc.ps1','sdk/tests/elevation.c','-o','build/elevation.pol'],cwd=ROOT,check=True)
+    subprocess.run(['powershell','-NoProfile','-File','sdk/tools/pollikcc.ps1','sdk/tests/security_session.c','--runtime','build/x86_64/kernel/sdk','-o','build/security_session.pol'],cwd=ROOT,check=True)
+    subprocess.run(['powershell','-NoProfile','-File','sdk/tools/pollikcc.ps1','sdk/tests/elevation.c','--runtime','build/x86_64/kernel/sdk','-o','build/elevation.pol'],cwd=ROOT,check=True)
     with tempfile.TemporaryDirectory(prefix='pollikos-session-') as temporary:
         disk=Path(temporary)/'data.img';shutil.copyfile(BUILD/'PollikData-test.img',disk)
         subprocess.run(['python','sdk/tools/pollikinstall.py',str(disk),'/bin/security_session.pol','build/security_session.pol'],cwd=ROOT,check=True)

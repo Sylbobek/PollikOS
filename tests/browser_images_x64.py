@@ -1,5 +1,5 @@
 """Native HTML/CSS/JS and PNG/JPEG HTTP pipeline, actual guest framebuffer."""
-import http.server,io,json,pathlib,shutil,socket,subprocess,tempfile,threading,time,os,collections,argparse
+import http.server,io,json,pathlib,shutil,socket,subprocess,tempfile,threading,time,os,collections,argparse,re
 from PIL import Image
 from x86_64_console import Console,ROOT
 B=ROOT/'build/x86_64'/os.environ.get('POLLIK_X64_VARIANT','system')
@@ -10,7 +10,8 @@ class BrowserConsole(Console):
    (B/'browser-images-native.log').write_text(self.text(),encoding='utf-8')
    fault=self.text().find('[USER64] fault')
    assert (fault<0 or '\n' not in self.text()[fault:]) and '[X64] FAIL' not in self.text(),self.text()[-1500:]
-   assert 'pollikc: abort' not in self.text(),self.text()[-1500:]
+   abort=self.text().find('pollikc: abort')
+   assert abort<0 or '\n' not in self.text()[abort:],self.text()[-1500:]
   return changed
 def port():
  with socket.socket() as s:s.bind(('127.0.0.1',0));return s.getsockname()[1]
@@ -25,8 +26,8 @@ class Fixture(http.server.BaseHTTPRequestHandler):
   if self.path in redirects:
    self.send_response(302);self.send_header('Location',redirects[self.path]);self.send_header('Content-Length','0');self.end_headers();return
   files={
-   '/index.html':b'<html><head><link rel="stylesheet" href="/styles/site.css"><script src="/scripts/app.js"></script><script>console.log("INLINE_ONCE");</script><script type="application/ld+json">{"name":"data only"}</script><script type="text/plain">console.log("DATA_MUST_NOT_RUN");</script></head><body><div id="status">waiting</div><img id="p" src="pictures/p.png"><img id="j" src="pictures/p.jpg"></body></html>',
-   '/styles/site.css':b'body{margin:0;padding:0;} #status{width:180px;height:30px;background-color:#eeeeee;} img{display:block;width:64px;height:48px;}',
+   '/index.html':b'<html><head><link rel="stylesheet" href="/styles/site.css"><script src="/scripts/app.js"></script><script>console.log("INLINE_ONCE");</script><script type="application/ld+json">{"name":"data only"}</script><script type="text/plain">console.log("DATA_MUST_NOT_RUN");</script></head><body><div id="status">waiting</div><img id="p" src="pictures/p.png"><img id="j" src="pictures/p.jpg"><p class="wrap">Centered text which is much longer than its available width must wrap into several visible lines.</p></body></html>',
+   '/styles/site.css':b'body{margin:0;padding:0;} #status{width:180px;height:30px;background-color:#eeeeee;} img{display:block;width:64px;height:48px;} .wrap{width:auto;max-width:200px;margin:0 auto;text-align:center;color:#ff00aa;font-size:14px;line-height:18px;}',
    '/scripts/app.js':b'''document.getElementById("status").style.backgroundColor="#c17bd0";document.getElementById("status").textContent="script works";
 function check(value,message){if(!value)throw new Error(message);}
 let ready=false,tick=false,done=false;
@@ -92,6 +93,10 @@ def main(https_url=None):
     if green>=2000 and blue>=2000 and styled>=1000:break
     assert time.monotonic()<deadline,('pixels',green,blue,styled);time.sleep(.15)
    im.save(shot.with_suffix('.png'))
+   wrapped=[(x,y) for y in range(im.height) for x in range(im.width) if im.getpixel((x,y))==(255,0,170)]
+   assert wrapped,'Wrapped paragraph was not painted'
+   assert max(x for x,y in wrapped)-min(x for x,y in wrapped)<=200 and max(y for x,y in wrapped)-min(y for x,y in wrapped)>=35,'Centered paragraph overflowed instead of wrapping'
+   assert min(x for x,y in wrapped)>350,'Automatic margins did not center the constrained block'
    print('HTTP_REQUESTS',requests,flush=True)
    print(f'PIXELS PNG={green} RGB=(18,171,52); JPEG={blue} expected={expected_jpeg} maxerr=1; JS-styled={styled} RGB=(193,123,208)',flush=True)
    def key(value):
@@ -103,11 +108,26 @@ def main(https_url=None):
     key('ret')
    saved_mark=len(c.transcript);key('ctrl-d');c.wait_for('[browser] bookmarks saved',30,saved_mark)
    key('ctrl-s');c.wait_for('[browser] saved page /home/Downloads/',30,saved_mark)
-   go('about:home');time.sleep(.3);home=B/'browser-home-native.ppm';call('screendump',{'filename':str(home)});Image.open(home).save(home.with_suffix('.png'))
+   go('about:home');home=B/'browser-home-native.ppm';deadline=time.monotonic()+30
+   while True:
+    call('screendump',{'filename':str(home)});picture=Image.open(home).convert('RGB')
+    if sum(pixel==(245,247,251) for pixel in picture.getdata())>100000:break
+    if time.monotonic()>=deadline:
+     print(call('human-monitor-command',{'command-line':'info registers'}),flush=True)
+     raise AssertionError('Homepage did not reach the guest framebuffer\n'+c.text()[-1000:])
+    c.pump(.1);time.sleep(.2)
+   picture.save(home.with_suffix('.png'))
    if https_url:
     https_mark=len(c.transcript);go(https_url);c.wait_for('[browser] HTTP document loaded',120,https_mark)
     assert '[browser] page status=200 url=https://' in c.text()[https_mark:],c.text()[https_mark:]
-    time.sleep(.3);public=B/'browser-https-native.ppm';call('screendump',{'filename':str(public)});Image.open(public).save(public.with_suffix('.png'))
+    if https_url.rstrip('/')=='https://example.org':c.wait_for('[browser] HTTP document loaded: Example Domain',30,https_mark)
+    public=B/'browser-https-native.ppm';deadline=time.monotonic()+30
+    while True:
+     call('screendump',{'filename':str(public)});picture=Image.open(public).convert('RGB');colors=collections.Counter(picture.getdata())
+     if colors[(32,41,57)]>10000 and colors[(245,247,251)]<100000:break
+     assert time.monotonic()<deadline,'Public page was received but did not reach the framebuffer'
+     c.pump(.1);time.sleep(.2)
+    picture.save(public.with_suffix('.png'))
     print('PASS public HTTPS through guest DNS/TCP/TLS: '+https_url,flush=True)
    # Escape only leaves address editing in this browser; close its native WM
    # titlebar through real pointer input rather than changing that contract.
@@ -118,6 +138,9 @@ def main(https_url=None):
     call('input-send-event',{'events':[{'type':'rel','data':{'axis':'x','value':dx}},{'type':'rel','data':{'axis':'y','value':dy}}]});time.sleep(.08);mx+=dx;my+=dy
    for down in (True,False):call('input-send-event',{'events':[{'type':'btn','data':{'button':'left','down':down}}]});time.sleep(.12)
    c.wait_for_prompt(30,mark)
+   c.run('cat /home/.pollik-web-bookmarks',expected=f'http://10.0.2.2:{server.server_port}/index.html',timeout=30)
+   saved=re.search(r'\[browser\] saved page (/home/Downloads/[^\s]+)',c.text());assert saved,c.text()[-2000:]
+   c.run('cat '+saved.group(1),expected='INLINE_ONCE',timeout=30)
    assert 'PANIC' not in c.text() and '[X64] FAIL' not in c.text()
    print('PASS native browser: HTTP redirects, HTML/CSS/JS, PNG/JPEG pixels, DOMContentLoaded, timers, async fetch JSON/text/binary/404/bodyUsed, bookmark/save, homepage and clean close',flush=True)
   finally:

@@ -26,8 +26,9 @@ int main(int argc,char **argv){
     wait_child(pollikos_spawn_rights("/bin/elevation.pol",limited,NULL,USER_CAP_FILE_READ));
     CHECK(pollikos_session_control(USER_SESSION_ELEVATE)<0); /* Harness cancels. */
     CHECK(pollikos_spawn_rights("/bin/elevation.pol",admin,NULL,USER_CAP_ADMIN_ALL)<0);
-    CHECK(pollikos_session_control(USER_SESSION_ELEVATE)==0); /* Wrong, then correct password. */
+    CHECK(pollikos_session_elevate("/bin/elevation.pol")==0); /* Wrong, then correct password. */
     CHECK(pollikos_session_control(USER_SESSION_RIGHTS)==rights);
+    CHECK(pollikos_spawn_rights("/bin/sdk_hello",admin,NULL,USER_CAP_ADMIN_ALL)<0); /* Grant is bound to the named app. */
     wait_child(pollikos_spawn_rights("/bin/elevation.pol",admin,NULL,USER_CAP_ADMIN_ALL));
     CHECK(pollikos_spawn_rights("/bin/elevation.pol",admin,NULL,USER_CAP_ADMIN_ALL)<0);
     if(!errors)puts("ELEVATION_PASS: cancellation/no escalation, native administrator rights/write/inheritance, one-use grant");
