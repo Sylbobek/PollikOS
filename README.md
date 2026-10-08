@@ -79,12 +79,13 @@ The x86_64 suites check that physical memory, file handles, process slots and zo
 - x86_64 target does not yet have AHCI, a graphical installer or all i386 desktop apps
 - No `fork`/`exec`, threads, dynamic linking, AVX or `long double`
 - BIOS/legacy boot only (no UEFI, NVMe or GPT)
-- Browser: subset of HTML/CSS/JS, no HTTP/2, no multi-process isolation
+- Browser: native HTML5 parsing/libcss/QuickJS; layout and Web APIs remain incomplete,
+  with no HTTP/2 or multi-process site isolation. See [browser checkpoint](docs/NATIVE_BROWSER_CHECKPOINT.md).
 
 See [kernel/userspace checkpoint 6–10](docs/IO_USERSPACE_CHECKPOINT.md) for descriptor rights, Ring 3 HTTP, metadata recovery, CI commands and validation boundaries.
 
 The default CI now also builds the normal x86_64 desktop, exercises real Notes
-I/O and Browser launch permissions, and checks Browser framebuffer output.
+and Files I/O/GUI operations, and checks Browser framebuffer output and native Web APIs.
 `tools/ci.ps1 -Target x86_64 -Extended` adds sessions, concurrent networking
 and console regressions. Weekly CI runs Extended and preserves failure logs.
 Host image tools refuse pending, corrupt or unknown journal prefixes; recovery

@@ -17,7 +17,7 @@ a bounded file into such a buffer and uses the same parser/loader.
 
 Accepted: little-endian ELFCLASS64, EM_X86_64, EV_CURRENT, ET_EXEC, OSABI/ABI-version
 zero, ELF flags zero, 64-byte ELF header and 56-byte program headers. At most
-16 program headers, 2 MiB of input bytes (`ELF64_MAX_IMAGE`) and 1,024 mapped
+16 program headers, 4 MiB of input bytes (`ELF64_MAX_IMAGE`) and 1,024 mapped
 image pages (4 MiB) are allowed. Header/program-table and all used file ranges are bounded before
 reads. Section headers and `p_paddr` are not used for loading.
 

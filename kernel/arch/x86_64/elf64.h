@@ -3,7 +3,9 @@
 #include "user.h"
 #define ELF64_MAX_HEADERS 16
 #define ELF64_MAX_PAGES 1024
-#define ELF64_MAX_IMAGE (2*1024*1024)
+/* Native HTML/CSS/JS engines exceed 2 MiB. Keep input bounded independently
+ * from the 1,024-page mapping budget and the reserved runtime regions. */
+#define ELF64_MAX_IMAGE (4*1024*1024)
 typedef enum {
     ELF64_OK, ELF64_FORMAT, ELF64_UNSUPPORTED, ELF64_RANGE, ELF64_ALIGNMENT,
     ELF64_OVERLAP, ELF64_ENTRY, ELF64_LIMIT, ELF64_NOMEM, ELF64_CONFLICT, ELF64_ARGUMENTS

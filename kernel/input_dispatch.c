@@ -23,6 +23,7 @@ int input_get_pointer_acceleration(void) { return pointer_acceleration; }
 int input_pointer_x(void) { return mx; }
 int input_pointer_y(void) { return my; }
 void cancel_interaction(int id) {
+    if(id<0||id==APP_FILES)desktop_items_drag_cancel();
     if (id < 0 || shell.drag_app == id) {
         shell.drag = 0;
         shell.drag_app = -1;
@@ -204,6 +205,10 @@ static void click(void) {
             if(id!=APP_CALCULATOR)compositor_invalidate(id);
             int local_x = mx - wx, local_y = my - wy;
             gui_app_click(id, local_x, local_y);
+            if(id==APP_FILES&&active_app()==APP_FILES){
+                char path[128],name[64];int is_dir;
+                if(files_drag_path(local_x,local_y,path,name,&is_dir))desktop_items_drag_file(path,name,is_dir,mx,my);
+            }
             app_pointer_capture = gui_app_drag(id, local_x, local_y, 1) >= 0 ? id : -1;
             return;
         }
@@ -258,10 +263,12 @@ static void key(u8 code) {
     if (code == 42 || code == 54) { shift = 1; return; }
     if (code == 170 || code == 182) { shift = 0; return; }
     if (auth_is_active()) {
+        desktop_items_drag_cancel();
         if (!(code & 128)) auth_key_ex(code, shift, control);
         request_scene_redraw();
         return;
     }
+    if(code==1&&desktop_items_is_dragging()){desktop_items_drag_cancel();return;}
     if (window_only) {
         if (code == 56) alt_held = 1;
         if(alt_held && code==62){
@@ -353,7 +360,6 @@ static void key(u8 code) {
     if (code == 87) { if (top >= 0) toggle_maximize(top); return; }
     if (code == 1) {
         if (top == APP_POLLIKMARK) gui_app_key(top, code, shift, control);
-        else if (top == APP_FILES && files_preview_active()) gui_app_key(top, code, shift, control);
         else if (top >= 0) minimize_app(top);
         return;
     }

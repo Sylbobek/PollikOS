@@ -1,4 +1,7 @@
 #include "browser.h"
+#ifdef POLLIK_BROWSER_STANDALONE
+#include "../../common/utf8.h"
+#endif
 
 /* Extern system rendering primitives declared in system.h */
 extern void sys_draw_rect_clipped(int x, int y, int w, int h, u32 c, int cx1, int cy1, int cx2, int cy2);
@@ -15,6 +18,10 @@ static int get_font_height(int scale) {
 }
 
 static void render_text_string(int x, int y, const char *s, u32 color, int scale, int cx1, int cy1, int cx2, int cy2) {
+#ifdef POLLIK_BROWSER_STANDALONE
+    size_t left=strlen(s);while(left){size_t used;uint32_t c=pollik_utf8_next(s,left,&used);
+        if(c>=32){sys_draw_codepoint_clipped(x,y,c,color,scale,cx1,cy1,cx2,cy2);x+=sys_get_codepoint_advance(c,scale);}s+=used;left-=used;}
+#else
     while (*s) {
         u8 c = (u8)*s++;
         if (c >= 32 && c < 127) {
@@ -22,6 +29,7 @@ static void render_text_string(int x, int y, const char *s, u32 color, int scale
             x += sys_get_glyph_advance(c, scale);
         }
     }
+#endif
 }
 static void copy_text_range(char *out, int cap, const char *src, int begin, int end) {
     if (cap <= 0) return;

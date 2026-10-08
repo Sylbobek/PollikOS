@@ -39,13 +39,14 @@ static inline unsigned app_search_parse_pins(const char *text){
     const char *prefix="pins=";for(int i=0;i<5;i++)if(text[i]!=prefix[i])return 0;
     unsigned pins=0;const char *p=text+5;
     if(*p<'0'||*p>'9')return 0;
-    while(*p>='0'&&*p<='9'){pins=pins*10+(unsigned)(*p++-'0');if(pins>255)return 0;}
+    while(*p>='0'&&*p<='9'){unsigned digit=(unsigned)(*p++-'0');if(pins>(0xffffffffu-digit)/10)return 0;pins=pins*10+digit;}
     return !*p||*p=='\n'||*p=='\r'?pins:0;
 }
 static inline char app_search_lower(char ch) {
     return ch>='A'&&ch<='Z'?(char)(ch+32):ch;
 }
 static inline int app_search_matches(const char *name,const char *query) {
+    if(!name||!query)return 0;
     if(!*query)return 1;
     for(;*name;name++) {
         const char *a=name,*b=query;

@@ -1,8 +1,13 @@
 /* Native geometry regression: REAL five simple apps and editor, mock host and
  * glyph metrics. Includes implementations to inspect private layout state.
  * Not a pixel/font raster or WM propagation test. No OS boot, disk or network. */
+#ifdef _WIN32
+/* This fixture uses the kernel's i386 address type, not host CRT addresses. */
+#define _UINTPTR_T_DEFINED
+#endif
 #include "../kernel/gui/welcome.c"
 #include "../kernel/gui/files.c"
+#include "../kernel/gui/viewers.c"
 #include "../kernel/gui/notes.c"
 #include "../kernel/gui/settings.c"
 #include "../kernel/gui/terminal.c"
@@ -153,13 +158,18 @@ void speaker_beep(u32 f,u32 d) { (void)f;(void)d; }
 void rtc_format_time(char *s,int cap) { (void)cap; copy(s,"00:00"); }
 void rtc_get_time(RtcTime *t) { memset(t,0,sizeof(*t)); }
 void auth_lock(void) { }
+void auth_logout(void) { }
+void auth_change_password(void) { }
+void account_wipe(void *memory,size_t size){volatile u8 *p=memory;while(size--)*p++=0;}
 void desktop_items_scan(void) { }
 int trash_empty(void) { return 1; }
 int trash_restore_item(const char *name) { (void)name; return 0; }
 int trash_move_item(const char *path) { (void)path; return 0; }
 int trash_delete_permanent(const char *name) { (void)name; return 0; }
-void *kmalloc(u32 n) { (void)n; return 0; }
-void kfree(void *p) { (void)p; }
+extern void *malloc(unsigned long long);
+extern void free(void *);
+void *kmalloc(u32 n) { return malloc(n); }
+void kfree(void *p) { free(p); }
 void media_free(void *p) { (void)p; }
 MediaGif *media_gif_open(const u8 *p,u32 n) { (void)p;(void)n;return 0; }
 void media_gif_close(MediaGif *p) { (void)p; }
@@ -207,10 +217,17 @@ int vfs_unlink(const char *p) { (void)p;return -1; }
 int vfs_rmdir(const char *p) { (void)p;return -1; }
 int vfs_rename(const char *a,const char *b) { (void)a;(void)b;return -1; }
 
+static ThemeColors test_theme={.surface=0xfafafa,.surface_secondary=0xeeeeee,.text=0x222222};
+ThemeColors *ui_theme(void){return &test_theme;}
+void ui_icon_draw(int id,int x,int y,int size){(void)id;ui_bridge_rect(x,y,size,size,0);}
+void ui_draw_icon(IconKind kind,int x,int y,int size,u32 accent,u32 fg){(void)kind;(void)accent;(void)fg;ui_bridge_rect(x,y,size,size,0);}
+int pollikfs_readonly(void){return 0;}
+int pollikfs_error(void){return VFS_IO;}
+const GuiApp *gui_app_get(int id){static const GuiApp app={0};return id>=0&&id<APP_COUNT?&app:0;}
 static void paint_apps(int w,int h) {
     sw=w; sh=h;
     for (int id=0;id<APP_COUNT;id++) test_sizes[id]=(GuiAppSize){w,h};
-    notes_resized(w,h);
+    notes_resized(w,h);files_refresh_entries();
     void (*const renders[])(int,int,int)={welcome_render,files_render,terminal_render,notes_render,settings_render};
     for (current=0;current<5;current++) {
         /* Settings' registry minimum keeps its fixed content inside the window. */
@@ -232,16 +249,16 @@ static void interactions(int w,int h) {
     files_scroll(-1000); CHECK(files_select_at(list.x+1,list.y+1)==0);
     CHECK(files_select_at(list.x-1,list.y+1)==-1);
     CHECK(files_select_at(list.x+list.w,list.y+1)==-1);
-    CHECK(files_select_at(list.x+1,list.y+28)==-1); /* row gap */
+    CHECK(files_select_at(list.x+1,list.y+FILES_ROW_BODY)==-1); /* row gap */
     files_scroll(1000);
-    int rows=list.h/31;
+    int rows=list.h/FILES_ROW_HEIGHT;
     if (rows > 0) {
         int last_visible_row=rows<FS_FILES ? rows-1 : FS_FILES-1;
-        CHECK(files_select_at(list.x+1,list.y+last_visible_row*31+1)==FS_FILES-1);
-        CHECK(files_select_at(list.x+1,list.y+rows*31+1)==-1);
+        CHECK(files_select_at(list.x+1,list.y+last_visible_row*FILES_ROW_HEIGHT+1)==FS_FILES-1);
+        CHECK(files_select_at(list.x+1,list.y+rows*FILES_ROW_HEIGHT+1)==-1);
         opened=-1;
-        files_click(list.x+1,list.y+last_visible_row*31+1); CHECK(opened==-1);
-        files_click(list.x+1,list.y+last_visible_row*31+1); CHECK(opened==APP_NOTES && notes_selected_file()==-1);
+        files_click(list.x+1,list.y+last_visible_row*FILES_ROW_HEIGHT+1); CHECK(opened==-1);
+        files_click(list.x+1,list.y+last_visible_row*FILES_ROW_HEIGHT+1); CHECK(opened==APP_DOCUMENTS);
     } else CHECK(files_select_at(list.x+1,list.y+1)==-1);
     current=APP_SETTINGS;
     SettingsLayout l=settings_calc_layout(w,h);

@@ -25,6 +25,10 @@ static int g_drag_moved = 0;
 static int g_drag_start_mx = 0, g_drag_start_my = 0;
 static int g_drag_cur_mx = 0, g_drag_cur_my = 0;
 static int g_trash_hovered = 0;
+static int g_drag_external;
+static DesktopItem g_drag_external_item;
+static u32 g_drag_source_inode;
+static void drag_copy(char *out,const char *source){while((*out++=*source++)){} }
 
 /* Marquee state */
 static int g_marquee_active = 0;
@@ -210,6 +214,11 @@ void desktop_items_scan(void) {
     add_item(ITEM_TRASH, "Trash", "/home/Trash", -1);
     /* Append new apps after existing items so old layout cells stay occupied. */
     add_item(ITEM_APP, "Calculator", "/bin/calculator", APP_CALCULATOR);
+#ifndef POLLIK_INSTALL_MEDIA
+    add_item(ITEM_APP,"Photos","/bin/photos",APP_PHOTOS);
+    add_item(ITEM_APP,"Video","/bin/video",APP_VIDEO);
+    add_item(ITEM_APP,"Documents","/bin/documents",APP_DOCUMENTS);
+#endif
 
     for (int k = 0; k < g_desktop_item_count; k++) {
         char cbuf[12], rbuf[12], xbuf[12], ybuf[12];
@@ -355,22 +364,10 @@ void desktop_items_open(int idx) {
         extern void files_open_path(const char *path);
         files_open_path(item->path);
         open_app(APP_FILES);
-    } else if (item->type == ITEM_TXT) {
-        extern int notes_open_path(const char *path);
-        notes_open_path(item->path);
-        open_app(APP_NOTES);
     } else if (item->type == ITEM_TRASH) {
-        extern void files_open_path(const char *path);
         files_open_path("/home/Trash");
-        open_app(APP_FILES);
-    } else if (item->type == ITEM_FILE) {
-        if (files_is_media(item->name)) {
-            files_open_image(item->path, item->name);
-            open_app(APP_FILES);
-        } else {
-            notes_open_path(item->path);
-            open_app(APP_NOTES);
-        }
+    } else if (item->type == ITEM_TXT || item->type == ITEM_FILE) {
+        files_open_file(item->path,item->name);
     }
 }
 
@@ -550,6 +547,7 @@ int desktop_items_trash_hit(int mx, int my) {
 void desktop_items_drag_start(int idx, int mx, int my) {
     if (idx < 0 || idx >= g_desktop_item_count) return;
     g_drag_active = 1;
+    g_drag_external = 0;
     g_drag_item = idx;
     g_drag_moved = 0;
     g_drag_start_mx = mx;
@@ -561,6 +559,43 @@ void desktop_items_drag_start(int idx, int mx, int my) {
     if (!g_desktop_items[idx].selected) {
         desktop_items_select_single(idx);
     }
+}
+void desktop_items_drag_file(const char *path,const char *name,int is_dir,int mx,int my){
+    int previous=gui_app_context_enter(APP_FILES);vfs_stat_t st;
+    int valid=vfs_stat(path,&st)==0;gui_app_context_leave(previous);if(!valid)return;
+    memset(&g_drag_external_item,0,sizeof(g_drag_external_item));
+    drag_copy(g_drag_external_item.path,path);drag_copy(g_drag_external_item.name,name);
+    g_drag_external_item.type=is_dir?ITEM_DIR:ITEM_FILE;g_drag_source_inode=st.inode;
+    g_drag_active=g_drag_external=1;g_drag_item=-1;g_drag_moved=0;
+    g_drag_start_mx=g_drag_cur_mx=mx;g_drag_start_my=g_drag_cur_my=my;
+}
+void desktop_items_drag_cancel(void){
+    if(!g_drag_active)return;
+    g_drag_active=g_drag_external=g_drag_moved=g_trash_hovered=0;g_drag_item=-1;
+    request_scene_redraw();
+}
+static void external_ghost_bounds(int mx,int my,int *x,int *y){
+    *x=mx+14;*y=my+14;
+    if(*x+204>shell.width)*x=shell.width-204;if(*x<4)*x=4;
+    if(*y+64>shell.height-114)*y=shell.height-178;if(*y<36)*y=36;
+}
+static int drop_directory(int mx,int my,char directory[128],int desktop){
+    if(my<32||my>=shell.height-114||dock_hit()>=0)return 0;
+    for(int z=NUM_APPS-1;z>=0;z--){
+        int id=z_order[z];if(!windows[id].open||windows[id].minimized)continue;
+        if(wm_hit_test(id,mx,my)==HIT_NONE)continue;
+        if(id==APP_FILES&&wm_hit_test(id,mx,my)==HIT_CLIENT)
+            return files_drop_target(mx-windows[id].x,my-windows[id].y,directory);
+        return 0;
+    }
+    int target=desktop_items_hit_test(mx,my);
+    if(target>=0){
+        const DesktopItem *item=desktop_items_get(target);
+        if(item->type==ITEM_TRASH){drag_copy(directory,"/home/Trash");return 1;}
+        if(item->type==ITEM_DIR && (g_drag_external||!item->selected)){drag_copy(directory,item->path);return 1;}
+        return 0;
+    }
+    if(desktop){drag_copy(directory,"/home/Desktop");return 1;}return 0;
 }
 
 /* Bounding box of the selected items' source cells unioned with their ghost
@@ -618,6 +653,18 @@ static void drag_clamp_ghost(int *dx, int *dy) {
 
 void desktop_items_drag_move(int mx, int my) {
     if (!g_drag_active) return;
+    if(g_drag_external){
+        int ax,ay,bx,by;external_ghost_bounds(g_drag_cur_mx,g_drag_cur_my,&ax,&ay);
+        g_drag_cur_mx=mx;g_drag_cur_my=my;
+        int dx=mx-g_drag_start_mx,dy=my-g_drag_start_my;
+        if(!g_drag_moved&&(dx<=-DRAG_THRESHOLD||dx>=DRAG_THRESHOLD||dy<=-DRAG_THRESHOLD||dy>=DRAG_THRESHOLD)){
+            g_drag_moved=1;files_cancel_click();
+        }
+        if(g_drag_moved){
+            external_ghost_bounds(mx,my,&bx,&by);
+            request_partial_redraw(ax-4,ay-4,208,68);request_partial_redraw(bx-4,by-4,208,68);
+        }return;
+    }
     int old_dx = g_drag_cur_mx - g_drag_start_mx;
     int old_dy = g_drag_cur_my - g_drag_start_my;
     int was_moved = g_drag_moved;
@@ -648,7 +695,27 @@ void desktop_items_drag_move(int mx, int my) {
 
 void desktop_items_drag_end(int mx, int my) {
     if (!g_drag_active) return;
-    (void)mx; (void)my;
+    char destination[128];
+    if(g_drag_external){
+        if(g_drag_moved&&drop_directory(mx,my,destination,1)){
+            int previous=gui_app_context_enter(APP_FILES);vfs_stat_t st;
+            if(vfs_stat(g_drag_external_item.path,&st)==0&&st.inode==g_drag_source_inode){
+                if(files_move_path(g_drag_external_item.path,destination)==1){files_refresh();desktop_items_scan();}
+            }else ui_notify("Move file","The dragged file changed; nothing was moved",ICON_WARNING);
+            gui_app_context_leave(previous);
+        }
+        desktop_items_drag_cancel();return;
+    }
+    if(g_drag_moved&&drop_directory(mx,my,destination,0)){
+        int previous=gui_app_context_enter(APP_FILES),moved=0;
+        for(int i=0;i<g_desktop_item_count;i++){
+            DesktopItem *item=&g_desktop_items[i];
+            if(item->selected&&item->type!=ITEM_APP&&item->type!=ITEM_TRASH)
+                moved+=files_move_path(item->path,destination)==1;
+        }
+        if(moved){files_refresh();desktop_items_scan();}
+        gui_app_context_leave(previous);desktop_items_drag_cancel();return;
+    }
 
     if (g_drag_moved) {
         if (g_trash_hovered) {
@@ -1093,6 +1160,35 @@ void desktop_items_draw(void) {
         }
     }
 
+    /* Draw Marquee Selection Rectangle */
+    if (g_marquee_active) {
+        int rx, ry, rw, rh;
+        desktop_items_marquee_get_rect(&rx, &ry, &rw, &rh);
+        if (rw > 2 && rh > 2) {
+            rounded(rx, ry, rw, rh, 4, th->selection, 60);
+            rect(rx, ry, rw, 1, th->accent);
+            rect(rx, ry + rh - 1, rw, 1, th->accent);
+            rect(rx, ry, 1, rh, th->accent);
+            rect(rx + rw - 1, ry, 1, rh, th->accent);
+        }
+    }
+}
+
+void desktop_items_drag_overlay(void){
+    if(!g_drag_active||!g_drag_moved)return;
+    ThemeColors *th=ui_theme();
+    if(g_drag_external){
+        int x,y;external_ghost_bounds(g_drag_cur_mx,g_drag_cur_my,&x,&y);
+        rounded(x-3,y+3,206,64,17,0x080b14,40);
+        roundrect_stroke(x,y,200,60,16,1,th->border,th->surface_elevated);
+        draw_item_icon(&g_drag_external_item,x+12,y+14,32);
+        char label[64];unsigned n=0;
+        while(g_drag_external_item.name[n]&&n<63){label[n]=g_drag_external_item.name[n];label[++n]=0;if(text_width(label,1)>136){label[n-1]=0;break;}}
+        text(x+54,y+15,label,th->text,1);
+        char directory[128];
+        text(x+54,y+34,drop_directory(g_drag_cur_mx,g_drag_cur_my,directory,1)?"Move here":"Choose a folder",th->text_secondary,1);
+        return;
+    }
     /* Draw Drag Ghosts for all dragged items */
     if (g_drag_active && g_drag_moved) {
         int dx = g_drag_cur_mx - g_drag_start_mx;
@@ -1108,16 +1204,5 @@ void desktop_items_draw(void) {
         }
     }
 
-    /* Draw Marquee Selection Rectangle */
-    if (g_marquee_active) {
-        int rx, ry, rw, rh;
-        desktop_items_marquee_get_rect(&rx, &ry, &rw, &rh);
-        if (rw > 2 && rh > 2) {
-            rounded(rx, ry, rw, rh, 4, th->selection, 60);
-            rect(rx, ry, rw, 1, th->accent);
-            rect(rx, ry + rh - 1, rw, 1, th->accent);
-            rect(rx, ry, 1, rh, th->accent);
-            rect(rx + rw - 1, ry, 1, rh, th->accent);
-        }
-    }
+
 }

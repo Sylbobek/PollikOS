@@ -26,7 +26,7 @@ def i386():
             def open_panel():
                 click(512,15);g.wait(lambda:scalar('cc_shown') and not scalar('cc_animating'),'Control Center opens')
             def profile():
-                click(340+30,38+444);g.wait(lambda:scalar('cc_detail_kind')==4 and scalar('cc_detail_slide')==256,'profile slides open')
+                click(340+30,38+412);g.wait(lambda:scalar('cc_detail_kind')==4 and scalar('cc_detail_slide')==256,'profile slides open')
             open_panel()
             click(108+24,38+60)
             for ch in 'calc':key(ch)
@@ -35,7 +35,7 @@ def i386():
                 import struct
                 values=struct.unpack('<32sii',g.memory(address,size));assert values[1:]==(4,0),values
                 g.wait(lambda:scalar('cc_blink')==0,'caret off');g.wait(lambda:scalar('cc_blink')==1,'caret on')
-                key('backspace');assert not g.memory(address,32).split(b'\0')[0]
+                key('backspace');g.wait(lambda:not g.memory(address,32).split(b'\0')[0],'selected query deleted')
                 for ch in 'calc':key(ch)
                 click(108+204,38+124);click(108+20,38+198);assert scalar('cc_pins')==128
                 click(108+24,38+60);key('ctrl-a');key('backspace');assert scalar('cc_pins')==128
@@ -67,13 +67,15 @@ def i386():
             open_panel();profile()
             picture=BUILD/'desktop-menus-i386.ppm';g.screendump(picture);Image.open(picture).save(picture.with_suffix('.png'))
             if action==0:
-                click(786,38+284+70+76);g.wait(lambda:'AUTH: session locked' in g.log.read_text(),'profile logout')
-                assert all(not g.window(i)[7] for i in range(g.apps)),'logout left an app open'
+                start=len(g.log.read_text())
+                click(786,38+248+70+76);g.wait(lambda:'AUTH: session locked' in g.log.read_text()[start:],'profile logout')
+                g.wait(lambda:all(not g.window(i)[7] for i in range(g.apps)),'logout closes all apps')
+                start=len(g.log.read_text())
                 for ch in 'test123':key(ch)
-                key('ret');g.wait(lambda:'AUTH: login accepted' in g.log.read_text(),'sign in after logout',30)
+                key('ret');g.wait(lambda:'AUTH: login accepted' in g.log.read_text()[start:],'sign in after logout',30)
                 open_panel();profile()
                 print('PASS i386: actual app search, Calculator launch, logout/window cleanup and sign in',flush=True)
-            g.move(786,38+284+70+action*38)
+            g.move(786,38+248+70+action*38)
             g.hmp('mouse_button 1')
             shutdown_event(g.stream,'guest-reset' if action else 'guest-shutdown')
 

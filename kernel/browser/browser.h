@@ -12,6 +12,8 @@ void *kmalloc(u32 size);
 void kfree(void *ptr);
 int sys_text_width(const char *text, int scale);
 int sys_get_glyph_advance(u8 ch, int scale);
+int sys_get_codepoint_advance(uint32_t codepoint,int scale);
+void sys_draw_codepoint_clipped(int x,int y,uint32_t codepoint,u32 color,int scale,int x1,int y1,int x2,int y2);
 void sys_draw_rect_clipped(int x,int y,int w,int h,u32 c,int x1,int y1,int x2,int y2);
 void sys_draw_rounded_clipped(int x,int y,int w,int h,int r,u32 c,int x1,int y1,int x2,int y2);
 void sys_draw_letter_clipped(int x,int y,u8 ch,u32 c,int scale,int x1,int y1,int x2,int y2);

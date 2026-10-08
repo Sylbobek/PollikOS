@@ -21,7 +21,11 @@ void exit(int status) {
     _exit(status);
 }
 void abort(void) {
-    static const char message[] = "pollikc: abort\n";
+    /* Avoid stdio/allocation here: abort may be diagnosing a damaged heap. */
+    char message[] = "pollikc: abort at 0x0000000000000000\n";
+    uintptr_t caller=(uintptr_t)__builtin_return_address(0);
+    static const char digits[]="0123456789abcdef";
+    for(unsigned i=0;i<16;i++){message[34-i]=digits[caller&15];caller>>=4;}
     (void)__pollikos_syscall3(USER_WRITE, 2, (uint64_t)(uintptr_t)message, sizeof(message)-1);
     _exit(134);
 }

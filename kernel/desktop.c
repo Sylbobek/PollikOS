@@ -28,7 +28,7 @@ unsigned app_host_launcher_pins(void){
     int n=vfs_read(fd,text,sizeof(text)-1);vfs_close(fd);if(n<=0)return 0;return app_search_parse_pins(text);
 }
 int app_host_launcher_set_pins(unsigned pins){
-    char text[24]="pins=",value[16];number(value,pins&255);int n=5,i=0;while(value[i])text[n++]=value[i++];text[n++]='\n';
+    char text[24]="pins=",value[16];number(value,pins);int n=5,i=0;while(value[i])text[n++]=value[i++];text[n++]='\n';
     vfs_mkdir("/home/.config");int fd=vfs_open("/home/.config/launcher.conf.pending",O_WRONLY|O_CREAT|O_TRUNC);if(fd<0)return 0;
     int written=vfs_write(fd,text,n);vfs_close(fd);
     if(written!=n||vfs_rename_replace("/home/.config/launcher.conf.pending","/home/.config/launcher.conf")!=0)return 0;
@@ -1026,6 +1026,7 @@ void desktop_draw_bar(void) {
     g_bar_only_dirty = 0;
 }
 void desktop_draw_overlays(void) {
+    desktop_items_drag_overlay();
     if (!shell.alttab_open) return;
     int open_apps[NUM_APPS], count = 0;
     for (int z = NUM_APPS - 1; z >= 0; z--) {

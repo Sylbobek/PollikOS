@@ -34,7 +34,7 @@ static DomNode *convert_node(dom_node *native,unsigned depth,unsigned *count,int
                 if(dom_node_get_node_name(attribute,&name)!=DOM_NO_ERR ||
                    dom_node_get_node_value(attribute,&data)!=DOM_NO_ERR || !name || !data)*failed=1;
                 char *n=name?string_copy(name):NULL,*v=data?string_copy(data):NULL;
-                if(n && v)dom_set_attribute(node,n,v);else *failed=1;
+                if(n && v){dom_set_attribute(node,n,v);const char *stored=dom_get_attribute(node,n);if(!stored || strcmp(stored,v))*failed=1;}else *failed=1;
                 free(n);free(v);if(name)dom_string_unref(name);if(data)dom_string_unref(data);dom_node_unref(attribute);
             }
             if(attributes)dom_namednodemap_unref(attributes);

@@ -21,6 +21,9 @@ documented in the component's upstream or PollikOS notes where available.
 - minimp3: `minimp3/LICENSE`, `minimp3/UPSTREAM.md`.
 - stb: licence and copyright notices are embedded in its vendored headers.
 
-The NetSurf libraries are vendored with build generators but are not yet
-linked into the normal Browser's HTML/CSS/layout pipeline. QuickJS is linked
-into the normal x86_64 Browser. Source availability alone is not integration.
+The normal x86_64 Browser links libdom/libhubbub for HTML5 parsing and libcss
+for parsing and computed styles, with libparserutils/libwapcaplet dependencies.
+QuickJS executes its JavaScript. PollikOS still supplies layout and painting;
+this is not the full NetSurf browser or a Chromium-compatible renderer.
+See [native browser checkpoint](../docs/NATIVE_BROWSER_CHECKPOINT.md) for evidence
+and supported features. The i386 browser retains its existing backend.

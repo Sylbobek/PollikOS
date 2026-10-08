@@ -12,8 +12,9 @@
 
 7. `pollikos_spawn_rights` może wyłącznie ograniczyć prawa rodzica. Potomkowie
    nie odzyskują odebranych praw. Kernel nadaje pulpitowi prawo konfiguracji
-   urządzeń; pulpit przekazuje je Settings. Browser uruchamiany przez pulpit
-   dostaje tylko odczyt plików, sieć i okna. VFS, okna, sieć oraz operacje sesji
+   urządzeń; pulpit przekazuje je Settings. Browser używa teraz standardowych
+   praw aplikacji użytkownika, również do zapisu pobranych stron i zakładek.
+   VFS, okna, sieć oraz operacje sesji
    sprawdzają te prawa w kernelu, również dla odziedziczonych fd. Usunięto
    błąd życia tablicy metod QuickJS: lazy initialization nie wskazuje już
    tablicy na zakończonym stosie. Istniejące SDK okien, zdarzeń i potoków jest
@@ -67,7 +68,7 @@ Zwykłe operacje fd i pozostałe numery syscalli nie zmieniły się.
 - Log mieści 31 bloków metadanych na transakcję. Przekroczenie limitu kończy
   operację błędem i wycofaniem metadanych; nie przechodzi na niezabezpieczony zapis.
 - To nadal jedno konto, polityka katalogów i jeden wątek procesu. Browser ma
-  profil read-only; nie jest to wieloużytkownikowy ACL ani per-file portal.
+  standardowe prawa aplikacji; nie jest to wieloużytkownikowy ACL ani per-file portal.
 - Transport TLS, compositor i sterowniki nadal są w kernelu; GUI i386 także.
   Nie deklarujemy pełnej migracji wszystkich aplikacji ani Device Managera.
 - Stary kernel nie odtwarza oczekującego nowego dziennika. Recovery wykonuje

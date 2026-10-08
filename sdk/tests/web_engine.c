@@ -7,6 +7,7 @@
 BrowserApp g_browser;
 void *kmalloc(u32 size){return malloc(size?size:1);}void kfree(void *pointer){free(pointer);}
 void browser_work_checkpoint(void){}void browser_mark_dirty(void){}
+int ui_is_dark(void){return 0;}
 static int errors;
 #define CHECK(x) do {if(!(x)){printf("WEB_ENGINE_FAIL line=%d\n",__LINE__);errors++;}} while(0)
 int main(void) {

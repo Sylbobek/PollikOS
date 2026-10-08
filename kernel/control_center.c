@@ -22,8 +22,8 @@ static AppSearchInput cc_input;
 static unsigned cc_pins;
 static int cc_context=-1,cc_hover=-1,cc_hot=-1,cc_blink;
 static u32 cc_edit_started;
-enum { WIDTH=400,HEIGHT=480,DURATION=240,DETAIL_DURATION=180,
-       SEARCH_WIDTH=220,SEARCH_HEIGHT=364,DETAIL_WIDTH=248,DETAIL_GAP=16 };
+enum { WIDTH=400,HEIGHT=448,DURATION=240,DETAIL_DURATION=180,
+       SEARCH_WIDTH=220,SEARCH_HEIGHT=452,DETAIL_WIDTH=248,DETAIL_GAP=16 };
 static int left(void){
     int screen=ui_bridge_screen_width();
     int x=(screen-WIDTH-SEARCH_WIDTH-12)/2+SEARCH_WIDTH+12;
@@ -36,7 +36,7 @@ static int search_left(void){return left()-SEARCH_WIDTH-12;}
 static int top(void){return 38+cc_position;}
 static int detail_width(void){int w=ui_bridge_screen_width()-left()-WIDTH-DETAIL_GAP-12;return w<DETAIL_WIDTH?w:DETAIL_WIDTH;}
 static int detail_height(int kind){return kind==3?204:kind==4?184:176;}
-static int detail_top(int kind){return kind==3?264:kind==4?284:52;}
+static int detail_top(int kind){return kind==3?228:kind==4?248:18;}
 static int detail_left(void){return left()+WIDTH+DETAIL_GAP+(256-cc_detail_slide)*12/256;}
 static void damage(void){
     int x=search_left()-8;
@@ -51,7 +51,7 @@ static void detail_set(int kind){
     damage();
 }
 static void edited(void){cc_edit_started=wm_time_ms();cc_blink=1;cc_selected=0;damage();}
-static int matches(int id){const GuiApp *app=gui_app_get(id);return app&&(cc_query[0]?app_search_matches(app->name,cc_query):(cc_pins&(1u<<id))!=0);}
+static int matches(int id){const GuiApp *app=gui_app_get(id);return app&&app->name&&(cc_query[0]?app_search_matches(app->name,cc_query):(cc_pins&(1u<<id))!=0);}
 static int app_at(int row){for(int id=0;id<APP_COUNT;id++)if(matches(id)&&row--==0)return id;return -1;}
 static int query_width(int count){char prefix[32];int i=0;while(cc_query[i]&&i<count){prefix[i]=cc_query[i];i++;}prefix[i]=0;return text_width(prefix,1);}
 static void avatar(int x,int y,u32 color){ui_bridge_roundrect(x+6,y,12,12,6,color);ui_bridge_roundrect(x,y+13,24,11,7,color);}
@@ -89,26 +89,31 @@ int control_center_poll(unsigned now){
 static void label(int x,int y,const char *s,u32 color){ui_bridge_text(left()+x,top()+y,s,color,2);}
 static u32 panel_color(void){ThemeColors *t=ui_theme();return blend(t->surface_elevated,t->accent,6);}
 static u32 card_color(void){return blend(panel_color(),ui_theme()->surface_secondary,160);}
-static u32 edge_color(void){return blend(panel_color(),ui_theme()->border,100);}
 static void panel(int x,int y,int w,int h,int radius){
-    ui_bridge_rounded(x-4,y+3,w+8,h+6,radius+4,0x080b14,22);
-    ui_bridge_rounded(x-2,y+2,w+4,h+3,radius+2,0x080b14,30);
-    ui_bridge_roundrect_stroke(x,y,w,h,radius,1,edge_color(),panel_color());
+    ui_bridge_roundrect(x,y,w,h,radius,panel_color());
 }
 static void card(int y,int h){ui_bridge_roundrect(left()+16,top()+y,WIDTH-32,h,16,card_color());}
 static void detail_button(int x,int y,int kind){
-    ThemeColors *t=ui_theme();int active=cc_list==kind;
-    u32 fill=blend(card_color(),t->accent,active?64:cc_hot==kind?36:16);
-    ui_bridge_roundrect(left()+x,top()+y,30,30,11,fill);
-    label(x+9,y+2,active?"<":">",active?t->accent_hover:t->text_secondary);
+    ThemeColors *t=ui_theme();int active=cc_list==kind,hover=cc_hot==kind;
+    u32 fill=blend(card_color(),t->accent,active?80:hover?44:20);
+    u32 arrow=active||hover?t->accent_hover:t->text_secondary;
+    u32 edge=blend(fill,arrow,180);
+    int bx=left()+x,by=top()+y;
+    ui_bridge_roundrect(bx,by,30,30,10,fill);
+    /* A 8x12 chevron centered on the button, independent of font bearings. */
+    for(int row=0;row<12;row++){
+        int step=row<6?row:11-row;
+        int px=bx+(active?16-step:11+step),py=by+9+row;
+        ui_bridge_rect(px,py,3,1,edge);
+        ui_bridge_rect(px+1,py,1,1,arrow);
+    }
 }
 static void slider(int y,int value,int minimum){
     ThemeColors *t=ui_theme();int x=left()+30,w=WIDTH-60;
     int offset=(w-1)*(value-minimum)/(100-minimum);
     ui_bridge_roundrect(x,top()+y+9,w,8,4,blend(card_color(),t->border,140));
     ui_bridge_roundrect(x,top()+y+9,offset+1,8,4,blend(t->accent,t->text,28));
-    ui_bridge_rounded(x+offset-10,top()+y+4,20,20,10,0x080b14,30);
-    ui_bridge_roundrect_stroke(x+offset-9,top()+y+3,18,18,9,1,edge_color(),0xf7f9ff);
+    ui_bridge_roundrect(x+offset-9,top()+y+3,18,18,9,0xf7f9ff);
 }
 static void detail_draw(GraphicsClip clip){
     if(!cc_detail_kind || !cc_detail_slide)return;
@@ -122,7 +127,7 @@ static void detail_draw(GraphicsClip clip){
     if(inner.y1<y+12)inner.y1=y+12;if(inner.y2>y+h-12)inner.y2=y+h-12;
     graphics_set_clip(inner);
     GraphicsClip heading=inner;if(heading.x2>x+w-48)heading.x2=x+w-48;graphics_set_clip(heading);
-    ui_bridge_text(x+20,y+18,kind==1?"Wi-Fi":kind==2?"Bluetooth":kind==3?"Sound output":auth_username(),t->text,2);
+    ui_bridge_text(x+20,y+18,kind==1?"Wi-Fi":kind==2?"Bluetooth":kind==3?"Sound output":"Profile",t->text,2);
     graphics_set_clip(inner);
     ui_bridge_text(x+w-30,y+19,"x",t->text_secondary,1);
     if(kind<3){
@@ -181,26 +186,23 @@ void control_center_draw(void){
         ui_bridge_text(sx+18,y+190,cc_pins&(1u<<cc_context)?"Unpin":"Pin to recommended",t->text,1);
     }
     panel(x,y,WIDTH,HEIGHT,24);
-    label(20,14,"Control Center",t->text);
     for(int i=0;i<2;i++){
-        ui_bridge_roundrect(x+16+i*184,y+52,176,70,16,card_color());
-        label(30+i*184,62,i?"Bluetooth":"Wi-Fi",t->text);
-        label(30+i*184,92,"No adapter",t->text_secondary);
-        detail_button(154+i*184,60,i+1);
+        ui_bridge_roundrect(x+16+i*184,y+18,176,70,16,card_color());
+        label(30+i*184,28,i?"Bluetooth":"Wi-Fi",t->text);
+        label(30+i*184,58,"No adapter",t->text_secondary);
+        detail_button(154+i*184,26,i+1);
     }
-    card(130,34);label(30,136,"Airplane mode",t->text);
-    label(270,136,net_manager_enabled()?"Off":"On",net_manager_enabled()?t->text_secondary:t->accent);
-    card(176,62);
-    label(30,187,"Network",t->text);
+    card(104,60);label(30,116,"Connection",t->text);
     NetworkInterface *iface=net_manager_get_active_iface();
-    label(166,187,!net_manager_enabled()?"Blocked":iface&&iface->link_up?"Ethernet":"Disconnected",t->text_secondary);
-    card(250,76);label(30,260,"Brightness",t->text);char b[16];number(b,(u32)framebuffer_brightness());
-    label(312,260,b,t->text_secondary);slider(292,framebuffer_brightness(),20);
-    ui_bridge_roundrect(x+24,y+337,WIDTH-48,1,0,edge_color());
-    card(348,66);label(30,351,"Volume",cc_hot==3||cc_list==3?t->accent_hover:t->text);
-    number(b,audio_get_volume());label(322,351,b,t->text_secondary);slider(380,audio_get_volume(),0);
-    card(432,36);avatar(x+28,y+438,t->text_secondary);label(64,438,"Profile",t->text);
-    detail_button(346,435,4);
+    int connected=net_manager_enabled()&&iface&&iface->link_up;
+    ui_bridge_roundrect(x+30,y+146,8,8,4,connected?t->success:t->text_muted);
+    label(50,140,!net_manager_enabled()?"Paused":connected?"Ethernet connected":"Disconnected",t->text_secondary);
+    card(180,92);label(30,194,"Brightness",t->text);char b[16];number(b,(u32)framebuffer_brightness());
+    label(322,194,b,t->text_secondary);slider(236,framebuffer_brightness(),20);
+    card(284,92);label(30,298,"Volume",cc_hot==3||cc_list==3?t->accent_hover:t->text);
+    number(b,audio_get_volume());label(322,298,b,t->text_secondary);slider(340,audio_get_volume(),0);
+    card(392,40);avatar(x+28,y+400,t->text_secondary);label(64,402,"Profile",t->text);
+    detail_button(346,396,4);
     detail_draw(clip);
     graphics_set_clip(old);
 }
@@ -217,9 +219,9 @@ int control_center_pointer(int x,int y,int down){
     if(hover<0||app_at(hover)<0)hover=-1;
     if(hover!=cc_hover){cc_hover=hover;damage();}
     int lx=x-left(),ly=y-top(),hot=-1;
-    if(ly>=60&&ly<90){if(lx>=154&&lx<184)hot=1;else if(lx>=338&&lx<368)hot=2;}
-    if(lx>=16&&lx<WIDTH-16&&ly>=348&&ly<374)hot=3;
-    if(lx>=16&&lx<WIDTH-16&&ly>=432&&ly<468)hot=4;
+    if(ly>=26&&ly<56){if(lx>=154&&lx<184)hot=1;else if(lx>=338&&lx<368)hot=2;}
+    if(lx>=16&&lx<WIDTH-16&&ly>=284&&ly<330)hot=3;
+    if(lx>=16&&lx<WIDTH-16&&ly>=392&&ly<432)hot=4;
     if(cc_detail_slide==256&&x>=detail_left()+16&&x<detail_left()+detail_width()-16){
         int dy=ly-detail_top(cc_detail_kind)-58;
         if(dy>=0&&dy<(cc_detail_kind==4?3:2)*38&&dy%38<32)hot=10+dy/38;
@@ -271,16 +273,15 @@ int control_center_click(int x,int y){
     if(lx<0||lx>=WIDTH||ly<0||ly>=HEIGHT){control_center_toggle();return 1;}
     if(cc_animating)return 1;
     cc_search_focus=0;
-    if(ly>=432&&ly<468&&lx>=16&&lx<WIDTH-16){detail_set(cc_list==4?0:4);return 1;}
-    if(ly>=52&&ly<122){
+    if(ly>=392&&ly<432&&lx>=16&&lx<WIDTH-16){detail_set(cc_list==4?0:4);return 1;}
+    if(ly>=18&&ly<88){
         if((lx>=154&&lx<184)||(lx>=338&&lx<368)){int list=lx>=204?2:1;detail_set(cc_list==list?0:list);}
         return 1; /* Unsupported radio is never displayed as enabled. */
     }
-    if(ly>=130&&ly<164){net_manager_set_enabled(!net_manager_enabled());damage();return 1;}
-    if(ly>=348&&ly<374&&lx>=16&&lx<WIDTH-16){detail_set(cc_list==3?0:3);return 1;}
+    if(ly>=284&&ly<330&&lx>=16&&lx<WIDTH-16){detail_set(cc_list==3?0:3);return 1;}
     if(lx>=22&&lx<=WIDTH-22) {
-        if(ly>=286&&ly<320){cc_capture=1;update_slider(x);return 1;}
-        if(ly>=374&&ly<408){cc_capture=0;update_slider(x);return 1;}
+        if(ly>=230&&ly<264){cc_capture=1;update_slider(x);return 1;}
+        if(ly>=334&&ly<368){cc_capture=0;update_slider(x);return 1;}
     }
     return 1;
 }

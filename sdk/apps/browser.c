@@ -88,10 +88,16 @@ int sys_get_glyph_advance(u8 ch, int scale) {
     return font_glyphs[font_scale(scale)-1][ch-32].advance + 1;
 }
 int sys_text_width(const char *text, int scale) {
-    int width = 0;
-    while (*text) width += sys_get_glyph_advance((u8)*text++, scale);
+    int width = 0;size_t left=strlen(text);
+    while(left){size_t used;uint32_t codepoint=pollik_utf8_next(text,left,&used);width+=sys_get_codepoint_advance(codepoint,scale);text+=used;left-=used;}
     return width;
 }
+static unsigned glyph_index(uint32_t codepoint) {
+    if(codepoint>=32 && codepoint<127)return (unsigned)codepoint-32;
+    for(unsigned i=95;i<FONT_GLYPH_COUNT;i++)if(font_codepoints[i]==codepoint)return i;
+    return '?'-32;
+}
+int sys_get_codepoint_advance(uint32_t codepoint,int scale){return font_glyphs[font_scale(scale)-1][glyph_index(codepoint)].advance+1;}
 
 static void fill_clip(int x,int y,int w,int h,u32 color,int x1,int y1,int x2,int y2) {
     if (x < x1) { w -= x1-x; x=x1; }
@@ -108,11 +114,17 @@ void sys_draw_rect_clipped(int x,int y,int w,int h,u32 c,int x1,int y1,int x2,in
     fill_clip(x,y,w,h,c,x1,y1,x2,y2);
 }
 void sys_draw_rounded_clipped(int x,int y,int w,int h,int r,u32 c,int x1,int y1,int x2,int y2) {
-    (void)r; fill_clip(x,y,w,h,c,x1,y1,x2,y2);
+    if(r>w/2)r=w/2;if(r>h/2)r=h/2;if(r<1){fill_clip(x,y,w,h,c,x1,y1,x2,y2);return;}
+    for(int row=0;row<h;row++){int inset=0,distance=row<r?r-row-1:row>=h-r?row-(h-r):0;
+        if(row<r || row>=h-r)while(inset<r && (r-inset-1)*(r-inset-1)+distance*distance>r*r)++inset;
+        fill_clip(x+inset,y+row,w-2*inset,1,c,x1,y1,x2,y2);}
 }
 void sys_draw_letter_clipped(int x,int y,u8 ch,u32 color,int scale,int x1,int y1,int x2,int y2) {
-    if (ch < 32 || ch >= 127) return;
-    const FontGlyph *glyph=&font_glyphs[font_scale(scale)-1][ch-32];
+    sys_draw_codepoint_clipped(x,y,ch,color,scale,x1,y1,x2,y2);
+}
+void sys_draw_codepoint_clipped(int x,int y,uint32_t ch,u32 color,int scale,int x1,int y1,int x2,int y2) {
+    if (ch < 32) return;
+    const FontGlyph *glyph=&font_glyphs[font_scale(scale)-1][glyph_index(ch)];
     int origin=x+(glyph->advance-glyph->width)/2;
     for (unsigned row=0; row<glyph->height; ++row) for (unsigned col=0; col<glyph->width; ++col) {
         unsigned i=row*glyph->width+col;
@@ -319,6 +331,7 @@ static void poll_remote(void) {
         http_document[http_document_length]=0;
         int kind=http_request_kind;
         if(kind==0) {
+            printf("[browser] page status=%ld url=%s\n",pollikos_http_status(http_handle),http_url);
             char final_url[ADDRESS_LIMIT+1];
             if(pollikos_http_url(http_handle,final_url,sizeof(final_url))>=0){strcpy(http_url,final_url);strcpy(address,final_url);if(history_count)strcpy(page_history[history_index],final_url);}
             int loaded=prepare_remote_document(http_url,http_document,(int)http_document_length);
@@ -657,11 +670,11 @@ static void input_key(uint32_t key,uint32_t modifiers) {
     else if(key==POLLIKOS_KEY_HOME)g_browser.focused_cursor=0;
     else if(key==POLLIKOS_KEY_END)g_browser.focused_cursor=(int)length;
     else if(key==8 || key==POLLIKOS_KEY_DELETE || address_character(key,modifiers)) {
-        unsigned cursor=(unsigned)g_browser.focused_cursor;if(cursor>length)cursor=length;
+        unsigned cursor=(unsigned)g_browser.focused_cursor;if(cursor>length)cursor=length;int had_selection=0;
         if(g_browser.focused_anchor>=0 && g_browser.focused_anchor!=(int)cursor){unsigned a=(unsigned)g_browser.focused_anchor,b=cursor;if(a>b){unsigned t=a;a=b;b=t;}
-            memmove(node->value+a,node->value+b,length-b+1);length-=b-a;cursor=a;changed=1;}
-        if(key==8 && cursor){memmove(node->value+cursor-1,node->value+cursor,length-cursor+1);--cursor;changed=1;}
-        else if(key==POLLIKOS_KEY_DELETE && cursor<length){memmove(node->value+cursor,node->value+cursor+1,length-cursor);changed=1;}
+            memmove(node->value+a,node->value+b,length-b+1);length-=b-a;cursor=a;changed=had_selection=1;}
+        if(key==8 && !had_selection && cursor){memmove(node->value+cursor-1,node->value+cursor,length-cursor+1);--cursor;changed=1;}
+        else if(key==POLLIKOS_KEY_DELETE && !had_selection && cursor<length){memmove(node->value+cursor,node->value+cursor+1,length-cursor);changed=1;}
         else if(address_character(key,modifiers) && length+1<sizeof(node->value)){memmove(node->value+cursor+1,node->value+cursor,length-cursor+1);node->value[cursor++]=(char)address_character(key,modifiers);changed=1;}
         g_browser.focused_cursor=(int)cursor;
     }

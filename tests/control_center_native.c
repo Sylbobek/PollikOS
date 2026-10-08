@@ -8,6 +8,7 @@ unsigned app_host_launcher_pins(void){return saved_pins;}
 int app_host_launcher_set_pins(unsigned pins){saved_pins=pins;return 1;}
 void auth_run_admin(int id){admin_requested=id;}
 void ui_icon_draw(int id,int x,int y,int size){(void)id;(void)x;(void)y;(void)size;}
+void ui_app_icon_draw(int id,int x,int y,int size){ui_icon_draw(id,x,y,size);}
 int text_width(const char *s,int scale){int n=0;while(*s++)n+=scale==1?6:10;return n;}
 void ui_bridge_rect(int x,int y,int w,int h,u32 c){(void)x;(void)y;(void)w;(void)h;(void)c;}
 void app_host_power(int reboot){power=reboot;}
@@ -15,7 +16,8 @@ void auth_logout(void){logouts++;}
 const char *auth_username(void){return "Test user";}
 const GuiApp *gui_app_get(int id){
     static const GuiApp apps[APP_COUNT]={{.name="Welcome"},{.name="Files"},{.name="Terminal"},{.name="Notes"},
-        {.name="Settings"},{.name="Browser"},{.name="PollikMark3D"},{.name="Calculator"}};
+        {.name="Settings"},{.name="Browser"},{.name="PollikMark3D"},{.name="Calculator"},
+        {.name="Photos"},{.name="Video"},{.name="Documents"}};
     return id>=0&&id<APP_COUNT?&apps[id]:0;
 }
 char gui_key_character(u8 code){return code==30?'a':code==33?'f':code==23?'i':code==38?'l':code==18?'e':code==31?'s':code==44?'z':0;}
@@ -49,6 +51,9 @@ void ui_dialog_message(const char *a,const char *b,IconKind c,void (*callback)(i
 static void advance(unsigned ms){clock_ms+=ms;control_center_poll(clock_ms);}
 static void settle(void){advance(DURATION);advance(DETAIL_DURATION);}
 int main(void){
+    CHECK(app_search_parse_pins("pins=1024\n")==1024);
+    CHECK(app_search_parse_pins("pins=4294967295\n")==0xffffffffu);
+    CHECK(app_search_parse_pins("pins=4294967296\n")==0);
     AppSearchInput edit;app_search_reset(&edit);app_search_edit(&edit,'a',0,0);app_search_edit(&edit,'b',0,0);
     app_search_edit(&edit,APP_SEARCH_LEFT,1,0);CHECK(edit.anchor==2&&edit.cursor==1);
     app_search_edit(&edit,'x',0,0);CHECK(edit.text[0]=='a'&&edit.text[1]=='x'&&!edit.text[2]);
@@ -62,14 +67,14 @@ int main(void){
     settle();CHECK(cc_position==0&&!cc_animating);
     control_center_draw();int x=left(),y=top();
     control_center_click(x+30,y+70);CHECK(saves==0&&device==0); /* No fake radio toggles. */
-    control_center_click(x+30,y+390);CHECK(volume==0);
-    control_center_pointer(x+WIDTH+50,y+390,1);CHECK(volume==100&&saves==0);
-    control_center_pointer(x+WIDTH/2,y+390,1);CHECK(volume>=49&&volume<=51&&saves==0);
+    control_center_click(x+30,y+350);CHECK(volume==0);
+    control_center_pointer(x+WIDTH+50,y+350,1);CHECK(volume==100&&saves==0);
+    control_center_pointer(x+WIDTH/2,y+350,1);CHECK(volume>=49&&volume<=51&&saves==0);
     control_center_pointer(0,0,0);CHECK(saves==1&&cc_capture==-1);
-    control_center_click(x+30,y+305);CHECK(bright==20&&saves==1);
+    control_center_click(x+30,y+245);CHECK(bright==20&&saves==1);
     control_center_pointer(x+WIDTH+50,0,1);CHECK(bright==100&&saves==1&&invalidations==2);
     control_center_pointer(0,0,0);CHECK(saves==2);
-    control_center_click(x+360,y+360);CHECK(cc_list==3);
+    control_center_click(x+360,y+310);CHECK(cc_list==3);
     settle();CHECK(cc_detail_kind==3&&cc_detail_slide==256);
     control_center_draw();CHECK(clip.y1==0);
     control_center_click(detail_left()+30,y+detail_top(3)+58+38+10);CHECK(device==0&&saves==2); /* AC97 absent. */
@@ -80,8 +85,7 @@ int main(void){
     advance(DETAIL_DURATION);CHECK(cc_detail_slide==256);
     control_center_click(x+345,y+70);CHECK(cc_list==2);
     settle();CHECK(cc_detail_kind==2&&cc_detail_slide==256);
-    control_center_click(x+30,y+140);CHECK(!networking);
-    control_center_click(x+30,y+140);CHECK(networking);
+    control_center_click(x+30,y+140);CHECK(networking); /* Connection is a status card. */
     CHECK(control_center_key(1));settle();CHECK(cc_shown&&!cc_detail_kind&&!cc_list);
     CHECK(control_center_key(1));settle();CHECK(!cc_shown&&saves==2);
     control_center_toggle();settle();
@@ -100,7 +104,7 @@ int main(void){
     control_center_click(search_left()+20,top()+164);CHECK(admin_requested==APP_FILES&&!cc_shown);
     for(int action=0;action<3;action++){
         control_center_toggle();settle();
-        control_center_click(left()+30,top()+444);CHECK(cc_list==4);
+        control_center_click(left()+30,top()+412);CHECK(cc_list==4);
         advance(DETAIL_DURATION/2);CHECK(cc_detail_slide>0&&cc_detail_slide<256);
         control_center_draw();CHECK(clip.y1==0);
         advance(DETAIL_DURATION/2);CHECK(cc_detail_kind==4&&cc_detail_slide==256);

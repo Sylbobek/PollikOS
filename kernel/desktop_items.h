@@ -53,6 +53,9 @@ int  desktop_items_move_to_trash(int idx);
 
 /* Drag & Drop */
 void desktop_items_drag_start(int idx, int mx, int my);
+void desktop_items_drag_file(const char *path,const char *name,int is_dir,int mx,int my);
+void desktop_items_drag_cancel(void);
+void desktop_items_drag_overlay(void);
 void desktop_items_drag_move(int mx, int my);
 void desktop_items_drag_end(int mx, int my);
 int  desktop_items_is_dragging(void);
@@ -68,4 +71,3 @@ int  desktop_items_marquee_is_active(void);
 void desktop_items_marquee_get_rect(int *rx, int *ry, int *rw, int *rh);
 
 #endif
-

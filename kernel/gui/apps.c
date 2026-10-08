@@ -47,7 +47,7 @@ static const GuiApp registry[APP_COUNT] = {
     [APP_WELCOME] = { .name = "Welcome To pollikos", .icon = ICON(APP_WELCOME), MIN_SIZE, LIGHT_BODY, .render = welcome_render, .click = welcome_click },
     [APP_FILES] = { .name = "Files", .icon = ICON(APP_FILES), MIN_SIZE, LIGHT_BODY,
         .render = files_render, .click = files_click, .scroll = files_scroll,
-        .key = files_client_key, .close = files_close },
+        .key = files_client_key, .open = files_refresh, .close = files_close },
     [APP_TERMINAL] = { .name = "Terminal", .icon = ICON(APP_TERMINAL), MIN_SIZE, .body_active = 0x202331, .body_inactive = 0x1a1c27,
         .render = terminal_render, .key = terminal_client_key, .click = terminal_click,
         .drag = terminal_client_drag, .scroll = terminal_client_scroll },

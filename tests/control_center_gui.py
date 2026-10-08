@@ -60,7 +60,7 @@ def main():
             y, fx = 38, x + 416
             click(g.width // 2, 15)
             g.wait(lambda: value('cc_shown') and not value('cc_animating'), 'panel opens')
-            samples = [(x + 180, y + 222), (x + 190, y + 470), (x + 170, y + 450)]
+            samples = [(x + 180, y + 222), (x + 190, y + 380), (x + 170, y + 410)]
             theme = g.words('g_dark_theme' if args.theme == 'dark' else 'g_light_theme')
             def mix(a, b, weight):
                 return sum(((((a >> shift) & 255) * (256 - weight) +
@@ -71,14 +71,14 @@ def main():
             panel = rgb(mix(theme[3], theme[9], 6))
             card = rgb(mix(mix(theme[3], theme[9], 6), theme[2], 160))
             stable = [card, panel, card]
-            base, _ = snapshot('main', [((x + 200, y + 30), panel), *zip(samples, stable)])
-            assert base.getpixel((x, y)) != base.getpixel((x + 200, y + 30)), 'square panel corner'
+            base, _ = snapshot('main', [((x + 196, y + 30), panel), *zip(samples, stable)])
+            assert base.getpixel((x, y)) != base.getpixel((x + 196, y + 30)), 'square panel corner'
             assert fx >= x + 400 + 16 and fx + 248 <= g.width - 12, 'flyout outside screen'
             for kind, point, name, popup_top in (
-                (1, (x + 166, y + 74), 'wifi', 52),
-                (2, (x + 352, y + 74), 'bluetooth', 52),
-                (3, (x + 360, y + 360), 'audio', 264),
-                (4, (x + 70, y + 444), 'profile', 284),
+                (1, (x + 166, y + 40), 'wifi', 18),
+                (2, (x + 352, y + 40), 'bluetooth', 18),
+                (3, (x + 360, y + 310), 'audio', 228),
+                (4, (x + 70, y + 412), 'profile', 248),
             ):
                 click(*point)
                 g.wait(lambda: value('cc_list') == kind and value('cc_detail_kind') == kind

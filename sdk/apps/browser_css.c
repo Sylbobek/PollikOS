@@ -163,10 +163,11 @@ static css_error walk(DomNode *node,css_select_ctx *context,css_computed_style *
         const char *inline_text=dom_get_attribute(node,"style");css_stylesheet *inline_sheet=inline_text && *inline_text?sheet(inline_text,1):NULL;
         css_select_results *result=NULL;css_error e=css_select_style(context,node,units,media,inline_sheet,&handler,NULL,&result);
         if(inline_sheet)css_stylesheet_destroy(inline_sheet);
-        if(e!=CSS_OK)return e;
+        if(e!=CSS_OK){printf("[browser:css] select <%s> error=%u\n",node->tag,(unsigned)e);return e;}
         DomNode *p=parent(node);StyleState *ps=p?p->upstream_style_data:NULL;
-        e=css_computed_style_compose(ps && ps->style?ps->style:default_style,result->styles[CSS_PSEUDO_ELEMENT_NONE],units,&s->style);
-        css_select_results_destroy(result);if(e!=CSS_OK)return e;
+        if(ps && ps->style)e=css_computed_style_compose(ps->style,result->styles[CSS_PSEUDO_ELEMENT_NONE],units,&s->style);
+        else{s->style=result->styles[CSS_PSEUDO_ELEMENT_NONE];result->styles[CSS_PSEUDO_ELEMENT_NONE]=NULL;}
+        css_select_results_destroy(result);if(e!=CSS_OK){printf("[browser:css] compose <%s> error=%u\n",node->tag,(unsigned)e);return e;}
         if(!p)units->root_style=s->style;map_style(node,s->style,units);
     } else if(node->type==NODE_TEXT && node->parent){node->style=node->parent->style;node->style.display=DISPLAY_INLINE;}
     for(DomNode *child=node->first_child;child;child=child->next_sibling){css_error e=walk(child,context,default_style,units,media);if(e!=CSS_OK)return e;}
@@ -184,6 +185,7 @@ void css_apply_styles(DomNode *root,const char *extra) {
     if(error==CSS_OK)error=css_select_ctx_append_sheet(context,base,CSS_ORIGIN_UA,NULL);
     if(error==CSS_OK)error=css_select_ctx_append_sheet(context,author,CSS_ORIGIN_AUTHOR,NULL);
     if(error==CSS_OK)error=css_select_default_style(context,&handler,NULL,&default_style);
+    if(error!=CSS_OK)printf("[browser:css] context setup error=%u\n",(unsigned)error);
     css_unit_ctx units={.viewport_width=INTTOFIX(g_browser.w>20?g_browser.w-20:896),.viewport_height=INTTOFIX(g_browser.h>110?g_browser.h-110:501),.font_size_default=INTTOFIX(14),.device_dpi=INTTOFIX(96)};
     css_media media={0};media.type=CSS_MEDIA_SCREEN;media.width=units.viewport_width;media.height=units.viewport_height;media.color=INTTOFIX(8);
     if(error==CSS_OK)error=walk(root,context,default_style,&units,&media);

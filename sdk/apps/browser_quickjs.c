@@ -212,7 +212,7 @@ static void fetch_finish(WebFetch *request,int failed) {
         JS_SetPropertyStr(context,result,"text",JS_NewCFunctionData(context,response_body,0,0,2,data));
         JS_SetPropertyStr(context,result,"json",JS_NewCFunctionData(context,response_body,0,1,2,data));
         JS_SetPropertyStr(context,result,"arrayBuffer",JS_NewCFunctionData(context,response_body,0,2,2,data));
-        JS_DefinePropertyGetSet(context,result,JS_NewAtom(context,"bodyUsed"),JS_NewCFunctionData(context,body_used,0,0,1,&data[1]),JS_UNDEFINED,JS_PROP_ENUMERABLE);
+        JSAtom atom=JS_NewAtom(context,"bodyUsed");JS_DefinePropertyGetSet(context,result,atom,JS_NewCFunctionData(context,body_used,0,0,1,&data[1]),JS_UNDEFINED,JS_PROP_ENUMERABLE);JS_FreeAtom(context,atom);
         JS_FreeValue(context,data[0]);JS_FreeValue(context,data[1]);
     }
     JSValue called=JS_Call(context,failed?request->reject:request->resolve,JS_UNDEFINED,1,&result);

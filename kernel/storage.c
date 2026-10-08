@@ -325,6 +325,29 @@ void fs_init(void) {
         legacy_backend = STORAGE_ATA;
         legacy_drive = 0xf0;
         legacy_base_lba = 0;
+        /* Dedicated data disks reserve sectors 0..63 for the VFS journal.
+         * Retain old prefix snapshots until explicitly migrated, but put new
+         * or migrated snapshots in a separate, recognized area after PollikFS. */
+        if(disk_magic(legacy_drive,POLLIK_DATA_FS_LBA)){
+            u8 probe[512];int old_prefix=0;
+            for(unsigned slot=0;slot<2;slot++)
+                if(ata_read_on(legacy_drive,slot*SLOT_SECTORS,probe)&&((u32 *)probe)[0]==FS_MAGIC)old_prefix=1;
+            if(ata_read_on(legacy_drive,POLLIK_DATA_FS_LBA,probe)&&((u32 *)probe)[1]==1024){
+                u32 blocks=((u32 *)probe)[2];
+                if(blocks&&blocks<(0xffffffffu-POLLIK_DATA_FS_LBA)/2){
+                    u32 tail=POLLIK_DATA_FS_LBA+blocks*2;
+                    if(ata_read_on(legacy_drive,tail,probe)){
+                        int known=((u32 *)probe)[0]==FS_MAGIC;
+                        int unused=!old_prefix;
+                        for(unsigned sector_index=0;unused&&sector_index<SLOT_SECTORS*2;sector_index++){
+                            if(!ata_read_on(legacy_drive,tail+sector_index,probe)){unused=0;break;}
+                            for(unsigned byte=0;byte<512;byte++)if(probe[byte]){unused=0;break;}
+                        }
+                        if(known||unused){legacy_base_lba=tail;serial("FS using separate data-disk snapshot area\n");}
+                    }
+                }
+            }
+        }
     }
     if (!sector(0, header, 0)) {
         serial("FS no data disk\n");

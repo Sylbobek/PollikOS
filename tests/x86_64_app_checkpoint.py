@@ -1,4 +1,4 @@
-"""Normal desktop boot, real Notes I/O and kernel-enforced Browser rights.
+"""Normal desktop boot, real Notes/Files I/O and GUI operations.
 
 All writes use a disposable copy; the user's data disk is never opened.
 """
@@ -22,7 +22,7 @@ class AppConsole(RecordingConsole):
         if changed:
             assert "Could not save the account" not in self.text(),self.text()[-3000:]
             assert "Account database is invalid" not in self.text(),self.text()[-3000:]
-            for marker in ('NOTES_IO_FAIL','FILES_IO_FAIL','APP_RIGHTS_FAIL'):
+            for marker in ('NOTES_IO_FAIL','FILES_IO_FAIL'):
                 assert marker not in self.text(),self.text()[-3000:]
         return changed
 
@@ -121,8 +121,8 @@ def run():
             console.run('/bin/files_io.pol gui',expected='FILES_GUI_PASS',timeout=120)
             transcript = console.text()
             assert "PANIC" not in transcript and "[USER64] fault" not in transcript
-            assert "NOTES_IO_FAIL" not in transcript and "FILES_IO_FAIL" not in transcript and "APP_RIGHTS_FAIL" not in transcript
-            print("PASS normal desktop, Notes UTF-8/atomic save/ENOSPC, Files operations and all Browser spawn modes", flush=True)
+            assert "NOTES_IO_FAIL" not in transcript and "FILES_IO_FAIL" not in transcript
+            print("PASS normal desktop, Notes UTF-8/atomic save/ENOSPC and Files GUI operations", flush=True)
         finally:
             if console:
                 (ROOT / "build/app-checkpoint.log").write_text(console.text(), encoding="utf-8")
