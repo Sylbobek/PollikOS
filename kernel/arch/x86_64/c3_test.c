@@ -25,8 +25,8 @@ static void complete(const Process64 *p) {
     if (p->state != PROCESS_EXITED || p->exit_status != expected_status) {
         memory_log("[C3] user state="); memory_hex(p->state);
         memory_log(" status="); memory_hex((uint64_t)p->exit_status);
-        memory_log(" vector="); memory_hex(p->frame.vector);
-        memory_log(" error="); memory_hex(p->frame.error);
+        memory_log(" vector="); memory_hex(p->thread.frame.vector);
+        memory_log(" error="); memory_hex(p->thread.frame.error);
         memory_log("\n");
     }
     check(p->state == PROCESS_EXITED && p->exit_status == expected_status, "C exit status");
@@ -37,7 +37,7 @@ static void complete(const Process64 *p) {
 static unsigned crash_faults, crash_health;
 static void mixed_complete(const Process64 *p) {
     if (p->state == PROCESS_FAULTED) {
-        check(p->frame.vector == 14 && p->frame.error == 6, "C crash fault diagnostics");
+        check(p->thread.frame.vector == 14 && p->thread.frame.error == 6, "C crash fault diagnostics");
         ++crash_faults;
     } else {
         check(p->state == PROCESS_EXITED && p->exit_status == 42 && !file64_count(p),

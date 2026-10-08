@@ -5,6 +5,7 @@
 #include <string.h>
 #include "../kernel/pollikfs.c"
 u32 ticks;
+void *fs_journal_alloc(size_t bytes) { (void)bytes;abort(); }
 static u8 disk[2048][1024], output[580 * 1024];
 static u32 reads, metadata_reads, failed_lba = 0xffffffffu;
 int ata_read_sector(u32 lba, void *buffer) {

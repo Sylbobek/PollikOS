@@ -19,7 +19,10 @@ Window g_windows[NUM_APPS] = {
     {5, 0, 170, 125, 680, 410, WINDOW_STATE_NORMAL, 0, 0, 0, 0, 0, 480, 280, 1920, 1200, 170, 125, 680, 410, "Browser"},
     {6, 0, 170, 125, 680, 410, WINDOW_STATE_NORMAL, 0, 0, 0, 0, 0, 480, 280, 1920, 1200, 170, 125, 680, 410, "PollikMark3D"},
 #ifndef POLLIK_INSTALL_MEDIA
-    {7, 0, 260, 100, 360, 500, WINDOW_STATE_NORMAL, 0, 0, 0, 0, 0, 320, 440, 1920, 1200, 260, 100, 360, 500, "Calculator"}
+    {7, 0, 260, 100, 360, 500, WINDOW_STATE_NORMAL, 0, 0, 0, 0, 0, 320, 440, 1920, 1200, 260, 100, 360, 500, "Calculator"},
+    {8, 0, 240, 100, 680, 480, WINDOW_STATE_NORMAL, 0, 0, 0, 0, 0, 480, 280, 1920, 1200, 240, 100, 680, 480, "Photos"},
+    {9, 0, 280, 120, 720, 480, WINDOW_STATE_NORMAL, 0, 0, 0, 0, 0, 480, 280, 1920, 1200, 280, 120, 720, 480, "Video"},
+    {10, 0, 200, 100, 680, 480, WINDOW_STATE_NORMAL, 0, 0, 0, 0, 0, 480, 280, 1920, 1200, 200, 100, 680, 480, "Documents"}
 #endif
 };
 
@@ -33,13 +36,16 @@ static const Window g_window_defaults[NUM_APPS] = {
     {5, 0, 170, 125, 680, 410, WINDOW_STATE_NORMAL, 0, 0, 0, 0, 0, 480, 280, 1920, 1200, 170, 125, 680, 410, "Browser"},
     {6, 0, 170, 125, 680, 410, WINDOW_STATE_NORMAL, 0, 0, 0, 0, 0, 480, 280, 1920, 1200, 170, 125, 680, 410, "PollikMark3D"},
 #ifndef POLLIK_INSTALL_MEDIA
-    {7, 0, 260, 100, 360, 500, WINDOW_STATE_NORMAL, 0, 0, 0, 0, 0, 320, 440, 1920, 1200, 260, 100, 360, 500, "Calculator"}
+    {7, 0, 260, 100, 360, 500, WINDOW_STATE_NORMAL, 0, 0, 0, 0, 0, 320, 440, 1920, 1200, 260, 100, 360, 500, "Calculator"},
+    {8, 0, 240, 100, 680, 480, WINDOW_STATE_NORMAL, 0, 0, 0, 0, 0, 480, 280, 1920, 1200, 240, 100, 680, 480, "Photos"},
+    {9, 0, 280, 120, 720, 480, WINDOW_STATE_NORMAL, 0, 0, 0, 0, 0, 480, 280, 1920, 1200, 280, 120, 720, 480, "Video"},
+    {10, 0, 200, 100, 680, 480, WINDOW_STATE_NORMAL, 0, 0, 0, 0, 0, 480, 280, 1920, 1200, 200, 100, 680, 480, "Documents"}
 #endif
 };
 
 int g_z_order[NUM_APPS] = {1, 2, 3, 4, 5, 6,
 #ifndef POLLIK_INSTALL_MEDIA
-    7,
+    7, 8, 9, 10,
 #endif
     0};
 int g_focused_window = 0;

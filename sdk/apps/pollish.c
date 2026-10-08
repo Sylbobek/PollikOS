@@ -16,6 +16,7 @@
 #include <pollikos/fs.h>
 #include <pollikos/process.h>
 #include <pollikos/time.h>
+#include <pollikos/session.h>
 
 #define LINE_MAX 256
 #define ARG_MAX 32
@@ -213,6 +214,7 @@ static int builtin_history(int argc, const char *const *argv) {
 static int builtin_help(int argc, const char *const *argv) {
     (void)argc; (void)argv;
     line_out("PollikOS shell builtins:");
+    line_out("  lock / logout / passwd   session and password controls");
     line_out("  cd [dir]        change directory (no argument: /)");
     line_out("  pwd             print the working directory");
     line_out("  ls | dir [dir]  list directory entries ('/' marks directories)");
@@ -379,10 +381,15 @@ static int run_external(const char *const *argv) {
     return 128;
 }
 /* ------------------------------------------------------ builtins & stages */
+static int builtin_session(int argc,const char *const *argv) {
+    if(argc!=1) { line_out("Usage: lock | logout | passwd"); return 1; }
+    unsigned op=!strcmp(argv[0],"lock")?USER_SESSION_LOCK:!strcmp(argv[0],"logout")?USER_SESSION_LOGOUT:USER_SESSION_PASSWORD;
+    if(pollikos_session_control(op)<0) { perror(argv[0]); return 1; } return 0;
+}
 typedef int (*builtin_fn)(int argc, const char *const *argv);
 typedef struct { const char *name; builtin_fn function; } Builtin;
 static const Builtin builtins[] = {
-    {"calc", builtin_calc},
+    {"calc", builtin_calc}, {"lock",builtin_session}, {"logout",builtin_session}, {"passwd",builtin_session},
     {"cd", builtin_cd}, {"pwd", builtin_pwd}, {"echo", builtin_echo},
     {"clear", builtin_clear}, {"cls", builtin_clear},
     {"history", builtin_history}, {"help", builtin_help},

@@ -465,7 +465,11 @@ static void collect_styles(DomNode *n, char *css, int *used) {
     }
     for(DomNode *c=n->first_child;c;c=c->next_sibling)collect_styles(c,css,used);
 }
+#ifdef POLLIK_BROWSER_UPSTREAM
+void css_apply_styles_legacy(DomNode *root, const char *extra_css) {
+#else
 void css_apply_styles(DomNode *root, const char *extra_css) {
+#endif
     if (!root)
         return;
     char *css=kmalloc(WEB_MAX_CSS_SIZE); if(!css)return;

@@ -72,7 +72,7 @@ void elf64_selftest(void) {
     check(vmm64_lookup(&a->space, USER_CODE, &ma) == VM_OK && ma.flags == (VM_USER|VM_EXEC), "ELF text RX");
     check(vmm64_lookup(&a->space, USER_DATA, &ma) == VM_OK && ma.flags == (VM_USER|VM_WRITE), "ELF data RW NX");
     check(vmm64_lookup(&b->space, USER_DATA, &mb) == VM_OK && ma.physical != mb.physical &&
-          a->user_stack.top == b->user_stack.top && a->kernel_stack.top != b->kernel_stack.top, "ELF independent data/stacks");
+          a->thread.user_stack.top == b->thread.user_stack.top && a->thread.kernel_stack.top != b->thread.kernel_stack.top, "ELF independent data/stacks");
     check(vmm64_lookup(&a->space, USER_STACK_BASE+4096, &ma) == VM_OK &&
           vmm64_lookup(&b->space, USER_STACK_BASE+4096, &mb) == VM_OK && ma.physical != mb.physical,
           "ELF distinct stack frames at same VA");
@@ -109,8 +109,8 @@ void elf64_selftest(void) {
     a = process64_create_elf(hello_elf_start, image_size(), 0, 0, 0, 0, &error);
     check(a && error == ELF64_OK, "empty argument/environment vectors");
     uint64_t header[5], null_pointer = 1;
-    check(copy_from_user64(&a->space, header, a->frame.rsp, sizeof(header)) == USER_COPY_OK &&
-          header[0] == STARTUP_VERSION && !header[1] && !header[3] && !(a->frame.rsp & 15), "startup header");
+    check(copy_from_user64(&a->space, header, a->thread.frame.rsp, sizeof(header)) == USER_COPY_OK &&
+          header[0] == STARTUP_VERSION && !header[1] && !header[3] && !(a->thread.frame.rsp & 15), "startup header");
     check(copy_from_user64(&a->space, &null_pointer, header[2], 8) == USER_COPY_OK && !null_pointer, "empty argv null");
     check(copy_from_user64(&a->space, &null_pointer, header[4], 8) == USER_COPY_OK && !null_pointer, "empty envp null");
     check(process64_destroy(a) && available() == baseline, "startup failure cleanup");

@@ -2,6 +2,8 @@
 #define POLLIKOS_WINDOW_UI_H
 #include <stdint.h>
 #include <stddef.h>
+#include <string.h>
+#include "../../common/utf8.h"
 
 typedef uint8_t u8;
 typedef uint32_t u32;
@@ -22,11 +24,24 @@ static inline void pollik_ui_fill(PollikCanvas *canvas,int x,int y,int width,int
     }
 }
 
+static inline const FontGlyph *pollik_ui_glyph(uint32_t codepoint) {
+    if(codepoint>=32 && codepoint<127)return &font_glyphs[0][codepoint-32];
+    for(unsigned i=95;i<sizeof(font_codepoints)/sizeof(font_codepoints[0]);i++)
+        if(font_codepoints[i]==codepoint)return &font_glyphs[0][i];
+    return &font_glyphs[0]['?'-32];
+}
+static inline int pollik_ui_text_width(const char *text) {
+    size_t remaining=strlen(text);int width=0;
+    while(remaining){size_t used;uint32_t codepoint=pollik_utf8_next(text,remaining,&used);
+        width+=codepoint<32?7:pollik_ui_glyph(codepoint)->advance+2;text+=used;remaining-=used;}
+    return width;
+}
 static inline void pollik_ui_text(PollikCanvas *canvas,int x,int y,const char *text,uint32_t color) {
-    while (*text) {
-        unsigned char ch=(unsigned char)*text++;
-        if (ch<32 || ch>=127) { x+=7; continue; }
-        const FontGlyph *glyph=&font_glyphs[0][ch-32];
+    size_t remaining=strlen(text);
+    while (remaining) {
+        size_t used;uint32_t ch=pollik_utf8_next(text,remaining,&used);text+=used;remaining-=used;
+        if (ch<32) { x+=7; continue; }
+        const FontGlyph *glyph=pollik_ui_glyph(ch);
         int origin=x+(glyph->advance-glyph->width)/2;
         for (unsigned row=0;row<glyph->height;row++) for (unsigned col=0;col<glyph->width;col++) {
             unsigned index=row*glyph->width+col;

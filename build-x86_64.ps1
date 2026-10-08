@@ -22,6 +22,11 @@ try {
         if ($_ -match '^#define (\w+) (0x[0-9a-fA-F]+|[0-9]+)$') { "%define $($matches[1]) $($matches[2])" }
     }
     Set-Content -LiteralPath "$output/user_abi.inc" -Value $abi -Encoding ascii
+    $sharedAbi = Get-Content include/pollikos_abi.h | ForEach-Object {
+        if($_ -match '^#define (POLLIKOS_ABI_VERSION_\w+) ([0-9]+)u$') { "%define $($matches[1]) $($matches[2])" }
+        elseif($_ -match '^#define (POLLIKOS_ABI_FEATURE_\w+)\s+\(1u << ([0-9]+)\)$') { "%define $($matches[1]) $([int]1 -shl [int]$matches[2])" }
+    }
+    Add-Content -LiteralPath "$output/user_abi.inc" -Value $sharedAbi -Encoding ascii
     # The C userspace ABI header is generated from the same kernel source of
     # truth as the NASM include, so operation numbers can never drift.
     $abiHeader = Get-Content kernel/arch/x86_64/user_abi.h | ForEach-Object {
@@ -102,6 +107,11 @@ try {
         Invoke-Checked python @('tools/build_quickjs.py','--native','--output',"$output/quickjs")
         $sdkApplications['browser'].Sources=@('sdk/apps/browser.c','sdk/apps/browser_quickjs.c','kernel/browser/html_parser.c','kernel/browser/css_engine.c','kernel/browser/layout.c','kernel/browser/render.c')
         $browserLibraries=@("$output/quickjs/libquickjs.a")
+        Invoke-Checked python @('tools/build_web_libraries.py','--native','--output',"$output/web")
+        $sdkApplications['browser'].Sources+=@('sdk/apps/browser_html.c','sdk/apps/browser_css.c')
+        $sdkApplications['browser'].Defines+=@('POLLIK_BROWSER_UPSTREAM=1')
+        $sdkApplications['browser'].ExtraIncludes=@('third_party/libdom/include','third_party/libhubbub/include','third_party/libcss/include','third_party/libparserutils/include','third_party/libwapcaplet/include')
+        $browserLibraries+=@("$output/web/libcss.a","$output/web/libdom.a","$output/web/libhubbub.a","$output/web/libparserutils.a","$output/web/libwapcaplet.a")
         Write-Host 'Native browser JavaScript: pinned QuickJS (single-thread profile)'
     }
     foreach ($application in $sdkApplications.Keys) {
@@ -110,7 +120,7 @@ try {
         foreach ($source in $definition.Sources) {
             $object = "$userOutput/$application-$([IO.Path]::GetFileNameWithoutExtension($source)).o"
             Compile-PollikosObject -Source $source -Object $object -RuntimeDir $runtimeDir `
-                -Optimization $definition.Optimization -Defines $definition.Defines
+                -Optimization $definition.Optimization -Defines $definition.Defines -ExtraIncludes $definition.ExtraIncludes
             $objects += $object
         }
         $libraries=if($application -eq 'browser'){$browserLibraries}else{@()}
@@ -208,7 +218,7 @@ try {
     $modules = @('kernel','auth64','physical','pmm','vmm','usercopy','process','scheduler','fpu','elf64','elf_demo','timer','scheduler_demo','fs_platform','net_platform','audio_platform','audio_stream','devices','network','launch','syscall','path','file','file_demo','stat_demo','dir_demo','runtime_demo','heap','rtc64_decode','rtc64','tty','mouse','console_fb','window','pipe','c3_demo','c4_demo','c5_demo','c6_demo','c7_demo')
     if($Production){$modules=@($modules | Where-Object {$_ -notlike '*_demo'})}
     if ($SelfTest) { $modules += @('test_memory','memory_test','user_test','elf_test','scheduler_test','path_test','file_test','stat_test','dir_test','runtime_test','c2_test','c3_test','c4_test','c5_test','c6_test','c7_test','selfhost_test') }
-    $linkOptions = @()
+    $linkOptions = @('--gc-sections')
     if($Production){$linkOptions+='--gc-sections'}
     if ($CrashWriteLog) {
         $defines += '-DPOLLIKFS_WRITELOG_TEST=1'
@@ -216,11 +226,12 @@ try {
         $linkOptions += '--wrap=ata_write_sector'
     }
     $objects = @()
-    $modules += @('../../vfs','../../pollikfs','../../storage','../../hal','../../audio')
+    $modules += @('../../account','../../account_platform','../../security','../../vfs','../../fs_journal','../../fs_journal_platform','../../pollikfs','../../storage','../../hal','../../audio','../../../third_party/monocypher/monocypher')
+    $modules += @('../../../sdk/lib/font_data')
     foreach ($module in $modules) {
         $objectName = Split-Path $module -Leaf
         Invoke-Checked clang (@('--target=x86_64-none-elf','-ffreestanding','-fno-pic','-fno-pie',
-        '-fno-stack-protector','-mno-red-zone','-mgeneral-regs-only','-O2','-Wall','-Wextra','-Werror',
+        '-fno-stack-protector','-mno-red-zone','-mgeneral-regs-only','-ffunction-sections','-fdata-sections','-O2','-Wall','-Wextra','-Werror',
         '-Ithird_party/bearssl/inc','-Isdk/include',
         '-c',"kernel/arch/x86_64/$module.c",'-o',"$output/$objectName.o") + $defines + $productionCompileFlags)
         $objects += "$output/$objectName.o"

@@ -30,55 +30,29 @@ static int readable(unsigned flags) { return (flags & USER_O_RDONLY) != 0; }
 static int writable(unsigned flags) { return (flags & USER_O_WRONLY) != 0; }
 extern void kernel64_debug_bytes(const char *data, size_t length);
 void file64_init(Process64 *p) {
-    p->streams[0] = FD64_STDIN;
-    p->streams[1] = FD64_STDOUT;
-    p->streams[2] = FD64_STDERR;
-    for (unsigned i = 0; i < USER_FD_LIMIT; ++i) {
-        p->files[i] = 0;
-        p->pipe_index[i] = PIPE64_NONE;
-        p->pipe_write[i] = 0;
-        p->console_alias[i] = 0;
-        p->cloexec[i] = 0;
-    }
-    p->cwd[0] = '/'; p->cwd[1] = 0;
+    for(unsigned i=0;i<USER_FD_LIMIT;i++) p->fds[i]=(Descriptor64){.pipe=PIPE64_NONE};
+    for(unsigned i=0;i<3;i++) p->fds[i]=(Descriptor64){.kind=FD64_STDIN+i,.rights=i?FD64_WRITE:FD64_READ,.pipe=PIPE64_NONE};
+    p->cwd[0]='/'; p->cwd[1]=0;
 }
-/* A VFS object, pipe end or explicit console alias overrides the standard
- * stream kind; this is what makes dup2/redirection work on fds 0..2. */
-Fd64Kind file64_kind(const Process64 *p, uint64_t fd) {
-    if (fd >= USER_FD_LIMIT) return FD64_CLOSED;
-    if (p->files[fd] && p->files[fd]->ref_count > 0) return FD64_VFS;
-    if (p->pipe_index[fd] != PIPE64_NONE) return FD64_PIPE;
-    if (p->console_alias[fd])
-        return (Fd64Kind)(FD64_STDIN + (p->console_alias[fd] - 1));
-    if (fd < 3) return (Fd64Kind)p->streams[fd];
-    return FD64_CLOSED;
+Fd64Kind file64_kind(const Process64 *p,uint64_t fd) {
+    return fd<USER_FD_LIMIT?(Fd64Kind)p->fds[fd].kind:FD64_CLOSED;
 }
 unsigned file64_stream_count(const Process64 *p) {
-    return !!p->streams[0]+!!p->streams[1]+!!p->streams[2];
+    return (p->fds[0].kind!=FD64_CLOSED)+(p->fds[1].kind!=FD64_CLOSED)+(p->fds[2].kind!=FD64_CLOSED);
 }
 unsigned file64_count(const Process64 *p) {
-    unsigned count = 0;
-    for (unsigned i = 0; i < USER_FD_LIMIT; ++i) if (p->files[i]) ++count;
-    return count;
+    unsigned n=0;for(unsigned i=0;i<USER_FD_LIMIT;i++) n+=p->fds[i].kind==FD64_VFS;return n;
 }
+static int64_t close_file(Process64 *p,uint64_t fd);
 void file64_cleanup(Process64 *p) {
     memory_context_check();
-    vfs_close_process_fds(p->files);
-    for (unsigned i = 0; i < USER_FD_LIMIT; ++i) {
-        if (p->pipe_index[i] != PIPE64_NONE) {
-            pipe64_release(p->pipe_index[i], p->pipe_write[i]);
-            p->pipe_index[i] = PIPE64_NONE;
-            p->pipe_write[i] = 0;
-        }
-        p->console_alias[i] = 0;
-    }
-    for (unsigned i = 0; i < 3; ++i) p->streams[i] = FD64_CLOSED;
-    p->cwd[0] = 0;
-    memory_require(!file64_stream_count(p), "standard stream cleanup");
-    memory_require(file64_count(p) == 0, "process descriptor cleanup");
+    Descriptor64 *previous=fs64_fd_context(p->fds);
+    for(unsigned i=0;i<USER_FD_LIMIT;i++) (void)close_file(p,i);
+    fs64_fd_context(previous); p->cwd[0]=0;
+    memory_require(!file64_count(p) && !file64_stream_count(p),"descriptor cleanup");
 }
 static int valid_fd(const Process64 *p, uint64_t fd) {
-    return fd >= 3 && fd < USER_FD_LIMIT && p->files[fd] && p->files[fd]->ref_count > 0;
+    return fd >= 3 && fd < USER_FD_LIMIT && p->fds[fd].file && p->fds[fd].file->ref_count > 0;
 }
 static int64_t open_file(Process64 *p, uint64_t address, uint64_t flags, int directory) {
     if (flags & ~(uint64_t)USER_O_FLAGS_MASK) return -USER_EINVAL;
@@ -90,7 +64,7 @@ static int64_t open_file(Process64 *p, uint64_t address, uint64_t flags, int dir
     int64_t path_error = path64_user(p, address, path);
     if (path_error) return path_error;
     unsigned slot = 3;
-    while (slot < USER_FD_LIMIT && p->files[slot]) ++slot;
+    while (slot < USER_FD_LIMIT && file64_kind(p,slot)!=FD64_CLOSED) ++slot;
     if (slot == USER_FD_LIMIT) return -USER_EMFILE;
     if (!pollikfs_mounted()) return -USER_EIO;
     if ((flags & USER_O_EXCL) && !(flags & USER_O_CREAT)) return -USER_EINVAL;
@@ -106,14 +80,16 @@ static int64_t open_file(Process64 *p, uint64_t address, uint64_t flags, int dir
     /* USER_O_CLOEXEC is a per-descriptor process attribute, not a VFS flag. */
     int fd = vfs_open(path, (int)(flags & ~(uint64_t)USER_O_CLOEXEC));
     if (fd < 0) return pollikfs_error() == VFS_OK ? -USER_ENOMEM : fs_error();
+    p->fds[fd].kind=FD64_VFS;
+    p->fds[fd].rights=(flags&USER_O_RDONLY?FD64_READ:0)|(flags&USER_O_WRONLY?FD64_WRITE:0);
     /* IF=0 keeps stat/open stable; retain a defensive type check so future
      * backends cannot expose raw directory blocks. */
     u32 required_type = directory ? VFS_DIR : VFS_FILE;
-    if (p->files[fd]->type != required_type) {
+    if (p->fds[fd].file->type != required_type) {
         vfs_close(fd);
         return directory ? -USER_ENOTDIR : -USER_EISDIR;
     }
-    p->cloexec[fd] = (flags & USER_O_CLOEXEC) ? 1 : 0;
+    p->fds[fd].flags = (flags & USER_O_CLOEXEC) ? 1 : 0;
     return fd;
 }
 static int64_t read_file(Process64 *p, uint64_t fd, uint64_t destination, uint64_t count) {
@@ -122,7 +98,7 @@ static int64_t read_file(Process64 *p, uint64_t fd, uint64_t destination, uint64
     if (kind == FD64_PIPE) return -USER_EIO; /* handled by the blocking pipe path */
     if (kind == FD64_STDIN) return count ? -USER_ENOTSUP : 0;
     if (kind != FD64_VFS) return -USER_EACCES;
-    vfs_file_t *file = p->files[fd];
+    vfs_file_t *file = p->fds[fd].file;
     if (file->type != VFS_FILE || !readable(file->flags)) return -USER_EACCES;
     if (count > USER_READ_MAX) return -USER_E2BIG;
     if (!count) return 0; /* valid fd required; destination is unused */
@@ -140,9 +116,9 @@ static int64_t read_file(Process64 *p, uint64_t fd, uint64_t destination, uint64
 static int64_t seek_file(Process64 *p, uint64_t fd, int64_t offset, uint64_t whence) {
     if (fd < 3 && file64_kind(p, fd) != FD64_CLOSED) return -USER_ENOTSUP;
     if (!valid_fd(p, fd)) return -USER_EBADF;
-    if (p->files[fd]->type == VFS_DIR) {
+    if (p->fds[fd].file->type == VFS_DIR) {
         if (offset || whence != USER_SEEK_SET) return -USER_EINVAL;
-        p->files[fd]->offset = 0;
+        p->fds[fd].file->offset = 0;
         return 0;
     }
     /* Current VFS offsets are bounded signed 32-bit. Check before narrowing. */
@@ -181,7 +157,7 @@ static int64_t metadata(Process64 *p, uint64_t source, uint64_t destination, int
 static int64_t read_directory(Process64 *p, uint64_t fd, uint64_t destination) {
     if (fd < 3 && file64_kind(p, fd) != FD64_CLOSED) return -USER_ENOTDIR;
     if (!valid_fd(p, fd)) return -USER_EBADF;
-    vfs_file_t *file = p->files[fd];
+    vfs_file_t *file = p->fds[fd].file;
     if (file->type != VFS_DIR) return -USER_ENOTDIR;
     if (user_range_check(&p->space, destination, sizeof(UserDirent64), 1) != USER_COPY_OK)
         return -USER_EFAULT;
@@ -215,45 +191,25 @@ static int64_t read_directory(Process64 *p, uint64_t fd, uint64_t destination) {
     }
     return 1;
 }
-static int64_t close_file(Process64 *p, uint64_t fd) {
-    if (fd >= USER_FD_LIMIT || file64_kind(p, fd) == FD64_CLOSED) return -USER_EBADF;
-    Fd64Kind kind = file64_kind(p, fd);
-    if (kind == FD64_VFS) {
-        if (vfs_close((int)fd) < 0) return -USER_EIO;
-        p->files[fd] = 0;
-    } else if (kind == FD64_PIPE) {
-        pipe64_release(p->pipe_index[fd], p->pipe_write[fd]);
-        p->pipe_index[fd] = PIPE64_NONE;
-        p->pipe_write[fd] = 0;
-        pipe64_wake_blocked();
-    } else if (fd < 3) {
-        p->streams[fd] = FD64_CLOSED;
-    }
-    p->console_alias[fd] = 0;
-    p->cloexec[fd] = 0;
-    return 0;
+static int64_t close_file(Process64 *p,uint64_t fd) {
+    if(fd>=USER_FD_LIMIT || !p->fds[fd].kind) return -USER_EBADF;
+    Descriptor64 old=p->fds[fd];
+    if(old.kind==FD64_VFS && vfs_close((int)fd)<0) return -USER_EIO;
+    if(old.kind==FD64_PIPE) { pipe64_release(old.pipe,!!(old.rights&FD64_WRITE));pipe64_wake_blocked(); }
+    p->fds[fd]=(Descriptor64){.pipe=PIPE64_NONE};return 0;
 }
-/* Copy one descriptor's backing to another slot (dup/dup2 core). */
-static void fd_copy_backing(Process64 *p, unsigned dest, unsigned source) {
-    if (p->files[source]) {
-        p->files[dest] = p->files[source];
-        ++p->files[source]->ref_count;
-    } else if (p->pipe_index[source] != PIPE64_NONE) {
-        p->pipe_index[dest] = p->pipe_index[source];
-        p->pipe_write[dest] = p->pipe_write[source];
-        pipe64_retain(p->pipe_index[source], p->pipe_write[source]);
-    }
-    p->console_alias[dest] = p->console_alias[source];
-    /* POSIX: a duplicated descriptor never inherits close-on-exec. */
-    p->cloexec[dest] = 0;
+static void fd_copy_backing(Process64 *p,unsigned dest,unsigned source) {
+    p->fds[dest]=p->fds[source];p->fds[dest].flags=0;
+    if(p->fds[source].kind==FD64_VFS) ++p->fds[source].file->ref_count;
+    if(p->fds[source].kind==FD64_PIPE) pipe64_retain(p->fds[source].pipe,!!(p->fds[source].rights&FD64_WRITE));
 }
 /* Set (or clear) a descriptor's close-on-spawn flag; returns the previous
  * value. This is the fcntl-like entry point behind pollikos_set_cloexec. */
 static int64_t cloexec_request(Process64 *p, uint64_t fd, uint64_t set) {
     if (fd >= USER_FD_LIMIT || file64_kind(p, fd) == FD64_CLOSED) return -USER_EBADF;
     if (set > 1) return -USER_EINVAL;
-    uint8_t previous = p->cloexec[fd];
-    p->cloexec[fd] = (uint8_t)set;
+    uint8_t previous = p->fds[fd].flags;
+    p->fds[fd].flags = (uint8_t)set;
     return previous;
 }
 static int64_t dup_request(Process64 *p, uint64_t oldfd, uint64_t newfd, int explicit_new) {
@@ -270,11 +226,6 @@ static int64_t dup_request(Process64 *p, uint64_t oldfd, uint64_t newfd, int exp
         for (dest = 3; dest < USER_FD_LIMIT && file64_kind(p, dest) != FD64_CLOSED; ++dest) {}
         if (dest == USER_FD_LIMIT) return -USER_EMFILE;
     }
-    /* Make an unbacked standard stream explicit so it can be restored. */
-    if (!p->files[oldfd] && p->pipe_index[oldfd] == PIPE64_NONE && !p->console_alias[oldfd]) {
-        if (oldfd >= 3 || !p->streams[oldfd]) return -USER_EBADF;
-        p->console_alias[oldfd] = (uint8_t)(p->streams[oldfd] - FD64_STDIN + 1);
-    }
     fd_copy_backing(p, dest, (unsigned)oldfd);
     return (int64_t)dest;
 }
@@ -287,16 +238,14 @@ static int64_t pipe_request(Process64 *p, uint64_t address) {
     if (second >= USER_FD_LIMIT) return -USER_EMFILE;
     uint8_t index = 0;
     if (pipe64_create(&index) < 0) return -USER_ENOMEM;
-    p->pipe_index[first] = index;
-    p->pipe_write[first] = 0;
-    p->pipe_index[second] = index;
-    p->pipe_write[second] = 1;
+    p->fds[first]=(Descriptor64){.kind=FD64_PIPE,.rights=FD64_READ,.pipe=index};
+    p->fds[second]=(Descriptor64){.kind=FD64_PIPE,.rights=FD64_WRITE,.pipe=index};
     int32_t fds[2] = {(int32_t)first, (int32_t)second};
     if (copy_to_user64(&p->space, address, fds, sizeof(fds)) != USER_COPY_OK) {
         pipe64_release(index, 0);
         pipe64_release(index, 1);
-        p->pipe_index[first] = PIPE64_NONE;
-        p->pipe_index[second] = PIPE64_NONE;
+        p->fds[first]=(Descriptor64){.pipe=PIPE64_NONE};
+        p->fds[second]=(Descriptor64){.pipe=PIPE64_NONE};
         return -USER_EFAULT;
     }
     return 0;
@@ -305,22 +254,14 @@ static int64_t pipe_request(Process64 *p, uint64_t address) {
  * and a close-on-spawn descriptor is dropped instead of shared. The child's
  * table starts empty (file64_init), so a skipped descriptor simply stays
  * closed there. */
-void file64_clone_parent(Process64 *child, Process64 *parent) {
-    for (unsigned i = 0; i < USER_FD_LIMIT; ++i) {
-        if (parent->cloexec[i]) continue;
-        if (parent->files[i]) {
-            child->files[i] = parent->files[i];
-            ++child->files[i]->ref_count;
-        }
-        child->pipe_index[i] = parent->pipe_index[i];
-        child->pipe_write[i] = parent->pipe_write[i];
-        child->console_alias[i] = parent->console_alias[i];
-        child->cloexec[i] = 0;
-        if (parent->pipe_index[i] != PIPE64_NONE)
-            pipe64_retain(parent->pipe_index[i], parent->pipe_write[i]);
+void file64_clone_parent(Process64 *child,Process64 *parent) {
+    for(unsigned i=0;i<USER_FD_LIMIT;i++) {
+        child->fds[i]=(Descriptor64){.pipe=PIPE64_NONE};
+        if(parent->fds[i].flags&FD64_CLOEXEC) continue;
+        child->fds[i]=parent->fds[i];child->fds[i].flags=0;
+        if(child->fds[i].kind==FD64_VFS) ++child->fds[i].file->ref_count;
+        if(child->fds[i].kind==FD64_PIPE) pipe64_retain(child->fds[i].pipe,!!(child->fds[i].rights&FD64_WRITE));
     }
-    for (unsigned i = 0; i < 3; ++i)
-        child->streams[i] = parent->cloexec[i] ? FD64_CLOSED : parent->streams[i];
 }
 static int64_t write_file(Process64 *p, uint64_t fd, uint64_t source, uint64_t count) {
     Fd64Kind kind = file64_kind(p, fd);
@@ -334,8 +275,9 @@ static int64_t write_file(Process64 *p, uint64_t fd, uint64_t source, uint64_t c
     uint64_t written = 0;
     int console = kind == FD64_STDOUT || kind == FD64_STDERR;
     if (!console) {
-        vfs_file_t *file = p->files[fd];
+        vfs_file_t *file = p->fds[fd].file;
         if (kind != FD64_VFS || file->type != VFS_FILE || !writable(file->flags)) return -USER_EACCES;
+        if(vfs_write_preflight((int)fd,(u32)count)<0) return fs_error();
     }
     while (written < count) {
         size_t chunk = count-written > sizeof(buffer) ? sizeof(buffer) : (size_t)(count-written);
@@ -428,7 +370,7 @@ int file64_dispatch(Process64 *p, UserFrame *f) {
     memory_context_check();
     /* Bind only while handling this syscall. Kernel executable loading keeps
      * its separate descriptor context, even while user files remain open. */
-    vfs_file_t **previous = fs64_fd_context(p->files);
+    Descriptor64 *previous = fs64_fd_context(p->fds);
     int64_t result;
     switch (f->rax) {
     case USER_WRITE: result = write_file(p, f->rdi, f->rsi, f->rdx); break;

@@ -9,4 +9,5 @@ int window64_key_event(uint32_t key, uint32_t modifiers, int down);
 void window64_console_begin(void);
 void window64_console_damage(unsigned x, unsigned y, unsigned width, unsigned height);
 void window64_console_end(void);
+void window64_session_hide(int hidden);
 #endif

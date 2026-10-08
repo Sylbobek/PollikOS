@@ -5,7 +5,7 @@
 #include "../mem.h"
 #endif
 
-#define MAX_TCP_SOCKETS 4
+#define MAX_TCP_SOCKETS 8
 #define TCP_RX_BUFFER_SIZE 32768
 #define TCP_MSS 1460
 

@@ -9,6 +9,12 @@ typedef struct {
 } imaxdiv_t;
 
 #define PRId64 "ld"
+#define PRId32 "d"
+#define PRIi32 "i"
+#define PRIo32 "o"
+#define PRIu32 "u"
+#define PRIx32 "x"
+#define PRIX32 "X"
 #define PRIi64 "li"
 #define PRIo64 "lo"
 #define PRIu64 "lu"

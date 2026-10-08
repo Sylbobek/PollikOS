@@ -3,10 +3,12 @@
 #include <stddef.h>
 #include "memory.h"
 #include "user.h"
+#include "process_internal.h"
 #include "elf64.h"
 #include "scheduler.h"
 #include "launch.h"
 #include "auth64.h"
+#include "window.h"
 #include "fs_platform.h"
 #include "file.h"
 #include "heap.h"
@@ -227,6 +229,7 @@ __attribute__((noreturn)) static void console64_run(void) {
     Launch64Result desktop_result=process64_launch_path("/bin/desktop.pol",1,
         desktop_arguments,1,environment,&desktop);
     if (desktop_result==LAUNCH_OK) {
+        desktop->credentials.capabilities|=CAP_DEVICE;
         gui_session_active=1;
         serial64("[GUI] authenticated session started /bin/desktop.pol\n");
     } else
@@ -245,6 +248,39 @@ __attribute__((noreturn)) static void console64_run(void) {
         (void)process64_tick_limit(process->pid, 0); /* interactive: no CPU budget */
         while (!console_shell_exited) {
             if (!scheduler64_run(10, 0, session_completion)) halt();
+            int state=security_session_state();
+            if(state==SESSION_ACTIVE) continue;
+            window64_session_hide(1);
+            gui_session_active=0;
+            console_fb_write("\033[2J\033[H",7);
+            tty64_init();
+            if(state==SESSION_LOGOUT) {
+                uint64_t old_session=security_session_id();
+                process64_end_session(old_session);
+                security_session_end();
+                while(scheduler64_count()) if(!scheduler64_run(10,0,session_completion)) halt();
+                serial64("[SESSION64] logged out; resources reclaimed\n");
+                timer64_start();
+                int accepted=auth64_login();
+                timer64_stop();
+                if(!accepted) halt();
+                const char *desktop_args[]={"desktop",0};
+                Process64 *fresh=0;
+                if(process64_launch_path("/bin/desktop.pol",1,desktop_args,1,environment,&fresh)==LAUNCH_OK)
+                    { fresh->credentials.capabilities|=CAP_DEVICE; gui_session_active=1; }
+                window64_session_hide(0);
+                break;
+            }
+            timer64_start();
+            if(state==SESSION_PASSWORD) (void)auth64_change_password();
+            else if(state==SESSION_ELEVATE) process64_complete_elevation(auth64_elevate());
+            else if(!auth64_login()) halt();
+            timer64_stop();
+            tty64_init();
+            console_fb_write("\033[2J\033[H",7);
+            window64_session_hide(0);
+            gui_session_active=1;
+            serial64("[SESSION64] session resumed\n");
         }
         serial64("[TTY] shell exited; restarting\n");
     }

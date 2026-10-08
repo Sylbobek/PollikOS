@@ -4,6 +4,8 @@
 #include "vfs.h"
 #include "klog.h"
 #include "pmm.h"
+#include "security.h"
+#include "gui/apps.h"
 
 typedef struct __attribute__((packed)) {
     u16 limit;
@@ -52,6 +54,24 @@ static void segment(int i, u32 base, u32 limit, u8 access, u8 flags) {
     };
 }
 
+static const Credentials kernel_credentials={0};
+const Credentials *security_current(void) {
+    static Credentials desktop_credentials;
+    if(current) return &processes[current].credentials;
+    unsigned gui_rights=gui_app_context_rights();
+    if(gui_rights){desktop_credentials=security_user_credentials();desktop_credentials.capabilities=gui_rights;return &desktop_credentials;}
+    if(security_session_state()==SESSION_ACTIVE) {
+        desktop_credentials=security_user_credentials(); return &desktop_credentials;
+    }
+    return &kernel_credentials;
+}
+void process_end_session(uint64_t session) {
+    unsigned long flags=hal_irq_save_disable();
+    for(int i=1;i<MAX_PROCESSES;i++) if(session && processes[i].credentials.session==session) {
+        processes[i].alive=0; processes[i].state=PROC_STATE_DEAD;
+    }
+    hal_irq_restore(flags);
+}
 int process_get_current_pid(void) {
     return current;
 }
@@ -62,6 +82,9 @@ const char *process_get_current_name(void) {
     return "unknown";
 }
 
+vfs_file_t **process_get_current_file_slot(unsigned fd) {
+    return fd<VFS_MAX_FDS?(vfs_file_t **)&processes[current].fd_table[fd]:0;
+}
 void **process_get_current_fd_table(void) {
     return (void **)processes[current].fd_table;
 }
@@ -302,6 +325,8 @@ int process_spawn_elf(const char *name, const u8 *elf_data, u32 elf_size) {
 
     processes[slot].frame = f;
     processes[slot].pid = slot;
+    processes[slot].credentials=current?processes[current].credentials:security_user_credentials();
+    if(!current&&gui_app_context_rights())processes[slot].credentials.capabilities=gui_app_context_rights();
     processes[slot].state = PROC_STATE_READY;
     processes[slot].alive = 1;
     processes[slot].paused = 0;
@@ -489,7 +514,7 @@ static ProcessFrame *schedule(ProcessFrame *frame) {
 
     for (int i = 1; i <= MAX_PROCESSES; i++) {
         int next = (current + i) % MAX_PROCESSES;
-        if (processes[next].alive && !processes[next].paused) {
+        if (processes[next].alive && !processes[next].paused && security_credentials_runnable(&processes[next].credentials)) {
             if (processes[next].state == PROC_STATE_BLOCKED) {
                 if (processes[next].event_count > 0 || processes[next].ipc_count > 0) {
                     processes[next].state = PROC_STATE_READY;

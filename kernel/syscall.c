@@ -1,6 +1,7 @@
 #include "syscall.h"
 #include "../include/pollikos_abi.h"
 #include "vfs.h"
+#include "pollikfs.h"
 #include "vmm.h"
 #include "klog.h"
 #include "process.h"
@@ -120,7 +121,7 @@ void *syscall_dispatch(void *frame_ptr) {
             return f;
         }
         int res = vfs_open(kpath, flags);
-        f->eax = (res < 0) ? (u32)-ENOENT : (u32)res;
+        f->eax = (res < 0) ? (u32)-(pollikfs_error()==VFS_DENIED?EACCES:ENOENT) : (u32)res;
         return f;
     }
     case SYS_CLOSE: {
@@ -216,6 +217,7 @@ void *syscall_dispatch(void *frame_ptr) {
         } else {
             char kbuf[128];
             u32 total = 0;
+            if(vfs_write_preflight(fd,len)<0) { f->eax=(u32)-EIO; return f; }
             while (total < len) {
                 u32 chunk = len - total;
                 if (chunk > sizeof(kbuf))

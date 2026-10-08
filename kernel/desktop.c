@@ -20,8 +20,20 @@
 #include "audio.h"
 #include "ui_icons.h"
 #include "control_center.h"
+#include "../common/app_search.h"
 
 static int desktop_ready;
+unsigned app_host_launcher_pins(void){
+    char text[24]={0};int fd=vfs_open("/home/.config/launcher.conf",O_RDONLY);if(fd<0)return 0;
+    int n=vfs_read(fd,text,sizeof(text)-1);vfs_close(fd);if(n<=0)return 0;return app_search_parse_pins(text);
+}
+int app_host_launcher_set_pins(unsigned pins){
+    char text[24]="pins=",value[16];number(value,pins&255);int n=5,i=0;while(value[i])text[n++]=value[i++];text[n++]='\n';
+    vfs_mkdir("/home/.config");int fd=vfs_open("/home/.config/launcher.conf.pending",O_WRONLY|O_CREAT|O_TRUNC);if(fd<0)return 0;
+    int written=vfs_write(fd,text,n);vfs_close(fd);
+    if(written!=n||vfs_rename_replace("/home/.config/launcher.conf.pending","/home/.config/launcher.conf")!=0)return 0;
+    return 1;
+}
 static int user_resize_notification=-1;
 static char g_wallpaper_names[8][56];
 static int g_wallpaper_count;
@@ -582,6 +594,7 @@ void desktop_prompt_delete_selected(void) {
 }
 
 static void on_menu_action(int action_id) {
+    int previous=gui_app_context_enter(shell.context_app);
     shell.dirty = 1;
     switch (action_id) {
         case ACTION_ABOUT_POLLIKOS:
@@ -643,6 +656,7 @@ static void on_menu_action(int action_id) {
         case ACTION_OPEN_FILES_APP: open_app(APP_FILES); break;
         default: break;
     }
+    gui_app_context_leave(previous);
 }
 
 static int desktop_bar_active_app(void) {
@@ -915,7 +929,7 @@ int dock_hit(void) {
 }
 
 void draw_app_vector_icon(int id,int x,int y,int size) {
-    if(gui_app_get(id))ui_icon_draw(id,x,y,size);
+    if(gui_app_get(id))ui_app_icon_draw(id,x,y,size);
 }
 
 static void app_icon(int id, int x, int y, int size) {

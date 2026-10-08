@@ -68,6 +68,7 @@ int main(int argc, char **argv) {
         char byte;
         errno = 0;
         long count = fd >= 0 ? read(fd, &byte, 1) : -2;
+        if(count!=-1 || errno!=EBADF) printf("[child] close-on-spawn fd=%d count=%ld errno=%d\n",fd,count,errno);
         return count == -1 && errno == EBADF ? 42 : 1;
     }
     if (strcmp(mode, "pipe_source") == 0) {

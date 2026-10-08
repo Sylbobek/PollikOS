@@ -13,11 +13,12 @@ Every later boot is held at the sign-in screen until the stored password is
 accepted. The session can also be locked from **Settings > General > Lock**.
 
 Passwords are never stored as text. The account record contains a unique
-16-byte salt, an 8,192-round SHA-256 derived value, and the KDF round count.
-Comparison is constant-time. The first implementation supports one local
-account; PollikFS does not yet contain per-file owners or permission bits, so
-the login protects access to the desktop session but is not yet a multi-user
-file-permission boundary.
+16-byte salt and an Argon2id value (19 MiB, two passes, one lane). Legacy
+8,192-round SHA-256 records are migrated after successful verification.
+Comparison is constant-time. There is one local account; VFS protects the
+credential store and system writes, and processes inherit session identity
+and limited capabilities. PollikFS has no multi-user per-inode ACL or data
+encryption. See the [current contracts](docs/IO_USERSPACE_CHECKPOINT.md).
 
 ## Bootable USB installation
 

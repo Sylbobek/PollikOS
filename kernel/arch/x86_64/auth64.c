@@ -2,32 +2,16 @@
  * The data disk is never formatted or reset here. */
 #include <stdint.h>
 #include <stddef.h>
-#include <bearssl.h>
 #include "auth64.h"
+#include "../../account.h"
+#include "../../security.h"
 #include "tty.h"
 #include "scheduler.h"
 #include "../../pollikfs.h"
 #include "../../vfs.h"
 #include "../../hal.h"
 
-#define ACCOUNT_MAGIC UINT32_C(0x31524341)
-#define ACCOUNT_VERSION 1u
-#define ACCOUNT_KDF_ROUNDS 8192u
-#define ACCOUNT_PATH "/etc/account.db"
-#define ACCOUNT_PENDING "/etc/account.db.pending"
-#define INSTALL_MARKER "/etc/pollikos-installed"
-
-typedef struct __attribute__((packed)) {
-    u32 magic;
-    u32 version;
-    u32 rounds;
-    char username[32];
-    u8 salt[16];
-    u8 password_hash[32];
-    u8 reserved[36];
-} Account64;
-_Static_assert(sizeof(Account64)==128,"shared account.db wire layout");
-
+typedef AccountRecord Account64;
 extern void kernel64_debug_bytes(const char *data,size_t length);
 
 static size_t text_length(const char *text) {
@@ -45,22 +29,6 @@ static int equal_secret(const u8 *a,const u8 *b,size_t length) {
     for (size_t i=0;i<length;i++) difference|=a[i]^b[i];
     return difference==0;
 }
-static void password_kdf(const char *password,const u8 salt[16],u32 rounds,u8 result[32]) {
-    br_sha256_context context;
-    size_t length=text_length(password);
-    br_sha256_init(&context);
-    br_sha256_update(&context,salt,16);
-    br_sha256_update(&context,password,length);
-    br_sha256_out(&context,result);
-    for (u32 round=1;round<rounds;round++) {
-        br_sha256_init(&context);
-        br_sha256_update(&context,result,32);
-        br_sha256_update(&context,salt,16);
-        br_sha256_update(&context,password,length);
-        br_sha256_out(&context,result);
-    }
-    zero(&context,sizeof(context));
-}
 static int read_line(const char *prompt,char *buffer,size_t capacity,int secret) {
     size_t length=0;
     if (!capacity) return 0;
@@ -72,6 +40,8 @@ static int read_line(const char *prompt,char *buffer,size_t capacity,int secret)
             hal_cpu_idle_once_disabled();
             continue;
         }
+        account_entropy_event(account_platform_time());
+        if(key==27 && secret==2){zero(buffer,capacity);output("Cancelled.\r\n");return 0;}
         if (key=='\r' || key=='\n') {
             output("\r\n");
             buffer[length]=0;
@@ -89,83 +59,8 @@ static int read_line(const char *prompt,char *buffer,size_t capacity,int secret)
         }
     }
 }
-static int valid_username(const char *name) {
-    size_t length=0;
-    while (name[length]) {
-        char c=name[length++];
-        if (!((c>='a'&&c<='z')||(c>='0'&&c<='9')||c=='_'||c=='-')) return 0;
-        if (length>31) return 0;
-    }
-    return length>=2;
-}
-static int account_load(Account64 *account) {
-    vfs_stat_t status;
-    if (vfs_stat(ACCOUNT_PATH,&status)<0)
-        return pollikfs_error()==VFS_NOT_FOUND ? 0 : -1;
-    if (status.type!=VFS_FILE || status.size!=sizeof(*account)) return -1;
-    int fd=vfs_open(ACCOUNT_PATH,O_RDONLY);
-    if (fd<0) return -1;
-    int read=vfs_read(fd,account,sizeof(*account));
-    int closed=vfs_close(fd);
-    if (read!=(int)sizeof(*account)||closed<0 || account->magic!=ACCOUNT_MAGIC ||
-        account->version!=ACCOUNT_VERSION || account->rounds<1024 ||
-        account->rounds>1000000 || !account->username[0] || account->username[31]) return -1;
-    return 1;
-}
-static void make_salt(Account64 *account) {
-    br_sha256_context context;
-    u8 digest[32],rtc[8];
-    u64 tsc=(u64)hal_read_tsc();
-    for (u8 i=0;i<8;i++) {
-        hal_port_write8(0x70, i);
-        rtc[i]=hal_port_read8(0x71);
-    }
-    u64 ticks=scheduler64_ticks();
-    br_sha256_init(&context);
-    br_sha256_update(&context,&tsc,sizeof(tsc));
-    br_sha256_update(&context,&ticks,sizeof(ticks));
-    br_sha256_update(&context,rtc,sizeof(rtc));
-    br_sha256_update(&context,account->username,sizeof(account->username));
-    br_sha256_out(&context,digest);
-    for (unsigned i=0;i<sizeof(account->salt);i++) account->salt[i]=digest[i];
-    zero(digest,sizeof(digest));
-    zero(&context,sizeof(context));
-}
-static int write_exact(const char *path,const void *data,u32 length) {
-    int fd=vfs_open(path,O_WRONLY|O_CREAT|O_TRUNC);
-    if (fd<0) return 0;
-    int written=vfs_write(fd,data,length);
-    int closed=vfs_close(fd);
-    return written==(int)length && closed==0;
-}
-static int create_account(Account64 *account,const char *username,const char *password) {
-    zero(account,sizeof(*account));
-    account->magic=ACCOUNT_MAGIC;
-    account->version=ACCOUNT_VERSION;
-    account->rounds=ACCOUNT_KDF_ROUNDS;
-    for (size_t i=0;username[i];i++) account->username[i]=username[i];
-    (void)vfs_mkdir("/etc");
-    (void)vfs_mkdir("/home");
-    char home[38]="/home/";
-    size_t at=6;
-    for (size_t i=0;username[i];i++) home[at++]=username[i];
-    home[at]=0;
-    if (vfs_mkdir(home)<0) {
-        vfs_stat_t status;
-        if (vfs_stat(home,&status)<0 || status.type!=VFS_DIR) return 0;
-    }
-    make_salt(account);
-    password_kdf(password,account->salt,account->rounds,account->password_hash);
-    if (!write_exact(ACCOUNT_PENDING,account,sizeof(*account)) ||
-        vfs_rename(ACCOUNT_PENDING,ACCOUNT_PATH)<0) {
-        (void)vfs_unlink(ACCOUNT_PENDING);
-        zero(account,sizeof(*account));
-        return 0;
-    }
-    static const char marker[]="PollikOS installation complete\n";
-    (void)write_exact(INSTALL_MARKER,marker,sizeof(marker)-1);
-    return 1;
-}
+static int valid_username(const char *name) { return account_valid_username(name); }
+static int create_account(Account64 *a,const char *name,const char *password) { return account_create(a,name,password); }
 static int setup_account(Account64 *account) {
     char username[32],password[64],confirmation[64];
     for (;;) {
@@ -207,29 +102,66 @@ int auth64_login(void) {
     if (!loaded) {
         output("[AUTH64] First run: create a local account.\r\n");
         int created=setup_account(&account);
+        if(created) security_session_begin(account.username);
         zero(&account,sizeof(account));
         return created;
     }
     output("[AUTH64] Sign in to PollikOS.\r\n");
     for (unsigned attempt=0;attempt<5;attempt++) {
         char username[32],password[64];
-        u8 candidate[32];
         read_line("Username: ",username,sizeof(username),0);
         read_line("Password: ",password,sizeof(password),1);
-        password_kdf(password,account.salt,account.rounds,candidate);
         int accepted=equal_secret((const u8 *)username,(const u8 *)account.username,sizeof(username)) &&
-                     equal_secret(candidate,account.password_hash,sizeof(candidate));
-        zero(candidate,sizeof(candidate));
+                     account_verify(&account,password);
         zero(password,sizeof(password));
         zero(username,sizeof(username));
         if (accepted) {
             output("[AUTH64] Sign-in successful.\r\n");
+            if(security_session_state()==SESSION_NONE) security_session_begin(account.username);
+            else security_session_resume();
             zero(&account,sizeof(account));
             return 1;
         }
         output("Sign-in failed.\r\n");
+        uint64_t until=scheduler64_ticks()+100u*(attempt+1);
+        while(scheduler64_ticks()<until) hal_cpu_idle_once_disabled();
     }
     output("[AUTH64] Too many failed attempts; restarting the kernel is required.\r\n");
     zero(&account,sizeof(account));
     return 0;
+}
+
+int auth64_change_password(void) {
+    Account64 account; char old[64],password[64],confirm[64];
+    if(account_load(&account)!=1) return 0;
+    read_line("Current password: ",old,sizeof(old),1);
+    read_line("New password (6-63 characters): ",password,sizeof(password),1);
+    read_line("Confirm new password: ",confirm,sizeof(confirm),1);
+    int ok=equal_secret((const u8 *)password,(const u8 *)confirm,64) && account_change(&account,old,password);
+    zero(old,sizeof(old)); zero(password,sizeof(password)); zero(confirm,sizeof(confirm)); zero(&account,sizeof(account));
+    output(ok?"[AUTH64] Password changed.\r\n":"[AUTH64] Password change failed.\r\n");
+    security_session_resume(); return ok;
+}
+int auth64_elevate(void) {
+    static uint64_t failed_session;
+    static unsigned failures;
+    if(failed_session!=security_session_id()){failed_session=security_session_id();failures=0;}
+    if(failures>=5){output("[AUTH64] Administrator launch locked. Sign out to retry.\r\n");return 0;}
+    Account64 account;char password[64];
+    output("[AUTH64] Run as administrator. Full application permissions.\r\n");
+    if(account_load(&account)!=1)return 0;
+    int accepted=0;
+    for(unsigned attempt=0;failures<5;attempt++) {
+        if(!read_line("Administrator password (Esc cancels): ",password,sizeof(password),2))break;
+        accepted=account_verify(&account,password);
+        zero(password,sizeof(password));
+        if(accepted){failures=0;break;}
+        failures++;
+        output("Incorrect password.\r\n");
+        uint64_t until=scheduler64_ticks()+100u*(attempt+1);
+        while(scheduler64_ticks()<until)hal_cpu_idle_once_disabled();
+    }
+    zero(password,sizeof(password));zero(&account,sizeof(account));
+    output(accepted?"[AUTH64] Administrator launch authorized.\r\n":"[AUTH64] Administrator launch denied.\r\n");
+    return accepted;
 }

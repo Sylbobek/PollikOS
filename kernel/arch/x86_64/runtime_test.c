@@ -30,14 +30,14 @@ static void complete(const Process64 *p) {
     unsigned mode = (unsigned)get(p, 0);
     if (p->state == PROCESS_EXITED && p->exit_status != 42) {
         memory_log("[C1] user check mode="); memory_hex(mode);
-        memory_log(" line="); memory_hex(p->frame.r15);
+        memory_log(" line="); memory_hex(p->thread.frame.r15);
         memory_log(" result="); memory_hex(get(p, 24)); memory_log("\n");
     }
-    if (mode == 5) check(p->state == PROCESS_FAULTED && p->frame.vector == 14 && p->frame.error == 7,
+    if (mode == 5) check(p->state == PROCESS_FAULTED && p->thread.frame.vector == 14 && p->thread.frame.error == 7,
                          "SYSCALL process fault cleanup");
     else if (mode == 6) check(p->state == PROCESS_KILLED && p->exit_status == 124, "SYSCALL process kill cleanup");
     else if (mode >= 7) check(p->state == PROCESS_FAULTED && p->exit_status == 141 &&
-                              p->frame.vector == USER_SYSCALL_VECTOR, "unsafe actual SYSRET stack rejected");
+                              p->thread.frame.vector == USER_SYSCALL_VECTOR, "unsafe actual SYSRET stack rejected");
     else check(p->state == PROCESS_EXITED && p->exit_status == 42, "userspace runtime assertions");
     if (mode >= 4 && mode <= 6) {
         check(file64_count(p) == USER_FD_LIMIT-3, "runtime handles reach safe reaper"); ++cleaned;
@@ -48,9 +48,9 @@ static void complete(const Process64 *p) {
 }
 static void isolation_boundary(void) {
     Process64 *a = peers[0], *b = peers[1];
-    if (a && b && !get(a, 16) && get(a, 8) == 1 && get(b, 8) == 1 && a->ticks >= 3 && b->ticks >= 3) {
-        check(a->files[3] && b->files[3] && a->files[3] != b->files[3] &&
-              a->files[3]->inode != b->files[3]->inode &&
+    if (a && b && !get(a, 16) && get(a, 8) == 1 && get(b, 8) == 1 && a->thread.ticks >= 3 && b->thread.ticks >= 3) {
+        check(a->fds[3].file && b->fds[3].file && a->fds[3].file != b->fds[3].file &&
+              a->fds[3].file->inode != b->fds[3].file->inode &&
               a->cwd[1] == 'b' && b->cwd[1] == 'e' &&
               get(a, 32) >= 256 && get(b, 32) >= 256,
               "independent cwd and descriptors across repeated preempted SYSCALLs");
@@ -65,21 +65,21 @@ static void isolation_boundary(void) {
 }
 static void kill_boundary(void) {
     Process64 *p = peers[0];
-    if (p && get(p, 8) == 1 && !p->tick_limit)
-        check(process64_tick_limit(p->pid, p->ticks+3), "runtime kill after open and chdir");
+    if (p && get(p, 8) == 1 && !p->thread.tick_limit)
+        check(process64_tick_limit(p->pid, p->thread.ticks+3), "runtime kill after open and chdir");
 }
 static void return_checks(Process64 *p) {
-    UserFrame f = p->frame;
+    UserFrame f = p->thread.frame;
     const uint64_t invalid[] = {UINT64_C(0x800000000000), MM_KERNEL_START, USER_PRIVATE};
     for (unsigned i = 0; i < 3; ++i) {
-        f = p->frame; f.rip = invalid[i];
+        f = p->thread.frame; f.rip = invalid[i];
         check(!process64_test_return(p, &f), "reject noncanonical/kernel/unmapped SYSRET RIP");
-        f = p->frame; f.rsp = invalid[i];
+        f = p->thread.frame; f.rsp = invalid[i];
         check(!process64_test_return(p, &f), "reject noncanonical/kernel/unmapped SYSRET RSP");
     }
-    f = p->frame; f.cs = 8;
+    f = p->thread.frame; f.cs = 8;
     check(!process64_test_return(p, &f), "reject kernel return selector");
-    f = p->frame; f.flags = UINT64_MAX;
+    f = p->thread.frame; f.flags = UINT64_MAX;
     check(process64_test_return(p, &f) && !(f.flags & ~UINT64_C(0xed7)) && (f.flags & 2),
           "clear unsafe SYSRET flags including TF IOPL NT RF VM AC");
 }

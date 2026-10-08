@@ -6,6 +6,9 @@
 void auth_init(void);
 int auth_is_active(void);
 void auth_lock(void);
+void auth_logout(void);
+void auth_change_password(void);
+void auth_run_admin(int app_id);
 void auth_render(int width, int height);
 void auth_key(u8 scan_code, int shift);
 void auth_key_ex(u8 scan_code, int shift, int control);

@@ -1,8 +1,16 @@
 """Native HTML/CSS/JS and PNG/JPEG HTTP pipeline, actual guest framebuffer."""
-import http.server,io,json,pathlib,shutil,socket,subprocess,tempfile,threading,time
+import http.server,io,json,pathlib,shutil,socket,subprocess,tempfile,threading,time,os
 from PIL import Image
 from x86_64_console import Console,ROOT
-B=ROOT/'build/x86_64/system'
+B=ROOT/'build/x86_64'/os.environ.get('POLLIK_X64_VARIANT','system')
+class BrowserConsole(Console):
+ def pump(self,seconds=.1):
+  changed=super().pump(seconds)
+  if changed:
+   (B/'browser-images-native.log').write_text(self.text(),encoding='utf-8')
+   fault=self.text().find('[USER64] fault')
+   assert (fault<0 or '\n' not in self.text()[fault:]) and '[X64] FAIL' not in self.text(),self.text()[-1500:]
+  return changed
 def port():
  with socket.socket() as s:s.bind(('127.0.0.1',0));return s.getsockname()[1]
 png=io.BytesIO();Image.new('RGB',(64,48),(18,171,52)).save(png,format='PNG')
@@ -23,7 +31,7 @@ class Fixture(http.server.BaseHTTPRequestHandler):
 def main():
  server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Fixture);threading.Thread(target=server.serve_forever,daemon=True).start()
  with tempfile.TemporaryDirectory(prefix='pollik-web-images-') as tmp:
-  data=pathlib.Path(tmp)/'data.img';shutil.copyfile(B/'PollikData-system.img',data);sp,qp=port(),port()
+  data=pathlib.Path(tmp)/'data.img';shutil.copyfile(B/('PollikData-test.img' if B.name=='kernel' else 'PollikData-system.img'),data);sp,qp=port(),port()
   cmd=['qemu-system-x86_64','-S','-accel','tcg','-cpu','qemu64','-m','8192','-vga','std','-display','none','-no-reboot',
    '-drive',f'file={B/"PollikOS-x86_64.img"},format=raw,if=ide,index=0,snapshot=on',
    '-drive',f'file={data},format=raw,if=ide,index=1,snapshot=on','-netdev','user,id=n','-device','rtl8139,netdev=n',
@@ -42,7 +50,7 @@ def main():
      if not raw:return {}
      r=json.loads(raw);assert 'error' not in r,r
      if 'return' in r:return r['return']
-   call('qmp_capabilities');c=Console(stream);call('cont')
+   call('qmp_capabilities');c=BrowserConsole(stream);call('cont')
    c.wait_for('[AUTH64] First run: create a local account.',120)
    for value,prompt in [('webuser','Create password (6-63 characters):'),('test123','Confirm password:'),('test123','Account created.')]:c.send(value);c.wait_for(prompt,120)
    c.wait_for('[terminal] output active',120);c.wait_for_prompt(120)

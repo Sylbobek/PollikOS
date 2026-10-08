@@ -16,7 +16,7 @@ from sync_system_files import sync, validate, manifest, exclusive_image, SPAN, F
 from pollikfs_install import PollikFsImage, PollikFsError, START, BLOCK_SIZE
 from format_pollikfs2 import format_disk
 parser=argparse.ArgumentParser()
-parser.add_argument('--old-image',type=Path,default=ROOT/'build/system-sync-evidence/old-layout.img')
+parser.add_argument('--old-image',type=Path,help='optional legacy image; copied before testing')
 parser.add_argument('--boot-check',action='store_true')
 args=parser.parse_args()
 out=ROOT/'build/system-sync-evidence';out.mkdir(exist_ok=True)
@@ -32,7 +32,18 @@ def refusal(path, label):
 
 with tempfile.TemporaryDirectory(prefix='pollikos-sync-') as temp:
     temp=Path(temp)
-    copy=temp/'old-copy.img';shutil.copyfile(args.old_image,copy)
+    fixture=temp/'old-layout.img';format_disk(fixture,total_size_mb=40)
+    fixture_fs=PollikFsImage.load(fixture)
+    fixture_fs.install_file('/home/original.txt',b'user data must survive sync')
+    fixture_fs.install_file('/bin/old-app.pol',b'existing application fixture')
+    fixture_fs.save(fixture)
+    with fixture.open('r+b') as stream: stream.seek(SPAN+4096);stream.write(b'preserve image tail')
+    if args.old_image:
+        legacy_prefix=temp/'legacy-prefix.img';shutil.copyfile(args.old_image,legacy_prefix)
+        # Old PFS2 snapshots occupy the new journal prefix. They are never
+        # erased by a host writer to turn a protected volume into a writable one.
+        refusal(legacy_prefix,'legacy snapshot/unknown journal prefix')
+    copy=temp/'old-copy.img';shutil.copyfile(fixture,copy)
     original=copy.read_bytes();fs=validate(original[:SPAN]);before=manifest(fs)
     assert not any(p in before for p in FILES), 'old fixture already has stock wallpaper files'
     def save_list(name, records):
@@ -111,13 +122,13 @@ with tempfile.TemporaryDirectory(prefix='pollikos-sync-') as temp:
         pos=START+block*BLOCK_SIZE+entry_offset
         assert old[pos:pos+64]==new[pos:pos+64]
     print('PASS parent directory growth: 16 existing entries and timestamp/reserved bytes preserved')
-    short=temp/'damaged-tail.img';shutil.copyfile(args.old_image,short)
+    short=temp/'damaged-tail.img';shutil.copyfile(fixture,short)
     with short.open('r+b') as f:f.truncate(SPAN-512)
     refusal(short,'damaged tail')
-    legacy=temp/'legacy.img';shutil.copyfile(args.old_image,legacy)
+    legacy=temp/'legacy.img';shutil.copyfile(fixture,legacy)
     with legacy.open('r+b') as f:f.seek(START+40);f.write(struct.pack('<II',30,35))
     refusal(legacy,'legacy geometry 30/35')
-    corrupt=temp/'bad-pointer.img';shutil.copyfile(args.old_image,corrupt)
+    corrupt=temp/'bad-pointer.img';shutil.copyfile(fixture,corrupt)
     with corrupt.open('r+b') as f:f.seek(START+5*BLOCK_SIZE+60+8);f.write(struct.pack('<I',32768))
     refusal(corrupt,'damaged block reference')
     locked_before=sha(copy)
@@ -128,7 +139,7 @@ with tempfile.TemporaryDirectory(prefix='pollikos-sync-') as temp:
     assert sha(copy)==locked_before
     print(f'PASS exclusive lock byte-identical SHA256={locked_before}')
     # Actual QEMU lock, not just the tool's own exclusive handle.
-    lock=temp/'qemu-lock.img';shutil.copyfile(args.old_image,lock)
+    lock=temp/'qemu-lock.img';shutil.copyfile(fixture,lock)
     proc=subprocess.Popen(['qemu-system-x86_64','-S','-display','none','-monitor','none',
                           '-serial','none','-drive',f'format=raw,file={lock},if=ide'],
                          creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))

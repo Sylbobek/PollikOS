@@ -4,6 +4,8 @@ Obecny stan i plan migracji są częścią źródła prawdy: [`ARCHITECTURE.md`]
 
 ## Stan kodu
 
+x86_64 ma jedną tablicę `Descriptor64` dla plików, potoków i konsoli, z typem, prawami i close-on-spawn. Strumienie sieciowe mają osobne tokeny z właścicielem PID i sprzątaniem przy exit. `Credentials.capabilities` ograniczają VFS, okna, sieć, sesje i administrację urządzeniami. Nie ma jeszcze ogólnego namespace obiektów ani wspólnego formatu fd i tokenu sieciowego. Szczegóły: [checkpoint 6–10](IO_USERSPACE_CHECKPOINT.md).
+
 - `ProcessControlBlock` w `kernel/process.h` opisuje PID/PPID, stan, katalog stron, stosy, fd table, kolejkę zdarzeń i kolejkę IPC.
 - `vfs_file_t` jest współdzielonym opisem otwartego pliku z `ref_count`; wskaźniki do niego są przechowywane w deskryptorach procesu.
 - Sockety syscall mają globalną tablicę slotów w `kernel/syscall.c`, zakres `100+` i PID właściciela. `CONNECT`, `SEND`, `RECV` i `CLOSE` sprawdzają właściciela, a reaper procesu zamyka jego sockety przed zwolnieniem PCB. Sloty nie korzystają jeszcze ze wspólnego handle table.

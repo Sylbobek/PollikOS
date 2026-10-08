@@ -4,7 +4,12 @@ extern int printf(const char *, ...);
 extern void exit(int);
 static u32 fill_color, text_color;
 static int checks;
+int gui_app_context_enter(int id){(void)id;return -1;}
+void gui_app_context_leave(int id){(void)id;}
+int gui_app_context_current(void){return -1;}
 #define CHECK(x) do { ++checks; if (!(x)) { printf("FAIL line %d: %s\n", __LINE__, #x); exit(1); } } while (0)
+/* Icons are outside this button-state fixture. Any actual invocation fails. */
+void ui_icon_draw(int id,int x,int y,int size) { (void)id;(void)x;(void)y;(void)size;CHECK(0); }
 void compositor_invalidate_all_surfaces(void) { CHECK(0); }
 void wm_invalidate_all(void) { CHECK(0); }
 void compositor_invalidate_dock(void) { CHECK(0); }

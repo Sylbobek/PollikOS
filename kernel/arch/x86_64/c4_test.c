@@ -17,8 +17,8 @@ static void complete(const Process64 *p) {
     if (p->state != PROCESS_EXITED || p->exit_status != expected_status) {
         memory_log("[C4] user state="); memory_hex(p->state);
         memory_log(" status="); memory_hex((uint64_t)p->exit_status);
-        memory_log(" vector="); memory_hex(p->frame.vector);
-        memory_log(" error="); memory_hex(p->frame.error);
+        memory_log(" vector="); memory_hex(p->thread.frame.vector);
+        memory_log(" error="); memory_hex(p->thread.frame.error);
         memory_log("\n");
     }
     check(p->state == PROCESS_EXITED && p->exit_status == expected_status, "C4 exit status");
@@ -48,13 +48,13 @@ static unsigned fault_count, peer_count;
 static uint64_t fault_low, fault_high;
 static void fault_complete(const Process64 *p) {
     if (p->state == PROCESS_FAULTED) {
-        if (p->frame.vector != 14 || p->frame.error != 6 ||
+        if (p->thread.frame.vector != 14 || p->thread.frame.error != 6 ||
             p->fault_address < fault_low || p->fault_address >= fault_high) {
-            memory_log("[C4] fault vector="); memory_hex(p->frame.vector);
-            memory_log(" error="); memory_hex(p->frame.error);
+            memory_log("[C4] fault vector="); memory_hex(p->thread.frame.vector);
+            memory_log(" error="); memory_hex(p->thread.frame.error);
             memory_log(" address="); memory_hex(p->fault_address); memory_log("\n");
         }
-        check(p->frame.vector == 14 && p->frame.error == 6 &&
+        check(p->thread.frame.vector == 14 && p->thread.frame.error == 6 &&
               p->fault_address >= fault_low && p->fault_address < fault_high,
               "C4 fault diagnostics");
         ++fault_count;

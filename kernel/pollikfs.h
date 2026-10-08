@@ -63,11 +63,13 @@ _Static_assert(sizeof(PollikInode) == 60, "PollikFS v2 inode wire size");
 _Static_assert(sizeof(PollikDirent) == 64, "PollikFS v2 directory wire size");
 int pollikfs_error(void);
 int pollikfs_mounted(void);
+int pollikfs_readonly(void);
 
 void pollikfs_init(void);
 /* Destructive explicit format; never called by mount. Remount afterwards.
  * Existing formatter does not yet provide transactional I/O guarantees. */
 void pollikfs_format(void);
+int pollikfs_format_status(void);
 int pollikfs_open(const char *path, int flags, vfs_file_t *out_file);
 int pollikfs_read(vfs_file_t *file, void *buf, u32 count);
 int pollikfs_write(vfs_file_t *file, const void *buf, u32 count);
@@ -80,9 +82,9 @@ int pollikfs_unlink(const char *path);
 int pollikfs_rmdir(const char *path);
 int pollikfs_readdir(vfs_file_t *file, vfs_dirent_t *dirent);
 int pollikfs_rename(const char *oldpath, const char *newpath);
-#ifdef POLLIK_X64
 int pollikfs_rename_replace(const char *oldpath, const char *newpath);
-#endif
+void pollikfs_access_denied(void);
+void pollikfs_range_denied(void);
 /* Filesystem resource accounting for tests and diagnostics. */
 u32 pollikfs_free_blocks(void);
 u32 pollikfs_free_inodes(void);

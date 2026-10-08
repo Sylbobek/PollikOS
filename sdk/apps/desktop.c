@@ -1,4 +1,5 @@
 #include <pollikos/window.h>
+#include <string.h>
 #include <pollikos/process.h>
 #include <pollikos/time.h>
 #include <sys/wait.h>
@@ -6,11 +7,14 @@
 #include <stdint.h>
 #include "window_ui.h"
 #include "icon_assets.h"
+static int launch(const char *path);
 #include "control_panel.h"
 
 static int launch(const char *path) {
     const char *argv[]={path,0};
-    long pid=pollikos_spawn(path,argv,0);
+    unsigned rights=USER_CAP_DEFAULT;
+    if(!strcmp(path,"/bin/settings.pol")) rights|=USER_CAP_DEVICE;
+    long pid=pollikos_spawn_rights(path,argv,0,rights);
     if (pid<0) {
         puts("[desktop] application launch failed");
         return 0;
@@ -80,7 +84,11 @@ int main(void) {
         if (pollikos_input_read(&event)==(int64_t)sizeof(event)) {
             if (event.kind&POLLIKOS_INPUT_WINDOW_CLOSE) running=0;
             if (event.kind&POLLIKOS_INPUT_KEY_DOWN) {
-                if(panel_open||panel_slide){if(event.key==27&&panel_open)panel_toggle();}
+                if(panel_open||panel_slide){
+                    panel_key(event.key,event.modifiers);
+                    draw(&canvas,files_x,terminal_x,demo_x,browser_x,notes_x,calc_x,dock_y);
+                    (void)pollikos_window_present();
+                }
                 else if (event.key=='f' || event.key=='F' || event.key==13) (void)launch("/bin/files.pol");
                 else if (event.key=='t' || event.key=='T') (void)launch("/bin/terminal.pol");
                 else if (event.key=='d' || event.key=='D') (void)launch("/bin/windowdemo.pol");
@@ -89,6 +97,9 @@ int main(void) {
                 else if (event.key=='c' || event.key=='C') (void)launch("/bin/calculator.pol");
                 else if (event.key==27) running=0;
             }
+            if(event.kind&POLLIKOS_INPUT_MOUSE_MOVE){pollikos_window_info_t info;
+                if(pollikos_window_info(&info)==0&&panel_hover_at(&canvas,event.x-info.content_x,event.y-info.content_y)){
+                    draw(&canvas,files_x,terminal_x,demo_x,browser_x,notes_x,calc_x,dock_y);(void)pollikos_window_present();}}
             if((event.kind&(POLLIKOS_INPUT_MOUSE_MOVE|POLLIKOS_INPUT_MOUSE_BUTTON))&&panel_capture){
                 pollikos_window_info_t info;
                 if(pollikos_window_info(&info)==0)panel_drag(&canvas,event.x-info.content_x,event.buttons&POLLIKOS_MOUSE_LEFT);

@@ -12,8 +12,8 @@ static void complete(const Process64 *process) {
     if (process->state != PROCESS_EXITED || process->exit_status != expected_status) {
         memory_log("[C5] demo state="); memory_hex(process->state);
         memory_log(" status="); memory_hex((uint64_t)process->exit_status);
-        memory_log(" vector="); memory_hex(process->frame.vector);
-        memory_log(" error="); memory_hex(process->frame.error);
+        memory_log(" vector="); memory_hex(process->thread.frame.vector);
+        memory_log(" error="); memory_hex(process->thread.frame.error);
         memory_log("\n");
     }
     check(process->state == PROCESS_EXITED && process->exit_status == expected_status &&
@@ -33,11 +33,11 @@ static void launch_demo(const char *path, const char *mode, int status) {
 }
 void c5_demo(void) {
     page_count_t baseline = pmm64_stats().free;
-    if (vfs_mkdir("/mutation") < 0 && pollikfs_error() != VFS_EXISTS) {
-        memory_log("[C5] /mutation: "); memory_hex(pollikfs_error()); memory_log("\n");
+    if (vfs_mkdir("/tmp/mutation") < 0 && pollikfs_error() != VFS_EXISTS) {
+        memory_log("[C5] /tmp/mutation: "); memory_hex(pollikfs_error()); memory_log("\n");
     }
     launch_demo("/bin/sdk_write", 0, 0);
-    launch_demo("/bin/mutation_c", "basic", 42);
+    launch_demo("/bin/mutation_c", "demo", 42);
     check(!vfs_debug_handles() && pmm64_stats().free == baseline, "C5 demo ownership balance");
     memory_log("[C5] demo PASS: userspace create/write/read/rename/unlink through the SDK\n");
 }

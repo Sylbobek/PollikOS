@@ -18,7 +18,7 @@ void heap64_reset(Process64 *process) {
     process->heap_break = USER_HEAP_BASE;
     process->heap_limit = USER_HEAP_LIMIT;
     process->mmap_next = USER_MMAP_BASE;
-    process->wake_tick = 0;
+    process->thread.wake_tick = 0;
     for (unsigned i = 0; i < USER_MMAP_MAX; ++i) process->mmap[i] = (Mmap64Record){0};
 }
 
@@ -159,9 +159,9 @@ static void demo_complete(const Process64 *process) {
     if (process->state != PROCESS_EXITED || process->exit_status != 42) {
         memory_log("[C2] demo user state="); memory_hex(process->state);
         memory_log(" status="); memory_hex((uint64_t)process->exit_status);
-        memory_log(" vector="); memory_hex(process->frame.vector);
-        memory_log(" error="); memory_hex(process->frame.error);
-        memory_log(" line="); memory_hex(process->frame.r15);
+        memory_log(" vector="); memory_hex(process->thread.frame.vector);
+        memory_log(" error="); memory_hex(process->thread.frame.error);
+        memory_log(" line="); memory_hex(process->thread.frame.r15);
         uint64_t failure = 0;
         if (copy_from_user64(&process->space, &failure, USER_DATA+24, 8) == USER_COPY_OK) {
             memory_log(" rax="); memory_hex(failure);

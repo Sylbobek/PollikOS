@@ -13,6 +13,7 @@
 #define WINDOW_MAX_HEIGHT 640u
 #define WINDOW_KEY_QUEUE 32u
 #define WINDOW_KEYBOARD_BASE (MM_KERNEL_START+UINT64_C(0x30000000))
+#define WINDOW_STATE_BASE (MM_KERNEL_START+UINT64_C(0x32000000))
 #define WINDOW_OUTER_W(w) ((w)+2u*WINDOW_BORDER)
 #define WINDOW_OUTER_H(h) ((h)+WINDOW_TITLEBAR+2u*WINDOW_BORDER)
 #define WINDOW_CONTENT_X(w) ((w)->x+(int)WINDOW_BORDER)
@@ -31,16 +32,17 @@ typedef struct {
 
 /* A process owns at most one window. Reuse the process table's natural
  * capacity instead of imposing a separate desktop-wide window ceiling. */
-static Window64 windows[PROCESS_MAX];
+static Window64 *windows;
 typedef struct { MouseEvent64 events[WINDOW_KEY_QUEUE]; unsigned head, count; } KeyQueue64;
 static KeyQueue64 *keyboard;
 static uint64_t next_z=1;
 static int dragging=-1;
 static int console_suspended;
+static int session_hidden;
 static uint64_t keyboard_sequence;
 
 int window64_init(void) {
-    if (keyboard) return 1;
+    if (keyboard&&windows) return 1;
     size_t capacity=process64_capacity();
     size_t bytes=capacity*sizeof(*keyboard);
     size_t pages=(bytes+MM_PAGE_SIZE-1)/MM_PAGE_SIZE, mapped=0;
@@ -55,26 +57,38 @@ int window64_init(void) {
         }
         return 0;
     }
+    size_t state_pages=(capacity*sizeof(*windows)+MM_PAGE_SIZE-1)/MM_PAGE_SIZE,state_mapped=0;
+    while(state_mapped<state_pages&&vmm64_alloc_page(vmm64_kernel(),WINDOW_STATE_BASE+state_mapped*MM_PAGE_SIZE,VM_WRITE)==VM_OK)state_mapped++;
+    if(state_mapped!=state_pages){
+        while(state_mapped){state_mapped--;memory_require(vmm64_unmap(vmm64_kernel(),WINDOW_STATE_BASE+state_mapped*MM_PAGE_SIZE,1,0)==VM_OK,"window state allocation rollback");}
+        while(mapped){mapped--;memory_require(vmm64_unmap(vmm64_kernel(),WINDOW_KEYBOARD_BASE+mapped*MM_PAGE_SIZE,1,0)==VM_OK,"window keyboard allocation rollback");}
+        return 0;
+    }
+    windows=(Window64 *)(uintptr_t)WINDOW_STATE_BASE;
     keyboard=(KeyQueue64 *)(uintptr_t)WINDOW_KEYBOARD_BASE;
+    for(size_t i=0;i<capacity;i++)windows[i]=(Window64){0};
     for (size_t i=0;i<capacity;i++) keyboard[i]=(KeyQueue64){0};
     return 1;
 }
 
 static int window_index(const Process64 *process) {
-    for (unsigned i=0;i<PROCESS_MAX;i++)
+    if(!windows)return -1;
+    for (unsigned i=0;i<process64_capacity();i++)
         if (windows[i].owner==process) return (int)i;
     return -1;
 }
 static int topmost(void) {
+    if(session_hidden||!windows) return -1;
     int best=-1;
-    for (unsigned i=0;i<PROCESS_MAX;i++)
+    for (unsigned i=0;i<process64_capacity();i++)
         if (windows[i].owner && windows[i].visible &&
             (best<0 || windows[i].z>windows[best].z)) best=(int)i;
     return best;
 }
 static unsigned ordered_windows(int order[PROCESS_MAX], int descending) {
+    if(!windows)return 0;
     unsigned count=0;
-    for (unsigned i=0;i<PROCESS_MAX;i++) {
+    for (unsigned i=0;i<process64_capacity();i++) {
         if (!windows[i].owner) continue;
         unsigned at=count;
         while (at && (descending ? windows[order[at-1]].z<windows[i].z
@@ -127,6 +141,7 @@ static int restore_windows(void) {
     return 1;
 }
 static int paint_windows(void) {
+    if(session_hidden) return 1;
     int order[PROCESS_MAX];
     unsigned count=ordered_windows(order,0);
     for (unsigned step=0;step<count;step++) {
@@ -150,10 +165,20 @@ static int repaint_windows(void) {
     console_fb_overlay_end();
     return ok;
 }
+void window64_session_hide(int hidden) {
+    console_fb_overlay_begin();
+    if(hidden && !session_hidden) memory_require(restore_windows(),"session hide windows");
+    session_hidden=hidden;
+    dragging=-1;
+    if(keyboard) for(size_t i=0;i<process64_capacity();i++) keyboard[i]=(KeyQueue64){0};
+    mouse64_flush();
+    if(!hidden) memory_require(paint_windows(),"session restore windows");
+    console_fb_overlay_end();
+}
 void window64_console_begin(void) { console_suspended=0; }
 void window64_console_damage(unsigned x, unsigned y, unsigned width, unsigned height) {
-    if (console_suspended || !width || !height) return;
-    for (unsigned i=0;i<PROCESS_MAX;i++) {
+    if (!windows||console_suspended || !width || !height) return;
+    for (unsigned i=0;i<process64_capacity();i++) {
         Window64 *window=&windows[i];
         if (!window->owner || !window->visible) continue;
         uint64_t right=(uint64_t)x+width, bottom=(uint64_t)y+height;
@@ -174,15 +199,15 @@ void window64_console_end(void) {
 static int64_t create_window(Process64 *process, UserFrame *frame) {
     uint64_t requested_width=frame->rdi, requested_height=frame->rsi;
     if (window_index(process)>=0) return -USER_EEXIST;
-    int slot=-1;
-    for (unsigned i=0;i<PROCESS_MAX;i++) if (!windows[i].owner) { slot=(int)i; break; }
-    if (slot<0) return -USER_ENOSPC;
     unsigned screen_width=console_fb_width(), screen_height=console_fb_height();
     if (requested_width<WINDOW_MIN_WIDTH || requested_height<WINDOW_MIN_HEIGHT ||
         requested_width>WINDOW_MAX_WIDTH || requested_height>WINDOW_MAX_HEIGHT ||
         requested_width+2*WINDOW_BORDER>screen_width ||
         requested_height+WINDOW_TITLEBAR+2*WINDOW_BORDER>screen_height) return -USER_EINVAL;
-    if (!keyboard && !window64_init()) return -USER_ENOMEM;
+    if (!window64_init()) return -USER_ENOMEM;
+    int slot=-1;
+    for (unsigned i=0;i<process64_capacity();i++) if (!windows[i].owner) { slot=(int)i; break; }
+    if (slot<0) return -USER_ENOSPC;
     unsigned width=(unsigned)requested_width, height=(unsigned)requested_height;
     char title[USER_WINDOW_TITLE_MAX];
     if (frame->rdx) {
@@ -270,12 +295,18 @@ static int64_t read_input(Process64 *process, uint64_t destination) {
     if ((event.kind&USER_INPUT_MOUSE_BUTTON) && (event.changed&USER_MOUSE_BUTTON_LEFT) &&
         (event.buttons&USER_MOUSE_BUTTON_LEFT)) {
         int target=-1;
-        for (unsigned i=0;i<PROCESS_MAX;i++)
+        for (unsigned i=0;i<process64_capacity();i++)
             if (windows[i].owner && hit_window(&windows[i],event.x,event.y) &&
                 (target<0 || windows[i].z>windows[target].z)) target=(int)i;
         if (target>=0 && target!=own) {
+            /* Saved underlays belong to the current stacking order. Restore
+             * them before raising a window, then capture the new order. */
+            console_fb_overlay_begin();
+            int restored=restore_windows();
             windows[target].z=next_z++;
-            (void)repaint_windows();
+            int painted=restored&&paint_windows();
+            console_fb_overlay_end();
+            if(!painted)return -USER_EFAULT;
             return -USER_EAGAIN;
         }
         Window64 *window=&windows[own];
@@ -307,6 +338,10 @@ static int64_t read_input(Process64 *process, uint64_t destination) {
     return sizeof(event);
 }
 int window64_dispatch(Process64 *process, UserFrame *frame) {
+    if((frame->rax>=USER_INPUT_READ && frame->rax<=USER_WINDOW_INFO) &&
+       !security_has(&process->credentials,CAP_WINDOW)) {
+        frame->rax=(uint64_t)-(int64_t)USER_EPERM;return 1;
+    }
     int64_t result;
     switch (frame->rax) {
     case USER_WINDOW_CREATE: result=create_window(process,frame); break;

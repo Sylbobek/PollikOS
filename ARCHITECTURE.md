@@ -1,6 +1,8 @@
 # Architektura Systemu Operacyjnego PollikOS
 
-## 0. Bieżący stan i migracja granic architektury — przegląd 30.09.2026
+## 0. Bieżący stan i migracja granic architektury — checkpoint 08.10.2026
+
+Aktualne kontrakty i walidacja: [konta/sesje 1–5](docs/SECURITY_SESSION_CHECKPOINT.md), [I/O/userspace 6–10](docs/IO_USERSPACE_CHECKPOINT.md). Starsze sekcje historyczne poniżej nie zastępują tych checkpointów.
 
 **Ten plik jest źródłem prawdy o architekturze PollikOS.** Opisuje stan potwierdzony w kodzie, a funkcje zaplanowane wyraźnie oznacza jako przyszłe. Dokumenty szczegółowe znajdują się w [`docs/`](docs/) oraz [`kernel/arch/x86_64/`](kernel/arch/x86_64/); w przypadku różnicy pierwszeństwo ma ta sekcja i aktualna implementacja.
 
@@ -11,7 +13,7 @@
 - Na i386 istnieją procesy ELF32 Ring 3, osobne katalogi stron, walidacja zakresów user-space, bezpieczne kopie i ABI przez `int 0x80`. Wbudowane aplikacje GUI i przeglądarka na i386 nadal wykonują się w Ring 0.
 - PMM/VMM i ELF32 działają; pamięć fizyczna na i386 jest ograniczona do 1 GiB direct map (brak PAE/NX). Target x86_64 usuwa to ograniczenie, oferując 4-poziomowe stronicowanie PML4 i sprzętowy bit NX.
 - Warstwa pamięci masowej obsługuje zarówno legacy ATA PIO, jak i sterownik **SATA AHCI** (`kernel/ahci.c`). PollikFS v2 jest głównym systemem plików z automatyczną walidacją geometrii bloków `[31, 36]`.
-- System uwierzytelniania (`kernel/auth.c`) zapewnia trwałą bazę `/etc/account.db` z solonym haszowaniem i KDF opartym na BearSSL, obsługując kreator konfiguracji, ekran logowania oraz instalator USB Live (`kernel/installer.c`).
+- Wspólny moduł kont (`kernel/account.c`) zapewnia trwałą bazę `/etc/account.db`, Argon2id i migrację starego KDF po weryfikacji hasła; interfejsy i386/x86_64 korzystają z tej samej implementacji, obsługując kreator konfiguracji, ekran logowania oraz instalator USB Live (`kernel/installer.c`).
 
 ### Plan migracji i warunki przejścia
 
@@ -19,11 +21,11 @@
 | --- | --- | --- |
 | 0 — analiza | Inwentaryzacja źródeł, granic, buildów, testów i znanych rozbieżności; ten dokument jest indeksem stanu. | Ukończona |
 | 1 — granice kernela | HAL dla operacji architektury; port-I/O, IRQ/flagi, bezczynność CPU, CR/TLB, MSR, CPUID/TSC/RDRAND, IDT/TR oraz stan x87 i386. | Zamknięta: wspólna baza C/HAL w `kernel/hal.c` zweryfikowana na obu targetach |
-| 2 — syscall layer | Wersjonowane ABI 1.0 dla i386 (`int 0x80`) i x86_64 (`syscall`/`sysret`), wspólny opis możliwości, centralne user-copy i testy błędnych wskaźników. | Zamknięta: `include/pollikos_abi.h`, osobne rejestry i namespace targetów |
+| 2 — syscall layer | Wersjonowane ABI 1.1 dla i386 (`int 0x80`) i x86_64 (`syscall`/`sysret`), wspólny opis możliwości, centralne user-copy i testy błędnych wskaźników. | Zamknięta: `include/pollikos_abi.h`, osobne rejestry i namespace targetów |
 | 3 — procesy i wątki | Oddzielić cykl życia procesu od schedulera i TCB; hierarchia procesów, stany i sygnały. | Zaawansowana: w x86_64 kompletny model `spawn`/`waitpid` z TCB `Thread64`, monotonicznymi PID, kodami zakończenia i sygnałami C12; scheduler w `kernel/arch/x86_64/scheduler.c`. W i386 scheduler w `process.c` |
 | 4 — pamięć | PMM/VMM z odrębną przestrzenią adresową per proces, guard pages, rollback nieudanych mapowań. | Zamknięta: i386 z izolacją katalogów i ochroną supervisor; x86_64 z 4-poziomowym stronicowaniem PML4 w wyższej połówce pamięci |
-| 5 — obiekty i deskryptory | Wprowadzić typowane, ref-counted obiekty; procesowe tablice deskryptorów i sprzątanie przy exit. | Zamknięta na x86_64: dedykowane tablice deskryptorów (do 128 fd per proces), zamykanie gniazd i plików przy zakończeniu; w i386 deskryptory w `vfs.c` |
-| 6 — I/O i VFS | Pełny kontrakt operacji plikowych, obsługa mutacji, podwójnie pośrednie bloki i stabilny filesystem. | Zamknięta: x86_64 z pełną mutacją (`O_CREAT`/`O_TRUNC`/`O_APPEND`, `mkdir`, `unlink`, `rmdir`, `rename`), PollikFS v2 z 32 MiB brutto i 64-bajtowym `stat`/`fstat`; w i386 VFS v2 z `/home/Desktop` i `/home/Trash` |
+| 5 — obiekty i deskryptory | Wprowadzić typowane, ref-counted obiekty; procesowe tablice deskryptorów i sprzątanie przy exit. | Zamknięta dla plików/potoków/konsoli x86_64: typowane `Descriptor64` (128 fd), prawa, refcount i close-on-spawn; tokeny sieciowe pozostają osobne, ogólny Object Manager nie jest gotowy; w i386 deskryptory w `vfs.c` |
+| 6 — I/O i VFS | Pełny kontrakt operacji plikowych, obsługa mutacji, podwójnie pośrednie bloki i stabilny filesystem. | Zamknięta: x86_64 z pełną mutacją (`O_CREAT`/`O_TRUNC`/`O_APPEND`, `mkdir`, `unlink`, `rmdir`, `rename`), PollikFS v2 z dziennikiem metadanych, fsck/read-only, 32 MiB brutto i 64-bajtowym `stat`/`fstat`; w i386 VFS v2 z `/home/Desktop` i `/home/Trash` |
 | 7 — sterowniki | Rejestr urządzeń i kontrakty sterowników nad HAL/I/O; ATA PIO, AHCI SATA, RTL8139, VBE/DISPI, TTY. | Zaawansowana: wdrożony sterownik SATA AHCI (`kernel/ahci.c`), RTL8139, VBE framebuffer oraz x86_64 console TTY i mouse |
 | 8 — IPC | Kolejki zdarzeń, uniksowe potoki (`pipe.c`), `dup`/`dup2` i potoki powłoki. | Zamknięta na x86_64: potoki jednokierunkowe z buforowaniem, przekierowania I/O w powłoce; w i386 kolejki IPC i zdarzeń |
 | 9 — usługi userspace i SDK | Kompletne C SDK dla programistów, biblioteka C, powłoka interaktywna i kompilator w gościu. | Zamknięta na x86_64: `sdk/` z `libpollikc.a` (buforowane `FILE*`, `math.h` z SSE2/x87), powłoka `/bin/pollish`, natywny kompilator **TinyCC 0.9.27 jako `/bin/tcc`** (self-host rebuild `libc.a`) |
@@ -459,7 +461,7 @@ W wersji 0.1 wprowadzono zintegrowany mechanizm tożsamości użytkownika oraz n
 
 1. **Format bazy kont (`kernel/auth.c`, `kernel/auth.h`):**
    - Plik `/etc/account.db` przechowuje rekord `AccountRecord` (128 bajtów, sygnatura `ACR1`, wersja 1).
-   - Bezpieczeństwo haseł: 16-bajtowa kryptograficzna sól oraz funkcja KDF (Key Derivation Function) wykonująca 8192 rundy haszowania oparte na algorytmach BearSSL.
+   - Konta: Argon2id i migracja rekordów v1 po poprawnym logowaniu; źródła soli i granice bezpieczeństwa opisuje checkpoint 1–5.
    - Stany uwierzytelniania: `AUTH_SETUP_INTRO`, `AUTH_SETUP_NAME`, `AUTH_SETUP_PASSWORD`, `AUTH_SETUP_CONFIRM`, `AUTH_LOGIN`, `AUTH_FORMAT_WARNING`.
    - Przy pierwszym starcie uruchamiany jest asystent tworzenia konta; kolejne uruchomienia witają użytkownika ekranem blokady/logowania.
 

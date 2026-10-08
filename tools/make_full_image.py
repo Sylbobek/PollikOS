@@ -3,7 +3,7 @@
 Usage: make_full_image.py <source-image> <target-image>
 
 The target is a copy of an existing valid image plus an /etc/diskfull marker;
-all but a few free data blocks are marked used. Nothing is formatted and the
+space is occupied by a real file with valid indirect blocks. Nothing is formatted and the
 source image is never modified.
 """
 import shutil
@@ -29,7 +29,14 @@ def main():
     shutil.copyfile(source, target)
     image = PollikFsImage.load(target)
     image.install_file("/etc/diskfull", b"1\n")
-    image.consume_free_blocks(KEEP_FREE_BLOCKS)
+    # Reserve data through a real inode, so mount-time fsck can distinguish
+    # this legitimate ENOSPC fixture from a damaged/leaking bitmap.
+    blocks=image.free_blocks-KEEP_FREE_BLOCKS-2
+    while blocks>0:
+        overhead=(1 if blocks>8 else 0)+(1 if blocks>264 else 0)+((blocks-264+255)//256 if blocks>264 else 0)
+        if blocks+overhead<=image.free_blocks-KEEP_FREE_BLOCKS-2: break
+        blocks-=1
+    image.install_file("/home/.diskfull-reserve",bytes(blocks*1024))
     image.save(target)
     print(f"Prepared almost-full image {target} "
           f"(free blocks {image.free_blocks}, free inodes {image.free_inodes})")

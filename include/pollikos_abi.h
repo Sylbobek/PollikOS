@@ -9,7 +9,7 @@ typedef unsigned int pollikos_abi_u32;
 
 #define POLLIKOS_ABI_INFO_MIN_SIZE 8u
 #define POLLIKOS_ABI_VERSION_MAJOR 1u
-#define POLLIKOS_ABI_VERSION_MINOR 0u
+#define POLLIKOS_ABI_VERSION_MINOR 1u
 
 #define POLLIKOS_ABI_ARCH_I386 1u
 #define POLLIKOS_ABI_ARCH_X86_64 2u
@@ -25,6 +25,8 @@ typedef unsigned int pollikos_abi_u32;
 #define POLLIKOS_ABI_FEATURE_IPC     (1u << 2)
 #define POLLIKOS_ABI_FEATURE_NETWORK (1u << 3)
 #define POLLIKOS_ABI_FEATURE_WINDOWS (1u << 4)
+#define POLLIKOS_ABI_FEATURE_STREAMS (1u << 5)
+#define POLLIKOS_ABI_FEATURE_RIGHTS  (1u << 6)
 
 #define POLLIKOS_EFAULT 14
 #define POLLIKOS_EINVAL 22

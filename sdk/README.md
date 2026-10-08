@@ -1,5 +1,7 @@
 # PollikOS C SDK
 
+[Checkpoint I/O/userspace](../docs/IO_USERSPACE_CHECKPOINT.md): typed descriptors, capability-limited spawn, userspace HTTP and metadata recovery. Existing static HTTP clients need an SDK rebuild; i386 GUI remains a separate Ring 0 target.
+
 Cross-hosted C development for PollikOS x86_64: crt0, a PollikOS-native mini
 libc (`libpollikc.a`), public headers, one linker script and the `pollikcc`
 driver. Applications are ordinary C with `main`; the result is a static
@@ -72,8 +74,7 @@ format. The i386 graphical desktop's Files app can launch 32-bit ELF `.pol`
 programs as Ring 3 processes. TinyCC currently emits ELF64 `.pol` files, which
 run in the x86_64 shell but need the x86_64 graphical desktop before Files can
 launch them. `/Applications` is the location for installed `.pol` executables.
-The built-in graphical clients still run inside the kernel and have not yet
-been converted into standalone `.pol` programs with a user-mode GUI API.
+The i386 built-in graphical clients still run inside the kernel. x86_64 has standalone `.pol` clients and a process-owned window API; it has not reached full i386 GUI parity.
 
 ## Requirements (Windows host)
 

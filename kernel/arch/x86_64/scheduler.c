@@ -35,7 +35,7 @@ size_t scheduler64_runnable_count(void) { return queue_count; }
 
 void scheduler64_enqueue(Thread64 *t) {
     memory_require(t && t->owner && &t->owner->thread == t && t->managed && !t->stopped &&
-                   !t->queued && t->state == PROCESS_READY &&
+                   !t->queued && t->state == THREAD_READY &&
                    queue_count < process64_capacity(), "runnable queue insertion");
     queue[(queue_head+queue_count)%PROCESS_MAX] = t;
     ++queue_count;
@@ -66,7 +66,7 @@ Thread64 *scheduler64_take_next(void) {
 int scheduler64_context_begin(Process64 *p) {
     if (!p || p->thread.owner != p || cpu.active || scheduling) return 0;
     cpu.active = &p->thread;
-    cpu.previous_rsp0 = kernel64_set_rsp0(p->kernel_stack.top);
+    cpu.previous_rsp0 = kernel64_set_rsp0(p->thread.kernel_stack.top);
     return 1;
 }
 void scheduler64_leave_current(int switch_to_kernel_cr3) {
@@ -78,30 +78,30 @@ void scheduler64_leave_current(int switch_to_kernel_cr3) {
 }
 
 static void wake_ready(Process64 *p) {
-    process64_internal_transition(p, PROCESS_READY);
-    if (!p->stopped) scheduler64_enqueue(&p->thread);
+    process64_internal_transition(p, THREAD_READY);
+    if (!p->thread.stopped) scheduler64_enqueue(&p->thread);
 }
 void scheduler64_park(Thread64 *thread, UserFrame *frame) {
     Process64 *process = thread ? thread->owner : 0;
     memory_require(process && &process->thread == thread, "park owned thread");
-    frame_copy(&process->frame, frame);
-    if (process->kill_pending) {
-        process64_internal_transition(process, PROCESS_KILLED);
+    frame_copy(&process->thread.frame, frame);
+    if (process->thread.kill_pending) {
+        process64_internal_transition(process, THREAD_KILLED);
         process64_internal_wake_waiter(process);
-    } else if (process->stop_pending) {
-        process->stop_pending = 0;
-        process->stopped = 1;
-        process64_internal_transition(process, PROCESS_READY);
+    } else if (process->thread.stop_pending) {
+        process->thread.stop_pending = 0;
+        process->thread.stopped = 1;
+        process64_internal_transition(process, THREAD_READY);
     } else if (!process64_internal_signal_prepare(process, frame)) {
-        process64_internal_transition(process, PROCESS_FAULTED);
+        process64_internal_transition(process, THREAD_FAULTED);
         process->exit_status = 142;
         process->fault_address = frame->rsp;
         process64_internal_wake_waiter(process);
-    } else if (process->kill_pending) {
-        process64_internal_transition(process, PROCESS_KILLED);
+    } else if (process->thread.kill_pending) {
+        process64_internal_transition(process, THREAD_KILLED);
         process64_internal_wake_waiter(process);
     } else {
-        frame_copy(&process->frame, frame);
+        frame_copy(&process->thread.frame, frame);
         wake_ready(process);
     }
     scheduler64_leave_current(0);
@@ -109,19 +109,19 @@ void scheduler64_park(Thread64 *thread, UserFrame *frame) {
 void scheduler64_suspend(Thread64 *thread, UserFrame *frame) {
     Process64 *process = thread ? thread->owner : 0;
     memory_require(process && &process->thread == thread, "suspend owned thread");
-    frame_copy(&process->frame, frame);
-    process64_internal_transition(process, PROCESS_BLOCKED);
+    frame_copy(&process->thread.frame, frame);
+    process64_internal_transition(process, THREAD_BLOCKED);
     scheduler64_leave_current(0);
 }
 
 int scheduler64_submit(Process64 *p) {
     memory_context_check();
-    if (!process64_internal_known(p) || p->managed || p->queued || p->state != PROCESS_READY ||
+    if (!process64_internal_known(p) || p->thread.managed || p->thread.queued || p->thread.state != THREAD_READY ||
         queue_count == process64_capacity()) return 0;
 #ifdef SELFTEST
     if (reject_submit) return 0;
 #endif
-    p->managed = 1;
+    p->thread.managed = 1;
     scheduler64_enqueue(&p->thread);
     return 1;
 }
@@ -131,10 +131,10 @@ int process64_kill(uint64_t pid, int reason) {
     if (!p || process64_internal_dead(p)) return 0;
     p->exit_status = reason;
     if (p->thread.owner == p && &p->thread == cpu.active)
-        p->kill_pending = 1; /* consumed at a safe IRQ/syscall boundary */
+        p->thread.kill_pending = 1; /* consumed at a safe IRQ/syscall boundary */
     else {
         scheduler64_dequeue(&p->thread);
-        process64_internal_transition(p, PROCESS_KILLED);
+        process64_internal_transition(p, THREAD_KILLED);
         process64_internal_wake_waiter(p);
     }
     return 1;
@@ -142,16 +142,16 @@ int process64_kill(uint64_t pid, int reason) {
 int process64_block(uint64_t pid) {
     memory_context_check();
     Process64 *p = process64_internal_find(pid);
-    if (!p || p->stopped || p->state != PROCESS_READY) return 0;
+    if (!p || p->thread.stopped || p->thread.state != THREAD_READY) return 0;
     scheduler64_dequeue(&p->thread);
-    process64_internal_transition(p, PROCESS_BLOCKED);
+    process64_internal_transition(p, THREAD_BLOCKED);
     return 1;
 }
 int process64_wake(uint64_t pid) {
     memory_context_check();
     Process64 *p = process64_internal_find(pid);
-    if (!p || p->state != PROCESS_BLOCKED) return 0;
-    p->wake_tick = 0;
+    if (!p || p->thread.state != THREAD_BLOCKED) return 0;
+    p->thread.wake_tick = 0;
     wake_ready(p);
     return 1;
 }
@@ -159,9 +159,9 @@ void process64_wake_expired(void) {
     memory_context_check();
     for (size_t i = 0; i < process64_capacity(); ++i) {
         Process64 *p = process64_internal_slot(i);
-        if (!p || !p->managed || p->state != PROCESS_BLOCKED || !p->wake_tick ||
-            accounting.ticks < p->wake_tick) continue;
-        p->wake_tick = 0;
+        if (!p || !p->thread.managed || p->thread.state != THREAD_BLOCKED || !p->thread.wake_tick ||
+            accounting.ticks < p->thread.wake_tick) continue;
+        p->thread.wake_tick = 0;
         wake_ready(p);
     }
 }
@@ -169,8 +169,8 @@ uint64_t scheduler64_ticks(void) { memory_context_check(); return accounting.tic
 int process64_tick_limit(uint64_t pid, uint64_t ticks) {
     memory_context_check();
     Process64 *p = process64_internal_find(pid);
-    if (!p || process64_internal_dead(p) || (ticks && ticks <= p->ticks)) return 0;
-    p->tick_limit = ticks;
+    if (!p || process64_internal_dead(p) || (ticks && ticks <= p->thread.ticks)) return 0;
+    p->thread.tick_limit = ticks;
     return 1;
 }
 Scheduler64Stats scheduler64_stats(void) { memory_context_check(); return accounting; }
@@ -179,15 +179,15 @@ size_t scheduler64_count(void) {
     size_t count = 0;
     for (size_t i = 0; i < process64_capacity(); ++i) {
         Process64 *p = process64_internal_slot(i);
-        if (p && p->managed) ++count;
+        if (p && p->thread.managed) ++count;
     }
     return count;
 }
 void scheduler64_timer(UserFrame *frame) {
     timer64_ack(); /* exactly once, before abandoning the interrupt stack */
+    ++accounting.ticks;
     tty64_poll(); /* keep the kernel-owned login prompt live before scheduling */
     if (!scheduling) return;
-    ++accounting.ticks;
     fs64_tick_update((u32)accounting.ticks);
     network64_poll();
     process64_internal_tty_wake_readers();
@@ -199,9 +199,9 @@ void scheduler64_timer(UserFrame *frame) {
     }
     Thread64 *thread = cpu.active;
     Process64 *p = thread ? thread->owner : 0;
-    memory_require(p && &p->thread == thread && thread->managed && thread->state == PROCESS_RUNNING &&
+    memory_require(p && &p->thread == thread && thread->managed && thread->state == THREAD_RUNNING &&
         kernel64_get_rsp0() == thread->kernel_stack.top &&
-        (uintptr_t)frame >= p->kernel_stack.base+4096 &&
+        (uintptr_t)frame >= p->thread.kernel_stack.base+4096 &&
         (uintptr_t)(frame+1) <= thread->kernel_stack.top, "timer uses current thread RSP0");
     fpu64_state_save(thread->fpu_state);
     ++thread->ticks; ++accounting.user_ticks;
@@ -213,15 +213,15 @@ void scheduler64_timer(UserFrame *frame) {
 static void reap(Scheduler64Completion completion) {
     for (size_t i = 0; i < process64_capacity(); ++i) {
         Process64 *p = process64_internal_slot(i);
-        if (!p || !p->managed || !process64_internal_dead(p)) continue;
-        memory_require(!cpu.active && !p->queued, "deferred reaper ownership");
+        if (!p || !p->thread.managed || !process64_internal_dead(p)) continue;
+        memory_require(!cpu.active && !p->thread.queued, "deferred reaper ownership");
         uintptr_t rsp;
         __asm__ volatile("mov %%rsp,%0" : "=r"(rsp));
-        memory_require(rsp < p->kernel_stack.base || rsp >= p->kernel_stack.top,
+        memory_require(rsp < p->thread.kernel_stack.base || rsp >= p->thread.kernel_stack.top,
                        "reaper outside victim stack");
         memory_require(vmm64_switch(vmm64_kernel()) == VM_OK, "reaper kernel CR3");
         if (completion) completion(p);
-        p->managed = 0;
+        p->thread.managed = 0;
         if (p->wait_collected || !p->parent_pid || !process64_internal_parent_live(p->parent_pid)) {
             memory_require(process64_destroy(p), "scheduler process reclamation");
         } else {
@@ -243,6 +243,7 @@ int scheduler64_run(uint64_t maximum_ticks, Scheduler64Boundary boundary, Schedu
         if (boundary) boundary();
         reap(completion);
         if (accounting.ticks-start >= maximum_ticks || !scheduler64_count()) break;
+        if(security_session_state()==SESSION_LOCKED || security_session_state()==SESSION_LOGOUT || security_session_state()==SESSION_PASSWORD || security_session_state()==SESSION_ELEVATE) break;
         if (!queue_count) {
             hal_cpu_idle_once_disabled(); /* atomic enable+halt avoids lost wakeups */
             continue;
@@ -250,24 +251,25 @@ int scheduler64_run(uint64_t maximum_ticks, Scheduler64Boundary boundary, Schedu
         Thread64 *thread = scheduler64_take_next();
         if (!thread || !thread->owner) continue;
         Process64 *p = thread->owner;
-        if (!process64_internal_signal_prepare(p, &p->frame)) {
-            process64_internal_transition(p, PROCESS_FAULTED);
-            p->exit_status = 142; p->fault_address = p->frame.rsp;
+        if(!security_credentials_live(&p->credentials)) { (void)process64_kill(p->pid,0); continue; }
+        if (!process64_internal_signal_prepare(p, &p->thread.frame)) {
+            process64_internal_transition(p, THREAD_FAULTED);
+            p->exit_status = 142; p->fault_address = p->thread.frame.rsp;
             continue;
         }
-        if (p->state != PROCESS_READY) continue;
-        if (!process64_internal_return_valid(p, &p->frame)) {
-            process64_internal_transition(p, PROCESS_FAULTED);
-            p->exit_status = 141; p->frame.vector = 13;
+        if (p->thread.state != THREAD_READY) continue;
+        if (!process64_internal_return_valid(p, &p->thread.frame)) {
+            process64_internal_transition(p, THREAD_FAULTED);
+            p->exit_status = 141; p->thread.frame.vector = 13;
             continue;
         }
-        process64_internal_transition(p, PROCESS_RUNNING);
+        process64_internal_transition(p, THREAD_RUNNING);
         cpu.active = thread;
         kernel64_set_rsp0(thread->kernel_stack.top);
         memory_require(vmm64_switch(&p->space) == VM_OK, "scheduler CR3 switch");
         if (last_pid && last_pid != p->pid) ++accounting.switches;
         last_pid = p->pid;
-        ++accounting.dispatches; ++p->dispatches;
+        ++accounting.dispatches; ++p->thread.dispatches;
         fpu64_state_restore(thread->fpu_state);
         process64_enter(&thread->frame, &cpu.resume_stack);
         memory_require(!cpu.active, "scheduler resumed on dispatcher stack");

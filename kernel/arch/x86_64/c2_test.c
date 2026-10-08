@@ -25,11 +25,11 @@ static void complete(const Process64 *p) {
     unsigned mode = (unsigned)get(p, 0);
     if (p->state != PROCESS_EXITED || p->exit_status != 42) {
         memory_log("[C2] user check mode="); memory_hex(mode);
-        memory_log(" line="); memory_hex(p->frame.r15);
+        memory_log(" line="); memory_hex(p->thread.frame.r15);
         memory_log(" result="); memory_hex(get(p, 24));
         memory_log(" state="); memory_hex(p->state);
-        memory_log(" vector="); memory_hex(p->frame.vector);
-        memory_log(" error="); memory_hex(p->frame.error);
+        memory_log(" vector="); memory_hex(p->thread.frame.vector);
+        memory_log(" error="); memory_hex(p->thread.frame.error);
         memory_log(" break="); memory_hex(p->heap_break); memory_log("\n");
     }
     check(p->state == PROCESS_EXITED && p->exit_status == 42, "memtest userspace assertions");
@@ -46,7 +46,7 @@ static void balance(page_count_t baseline) {
 static void pass(const char *text) { memory_log("[C2] PASS: "); memory_log(text); memory_log("\n"); }
 
 static void fault_complete(const Process64 *p) {
-    check(p->state == PROCESS_FAULTED && p->frame.vector == 14 && p->frame.error == 0x15 &&
+    check(p->state == PROCESS_FAULTED && p->thread.frame.vector == 14 && p->thread.frame.error == 0x15 &&
           p->fault_address == USER_HEAP_BASE && p->exit_status == 128+14,
           "heap instruction fetch fault diagnostics");
     exec_faulted = 1;
@@ -122,7 +122,7 @@ static void isolation_boundary(void) {
     }
     if (pa == 2 && pb == 2) { put(a, 16, 1); put(b, 16, 1); }
     if (get(a, 8) == 3 && get(b, 8) == 3) { put(a, 16, 2); put(b, 16, 2); }
-    if (a->ticks >= 2 && b->ticks >= 2) preempted = 1;
+    if (a->thread.ticks >= 2 && b->thread.ticks >= 2) preempted = 1;
 }
 void heap64_selftest(void) {
     page_count_t baseline = pmm64_stats().free;

@@ -3,6 +3,8 @@
 
 #include "system.h"
 #include "vmm.h"
+#include "vfs.h"
+#include "security.h"
 
 #define MAX_PROCESSES 16
 
@@ -61,6 +63,7 @@ typedef struct {
     ProcessFrame *frame;
     int pid;
     int ppid;
+    Credentials credentials;
     char name[24];
     ProcessState state;
     int alive;
@@ -79,7 +82,7 @@ typedef struct {
     uintptr_t heap_start;
     uintptr_t heap_end;
     u32 sleep_until_tick;
-    void *fd_table[16]; /* vfs_file_t * array */
+    void *fd_table[VFS_MAX_FDS]; /* vfs_file_t * array */
     SystemEvent event_queue[MAX_PROCESS_EVENTS];
     int event_head;
     int event_tail;
@@ -92,6 +95,7 @@ typedef struct {
 } ProcessControlBlock;
 
 void process_init(void);
+void process_end_session(uint64_t session);
 void process_list(char *out);
 int process_get_count(void);
 int process_action(int pid, int action);

@@ -5,7 +5,7 @@
 #define DNS_CACHE_SIZE 16
 
 typedef struct {
-    char name[64];
+    char name[254];
     u8 ip[4];
     u32 expire_tick;
     int valid;
@@ -16,9 +16,9 @@ static u16 dns_query_id = 0x444e; /* 'DN' */
 static u16 dns_local_port = 53053;
 static volatile int dns_pending = 0;
 static u8 dns_resolved_ip[4];
-static char dns_pending_name[64];
+static char dns_pending_name[254];
 static NetworkInterface *dns_pending_iface;
-static u8 dns_query_packet[256];
+static u8 dns_query_packet[512];
 static int dns_query_length;
 static u32 dns_deadline_tick, dns_retry_tick;
 

@@ -1,7 +1,6 @@
 #ifndef POLLIK_FILE64_H
 #define POLLIK_FILE64_H
 #include "user.h"
-typedef enum { FD64_CLOSED, FD64_VFS, FD64_STDIN, FD64_STDOUT, FD64_STDERR, FD64_PIPE } Fd64Kind;
 Fd64Kind file64_kind(const Process64 *p, uint64_t fd);
 unsigned file64_stream_count(const Process64 *p);
 void file64_init(Process64 *process);

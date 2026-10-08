@@ -19,7 +19,9 @@ def main():
         click(g.width//2,15);g.wait(lambda:value('cc_shown')==1,'Control Center opens')
         g.wait(lambda:value('cc_animating')==0,'slide completes',15)
         assert value('cc_position')==0
-        x=g.width//2-200;y=38
+        x=(g.width-632)//2+232;y=38
+        limit=g.width-400-248-16-20
+        if limit>=248:x=min(x,limit)
         shot=BUILD/f'control-center-{a.resolution}.ppm';g.screendump(shot);image=Image.open(shot);image.save(shot.with_suffix('.png'))
         reference=image.getpixel((g.width-50,g.height//2))
         click(x+30,y+390);g.wait(lambda:g.memory(*g.symbol('s_volume'))[0]==0,'volume minimum')

@@ -6,6 +6,8 @@
 #include "../pmm.h"
 #include "../vfs.h"
 #include "../hal.h"
+#include "../auth.h"
+#include "../account.h"
 #include "../process.h"
 #include "../pollikfs.h"
 #include "../net/net_manager.h"
@@ -30,6 +32,14 @@ static char cwd[VFS_MAX_PATH] = "/home/Desktop";
 static int cmdlen, cmdcursor, history_count, history_pos, scroll_lines;
 static int selection_anchor = -1, selection_focus = -1, selection_drag;
 static int terminal_scroll_by(int delta);
+
+void terminal_session_clear(void) {
+    account_wipe(command,sizeof(command)); account_wipe(output,sizeof(output));
+    account_wipe(transcript,sizeof(transcript)); account_wipe(render_buffer,sizeof(render_buffer));
+    account_wipe(history,sizeof(history));
+    copy(cwd,"/home/Desktop"); cmdlen=cmdcursor=history_count=history_pos=scroll_lines=0;
+    selection_anchor=selection_focus=-1; selection_drag=0;
+}
 
 static void terminal_clear_selection(void) {
     selection_anchor = selection_focus = -1;
@@ -363,7 +373,7 @@ static int gui_builtin_exists(const char *name) {
         "rmdir", "mv", "rename", "cp", "echo", "which", "history", "clear", "cls",
         "new", "open", "save", "ps", "tasks", "pause", "resume", "kill", "spawn",
         "faulttest", "net", "ping", "publicip", "time", "date", "uptime", "lspci",
-        "beep", "sound", "audio", "shutdown", "reboot", "theme", "anim", "animations", "perf", "tcc", "cc", "calc", "calculator"
+        "beep", "sound", "audio", "shutdown", "reboot", "lock", "logout", "passwd", "theme", "anim", "animations", "perf", "tcc", "cc", "calc", "calculator"
     };
     for (u32 i = 0; i < sizeof(commands) / sizeof(commands[0]); i++)
         if (eq(name, commands[i])) return 1;
@@ -392,7 +402,10 @@ static void execute(void) {
     else if (eq(command, "rename")) copy(command, "mv");
     else if (eq(command, "cls")) copy(command, "clear");
     else if (eq(command, "ver")) copy(command, "version");
-    if (eq(command, "help")) {
+    if(eq(command,"lock")) { auth_lock(); copy(output,"Session locked."); }
+    else if(eq(command,"logout")) { auth_logout(); copy(output,"Session ended."); }
+    else if(eq(command,"passwd")) { auth_change_password(); copy(output,"Enter the current password on the login screen."); }
+    else if (eq(command, "help")) {
         if (eq(arg, "tcc") || eq(arg, "cc")) terminal_tcc_help(output);
         else copy(output,
             "FILES:    pwd cd ls/dir cat/type mkdir touch rm/del rmdir mv/rename cp stat\n"

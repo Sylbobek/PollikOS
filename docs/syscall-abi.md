@@ -11,7 +11,7 @@ ile rozumie kernel; zwraca liczbę zapisanych bajtów. Minimalny bufor ma 8 bajt
 niepoprawny wskaźnik `-EFAULT`. Pole `size` zawiera rozmiar struktury znany
 kernelowi, również gdy bufor klienta jest krótszy.
 
-Wersja 1.0 nie łączy numeracji ani konwencji wywołań targetów. `architecture`,
+Wersja 1.1 nie łączy numeracji ani konwencji wywołań targetów. `architecture`,
 `transport` i `operation_namespace` identyfikują właściwy kontrakt. Dotychczasowe
 numery pozostają bez zmian; zapytanie dostało nowy numer na każdym targetcie.
 Maska `features` opisuje dostępne grupy API. Wspólny format odpowiedzi pozwala
@@ -52,4 +52,6 @@ SDK wykryć target i wersję bez udawania zgodności między i386 i x86_64.
 
 ## x86_64
 
-Target `kernel/arch/x86_64` ma osobną numerację syscalli i rejestry opisane w `USER_EXECUTION.md` oraz własne ABI plików. `USER_ABI_INFO` (`0x504f0000`) zwraca ten sam format opisu ABI; wskaźnik struktury trafia w `RDI`. ABI 1.0 x86_64 pozostaje niezależne od i386: wspólny opis wersji nie zmienia ich numeracji ani nie zapewnia zgodności binarnej.
+Nowe operacje: `USER_SPAWN_RIGHTS` oraz `USER_STREAM_OPEN/READ/WRITE/STATUS/CLOSE`. Uprawnienia można tylko ograniczać; token strumienia jest sprawdzany względem PID. HTTP działa w SDK, a dawne `USER_HTTP_*` zwracają ENOTSUP i wymagają przebudowania starego klienta. ABI info reklamuje nowe STREAMS/RIGHTS. [Kontrakt i granice](IO_USERSPACE_CHECKPOINT.md).
+
+Target `kernel/arch/x86_64` ma osobną numerację syscalli i rejestry opisane w `USER_EXECUTION.md` oraz własne ABI plików. `USER_ABI_INFO` (`0x504f0000`) zwraca ten sam format opisu ABI; wskaźnik struktury trafia w `RDI`. ABI 1.1 x86_64 pozostaje niezależne od i386: wspólny opis wersji nie zapewnia zgodności binarnej.

@@ -65,7 +65,7 @@ static void run(Process64 *process, Process64Result *result) {
 void process64_selftest(void) {
     page_count_t baseline = pmm64_stats().free;
     Process64 *a = process64_create(10, 37), *b = process64_create(10, 73);
-    check(a && b && a->pid != b->pid && a->kernel_stack.top != b->kernel_stack.top, "independent processes");
+    check(a && b && a->pid != b->pid && a->thread.kernel_stack.top != b->thread.kernel_stack.top, "independent processes");
     Mapping ma, mb;
     check(vmm64_lookup(&a->space, USER_DATA, &ma) == VM_OK &&
           vmm64_lookup(&b->space, USER_DATA, &mb) == VM_OK && ma.physical != mb.physical,
@@ -100,11 +100,11 @@ void process64_selftest(void) {
     check(result.state == PROCESS_EXITED && result.exit_status == 91, "real ABI errors and register preservation");
     /* Invalid initial return state is rejected before executing IRETQ. */
     a = process64_create(10, 0); check(a != 0, "invalid entry fixture");
-    a->frame.rip = MM_USER_END;
+    a->thread.frame.rip = MM_USER_END;
     run(a, &result);
     check(result.state == PROCESS_FAULTED, "noncanonical RIP rejected");
     a = process64_create(10, 0); check(a != 0, "invalid stack fixture");
-    a->frame.rsp = MM_USER_END;
+    a->thread.frame.rsp = MM_USER_END;
     run(a, &result);
     check(result.state == PROCESS_FAULTED, "noncanonical RSP rejected");
     run(process64_create(11, 0), &result);

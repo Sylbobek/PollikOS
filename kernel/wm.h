@@ -8,7 +8,7 @@
 #ifdef POLLIK_INSTALL_MEDIA
 #define NUM_APPS 7
 #else
-#define NUM_APPS 8
+#define NUM_APPS 11
 #endif
 
 typedef enum {

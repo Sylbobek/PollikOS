@@ -1,5 +1,12 @@
 # Audyt PollikOS
 
+> **Raport historyczny.** Ustalenia dotyczą wskazanej poniżej rewizji, nie
+> bieżącego drzewa. Ochrona zakresu zapisu, Argon2id, polityka VFS, sesje,
+> dziennik metadanych i lokalne CI zostały później wdrożone. Aktualne kontrakty:
+> [checkpoint 1–5](docs/SECURITY_SESSION_CHECKPOINT.md),
+> [checkpoint 6–10](docs/IO_USERSPACE_CHECKPOINT.md) oraz
+> [ochrona hostowych obrazów i aplikacji](docs/APPLICATION_SAFETY_CHECKPOINT.md).
+
 **Data:** 2026-10-05  
 **Zakres:** rewizja `66d5a7b9027be78fae4d5b3c68d3477331177d48`. W drzewie były również niezacommitowane zmiany kalkulatora i testów; nie są częścią ocenianej bazy.  
 **Metoda:** statyczny przegląd ścieżek systemu plików, syscalli, loaderów ELF, kopiowania danych użytkownika, logowania, kompilacji i przeglądarki. To nie jest pełny formalny przegląd każdego modułu ani certyfikacja bezpieczeństwa.

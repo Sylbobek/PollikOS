@@ -3,7 +3,7 @@
 #include "../../vfs.h"
 #include "../../pollikfs.h"
 static vfs_file_t *kernel_fds[VFS_MAX_FDS];
-static vfs_file_t **fd_context;
+static Descriptor64 *fd_context;
 static uint32_t sectors;
 uint64_t fs64_disk_bytes(void){return (uint64_t)sectors*512;}
 static int64_t fail_after = -1;
@@ -34,15 +34,14 @@ void klog(const char *category, const char *level, const char *message) {
     (void)category; (void)level;
     memory_log("[VFS64] "); memory_log(message); memory_log("\n");
 }
-vfs_file_t **process_get_current_fd_table(void) {
-    memory_context_check();
-    return fd_context ? fd_context : kernel_fds;
+vfs_file_t **process_get_current_file_slot(unsigned fd) {
+    memory_context_check(); if(fd>=VFS_MAX_FDS) return 0;
+    if(!fd_context) return &kernel_fds[fd];
+    Descriptor64 *slot=&fd_context[fd];
+    return slot->kind==FD64_CLOSED || slot->kind==FD64_VFS?&slot->file:0;
 }
-vfs_file_t **fs64_fd_context(vfs_file_t **table) {
-    memory_context_check();
-    vfs_file_t **previous = fd_context;
-    fd_context = table;
-    return previous;
+Descriptor64 *fs64_fd_context(Descriptor64 *table) {
+    memory_context_check();Descriptor64 *previous=fd_context;fd_context=table;return previous;
 }
 void fs64_io_fail_after(int64_t count) { memory_context_check(); fail_after = count; }
 int fs64_sector_allowed(u32 lba) {

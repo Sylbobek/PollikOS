@@ -4,6 +4,8 @@
 #include "media.h"
 #include "vfs.h"
 #include "mem.h"
+#include "ui.h"
+#include "gui/apps.h"
 static u8 *icon_pixels[UI_ICON_COUNT];
 static int initialized;
 static const char *names[]={"welcome","files","terminal","notes","settings","browser",
@@ -39,4 +41,14 @@ void ui_icon_draw(int id,int x,int y,int size) {
     int pad=size/16,side=size-pad*2;
     roundrect(x+pad,y+pad,side,side,side/4,0x777089);
     centered(x,y+(size-13)/2,size,"?",0xffffff,1);
+}
+void ui_app_icon_draw(int id,int x,int y,int size) {
+    if(id<APP_PHOTOS){ui_icon_draw(id,x,y,size);return;}
+    ThemeColors *t=ui_theme();
+    if(id==APP_PHOTOS)ui_draw_icon(ICON_IMAGE,x,y,size,t->accent,t->text);
+    else if(id==APP_DOCUMENTS)ui_draw_icon(ICON_TEXT,x,y,size,t->accent,t->text);
+    else if(id==APP_VIDEO){
+        roundrect(x+size/16,y+size/16,size-size/8,size-size/8,size/4,t->accent);
+        ui_draw_icon(ICON_CHEVRON_RIGHT,x+size/4,y+size/4,size/2,0xffffff,0xffffff);
+    }
 }

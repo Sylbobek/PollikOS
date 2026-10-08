@@ -114,13 +114,35 @@ typedef struct EventListener {
 } EventListener;
 
 /* Central, conservative limits for untrusted web data. */
+#ifdef POLLIK_BROWSER_STANDALONE
+#define DOM_MAX_NODES        16384
+#define DOM_MAX_DEPTH        128
+#define DOM_MAX_ATTRS        64
+#define DOM_ATTR_NAME_MAX    256
+#define DOM_ATTR_VAL_MAX     65536
+#define DOM_TAG_CAP          64
+#define DOM_ID_CAP           256
+#define DOM_CLASS_CAP        1024
+#define DOM_URL_CAP          1024
+#define DOM_STYLE_CAP        4096
+#else
 #define DOM_MAX_NODES        4096
 #define DOM_MAX_DEPTH        64
 #define DOM_MAX_ATTRS        10
 #define DOM_ATTR_NAME_MAX    16
 #define DOM_ATTR_VAL_MAX     64
+#define DOM_TAG_CAP          16
+#define DOM_ID_CAP           32
+#define DOM_CLASS_CAP        64
+#define DOM_URL_CAP          128
+#define DOM_STYLE_CAP        128
+#endif
 #define DOM_MAX_CLASSES      64
+#ifdef POLLIK_BROWSER_STANDALONE
+#define WEB_MAX_CSS_SIZE     (512 * 1024)
+#else
 #define WEB_MAX_CSS_SIZE     (48 * 1024)
+#endif
 #define WEB_MAX_JS_SIZE      (128 * 1024)
 #define WEB_MAX_SCRIPT_COUNT 16
 #define WEB_MAX_STYLESHEET_COUNT 8
@@ -130,27 +152,32 @@ typedef struct EventListener {
 
 typedef struct DomNode {
     NodeType type;
-    char tag[16];
-    char id[32];
-    char class_name[64];
+    char tag[DOM_TAG_CAP];
+    char id[DOM_ID_CAP];
+    char class_name[DOM_CLASS_CAP];
     char *text;
     u8 *image;
     int image_w,image_h;
     struct MediaGif *gif;
     u32 *canvas;            /* <canvas> RGBA8 backing store (PollikGL target) */
     int canvas_w, canvas_h, canvas_dirty;
-    char href[128];
-    char src[128];
+    char href[DOM_URL_CAP];
+    char src[DOM_URL_CAP];
     char rel[16];
-    char style_attr[128];
+    char style_attr[DOM_STYLE_CAP];
     char value[64];
     char input_type[16];
     char name[32];
-    char action[128];
+    char action[DOM_URL_CAP];
     char method[8];
     /* Generic attributes so getAttribute/setAttribute work for any name. */
+#ifdef POLLIK_BROWSER_STANDALONE
+    char *attr_names[DOM_MAX_ATTRS],*attr_vals[DOM_MAX_ATTRS];
+    void *upstream_style_data;
+#else
     char attr_names[DOM_MAX_ATTRS][DOM_ATTR_NAME_MAX];
     char attr_vals[DOM_MAX_ATTRS][DOM_ATTR_VAL_MAX];
+#endif
     int attr_count;
     struct DomNode *parent;
     struct DomNode *first_child;
@@ -220,6 +247,7 @@ void browser_mark_dirty(void);
 
 /* HTML Parser */
 DomNode *html_parse(const char *html, int len);
+DomNode *dom_create_node(NodeType type);
 DomNode *dom_create_element(const char *tag);
 DomNode *dom_create_text(const char *text, int len);
 void dom_free_tree(DomNode *node);

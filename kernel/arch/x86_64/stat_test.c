@@ -29,10 +29,10 @@ static void complete(const Process64 *p) {
     unsigned mode = (unsigned)get(p, 0);
     if (p->state == PROCESS_EXITED && p->exit_status != 42) {
         memory_log("[STAT64] user check mode="); memory_hex(mode);
-        memory_log(" line="); memory_hex(p->frame.r15);
+        memory_log(" line="); memory_hex(p->thread.frame.r15);
         memory_log(" result="); memory_hex(get(p, 24)); memory_log("\n");
     }
-    if (mode == 6) check(p->state == PROCESS_FAULTED && p->frame.vector == 14 && p->frame.error == 7,
+    if (mode == 6) check(p->state == PROCESS_FAULTED && p->thread.frame.vector == 14 && p->thread.frame.error == 7,
                          "stat fault cleanup");
     else if (mode == 7) check(p->state == PROCESS_KILLED && p->exit_status == 124, "stat kill cleanup");
     else check(p->state == PROCESS_EXITED && p->exit_status == 42, "userspace metadata assertions");
@@ -43,15 +43,15 @@ static void complete(const Process64 *p) {
 }
 static void isolation_boundary(void) {
     Process64 *a = peers[0], *b = peers[1];
-    if (a && b && !get(a, 16) && get(a, 8) == 1 && get(b, 8) == 1 && a->ticks >= 3 && b->ticks >= 3) {
-        check(a->files[3] && b->files[3] && a->files[3] != b->files[3] &&
-              a->files[3]->inode != b->files[3]->inode &&
-              a->files[3]->offset == 5 && b->files[3]->offset == 5,
+    if (a && b && !get(a, 16) && get(a, 8) == 1 && get(b, 8) == 1 && a->thread.ticks >= 3 && b->thread.ticks >= 3) {
+        check(a->fds[3].file && b->fds[3].file && a->fds[3].file != b->fds[3].file &&
+              a->fds[3].file->inode != b->fds[3].file->inode &&
+              a->fds[3].file->offset == 5 && b->fds[3].file->offset == 5,
               "metadata peers own distinct fd 3 objects across preemption");
         put(a, 16, 1);
     }
     if (!isolated && a && b && get(a, 8) == 2 && get(b, 8) == 1) {
-        check(!file64_count(a) && file64_count(b) == 1 && b->files[3]->offset == 5,
+        check(!file64_count(a) && file64_count(b) == 1 && b->fds[3].file->offset == 5,
               "closed fd rejects peer ownership while stat remains independent");
         isolated = 1;
         put(a, 16, 2); put(b, 16, 2);
@@ -64,8 +64,8 @@ static void io_boundary(void) {
 }
 static void kill_boundary(void) {
     Process64 *p = peers[0];
-    if (p && get(p, 8) == 1 && !p->tick_limit)
-        check(process64_tick_limit(p->pid, p->ticks+3), "metadata kill after open and fstat");
+    if (p && get(p, 8) == 1 && !p->thread.tick_limit)
+        check(process64_tick_limit(p->pid, p->thread.ticks+3), "metadata kill after open and fstat");
 }
 static void run(Scheduler64Boundary boundary) {
     check(scheduler64_run(100, boundary, complete) && !scheduler64_count(), "stat scheduler completes");

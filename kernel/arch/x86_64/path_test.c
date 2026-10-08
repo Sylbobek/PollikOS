@@ -44,9 +44,9 @@ static void complete(const Process64 *p) {
     check(p->name[0] && p->name[55] == 0, "owned bounded process basename");
     if (p->state == PROCESS_EXITED) { check(p->exit_status == 42, "path exit/argv/envp status"); ++exited; }
     else if (p->state == PROCESS_FAULTED) {
-        check(p->frame.vector == 14 && p->frame.error == 7, "path text fault containment"); ++faulted;
+        check(p->thread.frame.vector == 14 && p->thread.frame.error == 7, "path text fault containment"); ++faulted;
     } else {
-        check(p->state == PROCESS_KILLED && p->exit_status == 124 && p->ticks == 2,
+        check(p->state == PROCESS_KILLED && p->exit_status == 124 && p->thread.ticks == 2,
               "path spin timer kill"); ++killed;
     }
     ++completed;

@@ -1,6 +1,18 @@
 #include "vfs.h"
 #include "pollikfs.h"
 #include "klog.h"
+#include "security.h"
+
+static int path_access(const char *path,unsigned access) {
+    if (security_path_allowed(security_current(),path,access)) return 1;
+    pollikfs_access_denied(); return 0;
+}
+static int file_access(const vfs_file_t *file,unsigned access) {
+    const Credentials *c=security_current();
+    unsigned rights=(access&ACCESS_READ?CAP_FILE_READ:0)|(access&ACCESS_WRITE?CAP_FILE_WRITE:0);
+    if(security_has(c,rights) && (!c->uid || (file->user_access&access)==access)) return 1;
+    pollikfs_access_denied(); return 0;
+}
 
 #ifdef POLLIK_X64
 #include "arch/x86_64/user_abi.h"
@@ -54,7 +66,7 @@ static int vfs_allocate_file_pool(void) {
 
 /* External process hooks */
 extern int process_get_current_pid(void);
-extern vfs_file_t **process_get_current_fd_table(void);
+extern vfs_file_t **process_get_current_file_slot(unsigned fd);
 
 static vfs_file_t *alloc_file_desc(void) {
 #if defined(POLLIK_X64) && defined(SELFTEST)
@@ -171,14 +183,16 @@ int vfs_open(const char *path, int flags) {
     if (!g_vfs_initialized || !path)
         return -1;
 
-    vfs_file_t **table = process_get_current_fd_table();
-    if (!table)
-        return -1;
+    unsigned access = (flags & O_WRONLY) ? ACCESS_WRITE : ACCESS_READ;
+    if(flags & O_RDONLY) access |= ACCESS_READ;
+    if(flags & (O_CREAT|O_TRUNC|O_APPEND)) access |= ACCESS_WRITE;
+    if(!path_access(path,access)) return -1;
+
 
     /* Find lowest free file descriptor */
     int fd = -1;
     for (int i = 3; i < VFS_MAX_FDS; i++) {
-        if (!table[i]) {
+        if (process_get_current_file_slot(i) && !*process_get_current_file_slot(i)) {
             fd = i;
             break;
         }
@@ -195,7 +209,8 @@ int vfs_open(const char *path, int flags) {
         return -1;
     }
 
-    table[fd] = file;
+    *process_get_current_file_slot(fd) = file;
+    file->user_access=security_path_user_access(path);
     return fd;
 }
 
@@ -203,12 +218,12 @@ int vfs_close(int fd) {
     if (fd < 0 || fd >= VFS_MAX_FDS)
         return -1;
 
-    vfs_file_t **table = process_get_current_fd_table();
-    if (!table || !table[fd])
+    vfs_file_t **slot = process_get_current_file_slot((unsigned)fd);
+    if (!slot || !*slot)
         return -1;
 
-    vfs_file_t *f = table[fd];
-    table[fd] = 0;
+    vfs_file_t *f = *slot;
+    *slot = 0;
 
     if (f->type == VFS_FILE || f->type == VFS_DIR) {
         pollikfs_close(f);
@@ -221,11 +236,11 @@ int vfs_read(int fd, void *buf, u32 count) {
     if (fd < 0 || fd >= VFS_MAX_FDS || !buf || count == 0)
         return -1;
 
-    vfs_file_t **table = process_get_current_fd_table();
-    if (!table || !table[fd])
+    vfs_file_t **slot = process_get_current_file_slot((unsigned)fd);
+    if (!slot || !*slot)
         return -1;
 
-    vfs_file_t *f = table[fd];
+    vfs_file_t *f = *slot;
     if (f->type == VFS_DEVICE) {
         /* Stdin device read */
         if (fd == 0) {
@@ -235,6 +250,7 @@ int vfs_read(int fd, void *buf, u32 count) {
         return -1;
     }
 
+    if(!(f->flags&O_RDONLY) || !file_access(f,ACCESS_READ)) return -1;
     return pollikfs_read(f, buf, count);
 }
 
@@ -242,11 +258,11 @@ int vfs_write(int fd, const void *buf, u32 count) {
     if (fd < 0 || fd >= VFS_MAX_FDS || !buf || count == 0)
         return -1;
 
-    vfs_file_t **table = process_get_current_fd_table();
-    if (!table || !table[fd])
+    vfs_file_t **slot = process_get_current_file_slot((unsigned)fd);
+    if (!slot || !*slot)
         return -1;
 
-    vfs_file_t *f = table[fd];
+    vfs_file_t *f = *slot;
     if (f->type == VFS_DEVICE) {
         /* The x86_64 process layer owns stdout/stderr before VFS is reached. */
 #ifdef POLLIK_X64
@@ -271,36 +287,55 @@ int vfs_write(int fd, const void *buf, u32 count) {
 #endif
     }
 
+    if(!(f->flags&O_WRONLY) || !file_access(f,ACCESS_WRITE)) return -1;
     return pollikfs_write(f, buf, count);
+}
+int vfs_write_preflight(int fd,u32 count) {
+    vfs_file_t **slot=process_get_current_file_slot((unsigned)fd);
+    if(!slot || fd<0 || fd>=VFS_MAX_FDS || !*slot) return -1;
+    vfs_file_t *f=*slot;
+    if(f->type==VFS_DEVICE) return 0;
+    if(!(f->flags&O_WRONLY) || !file_access(f,ACCESS_WRITE)) return -1;
+    vfs_stat_t st;
+    if(pollikfs_fstat(f,&st)<0) return -1;
+    u32 at=(f->flags&O_APPEND)?st.size:f->offset;
+    if(at>POLLIK2_MAX_FILE || count>POLLIK2_MAX_FILE-at) { pollikfs_range_denied(); return -1; }
+    return 0;
 }
 int vfs_seek(int fd, int offset, int whence) {
     if (fd < 0 || fd >= VFS_MAX_FDS)
         return -1;
 
-    vfs_file_t **table = process_get_current_fd_table();
-    if (!table || !table[fd])
+    vfs_file_t **slot = process_get_current_file_slot((unsigned)fd);
+    if (!slot || !*slot)
         return -1;
 
-    vfs_file_t *f = table[fd];
+    vfs_file_t *f = *slot;
     if (f->type == VFS_DEVICE)
         return -1;
+
+    if(!file_access(f,(f->flags&O_RDONLY)?ACCESS_READ:ACCESS_WRITE)) return -1;
 
     return pollikfs_seek(f, offset, whence);
 }
 
 int vfs_stat(const char *path, vfs_stat_t *st) {
+    if(!path_access(path,ACCESS_READ)) return -1;
     return pollikfs_stat(path, st);
 }
 
 int vfs_mkdir(const char *path) {
+    if(!path_access(path,ACCESS_WRITE)) return -1;
     return pollikfs_mkdir(path);
 }
 
 int vfs_unlink(const char *path) {
+    if(!path_access(path,ACCESS_WRITE)) return -1;
     return pollikfs_unlink(path);
 }
 
 int vfs_rmdir(const char *path) {
+    if(!path_access(path,ACCESS_WRITE)) return -1;
     return pollikfs_rmdir(path);
 }
 
@@ -308,26 +343,28 @@ int vfs_readdir(int fd, vfs_dirent_t *dirent) {
     if (fd < 0 || fd >= VFS_MAX_FDS || !dirent)
         return -1;
 
-    vfs_file_t **table = process_get_current_fd_table();
-    if (!table || !table[fd])
+    vfs_file_t **slot = process_get_current_file_slot((unsigned)fd);
+    if (!slot || !*slot)
         return -1;
 
-    vfs_file_t *f = table[fd];
+    vfs_file_t *f = *slot;
     if (f->type != VFS_DIR)
         return -1;
+
+    if(!file_access(f,ACCESS_READ)) return -1;
 
     return pollikfs_readdir(f, dirent);
 }
 
 int vfs_rename(const char *oldpath, const char *newpath) {
+    if(!path_access(oldpath,ACCESS_WRITE) || !path_access(newpath,ACCESS_WRITE)) return -1;
     return pollikfs_rename(oldpath, newpath);
 }
 
-#ifdef POLLIK_X64
 int vfs_rename_replace(const char *oldpath, const char *newpath) {
+    if(!path_access(oldpath,ACCESS_WRITE) || !path_access(newpath,ACCESS_WRITE)) return -1;
     return pollikfs_rename_replace(oldpath, newpath);
 }
-#endif
 
 unsigned vfs_debug_handles(void) {
     unsigned count = 0;
@@ -336,7 +373,8 @@ unsigned vfs_debug_handles(void) {
 }
 
 int vfs_fstat(int fd, vfs_stat_t *st) {
-    vfs_file_t **table = process_get_current_fd_table();
-    if (!table || fd < 3 || fd >= VFS_MAX_FDS || !table[fd] || !st) return -1;
-    return pollikfs_fstat(table[fd], st);
+    vfs_file_t **slot = process_get_current_file_slot((unsigned)fd);
+    if (!slot || fd < 0 || fd >= VFS_MAX_FDS || !*slot || !st) return -1;
+    if(!file_access(*slot,ACCESS_READ)) return -1;
+    return pollikfs_fstat(*slot, st);
 }

@@ -21,7 +21,7 @@ The long-term plan is to make x86_64 the main target and retire the i386 desktop
 **Kernel (both targets)**
 - Own bootloader, GDT/IDT, paging, physical memory manager (E820), kernel heap
 - PollikFS v2: a small own filesystem with directories, inodes and a persistent account database
-- Local login with salted, iterated SHA-256 password hashing
+- Shared local login with Argon2id and verified migration of legacy SHA-256 accounts
 
 **i386 desktop**
 - Software-rendered compositor, rounded windows, dock, animations, own vector font (Pollik Sans)
@@ -74,12 +74,21 @@ The x86_64 suites check that physical memory, file handles, process slots and zo
 
 - Only tested in QEMU; physical hardware is unverified
 - Single CPU (no SMP); the kernel is non-preemptible
-- PollikFS: one local user, no permissions, small fixed geometry, **not crash-consistent** (lost sectors can leave counters and bitmap inconsistent)
+- PollikFS: one local user, directory access policy, fixed 32 MiB geometry; metadata redo journal and read-only consistency checks, without whole-file data atomicity
 - GUI is software-rendered without GPU acceleration or VSync; performance is limited, especially under pure emulation (TCG)
 - x86_64 target does not yet have AHCI, a graphical installer or all i386 desktop apps
 - No `fork`/`exec`, threads, dynamic linking, AVX or `long double`
 - BIOS/legacy boot only (no UEFI, NVMe or GPT)
 - Browser: subset of HTML/CSS/JS, no HTTP/2, no multi-process isolation
+
+See [kernel/userspace checkpoint 6–10](docs/IO_USERSPACE_CHECKPOINT.md) for descriptor rights, Ring 3 HTTP, metadata recovery, CI commands and validation boundaries.
+
+The default CI now also builds the normal x86_64 desktop, exercises real Notes
+I/O and Browser launch permissions, and checks Browser framebuffer output.
+`tools/ci.ps1 -Target x86_64 -Extended` adds sessions, concurrent networking
+and console regressions. Weekly CI runs Extended and preserves failure logs.
+Host image tools refuse pending, corrupt or unknown journal prefixes; recovery
+must be performed by the current kernel before host installation or sync.
 
 ## Repository layout
 
@@ -98,5 +107,7 @@ Design notes and ABI contracts live next to the code (`ARCHITECTURE.md`, `kernel
 
 ## Licence
 
-Choose a licence for the PollikOS code and add a `LICENSE` file. Third-party components keep their own licences:
-BearSSL (MIT), Elk (see its repository), stb_image (public domain / MIT), TinyCC (LGPL-2.1).
+PollikOS's own code is licensed under the GNU Affero General Public License,
+version 3 only (`AGPL-3.0-only`); see [LICENSE](LICENSE).
+Third-party components retain their own licences and notices; see the
+[dependency index](third_party/README.md).

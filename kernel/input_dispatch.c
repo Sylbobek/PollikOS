@@ -275,7 +275,7 @@ static void key(u8 code) {
         }
         return; /* Discard, do not replay commands against a different focus. */
     }
-    if(!window_only&&control_center_key(code))return;
+    if(!window_only&&control_center_key_ex(code,shift,control))return;
     if (g_active_dialog.active && ui_dialog_on_key(code, shift, control)) { shell.dirty = 1; return; }
     if (g_active_menu.active && ui_menu_on_key(&g_active_menu, code, shift)) {
         if (g_active_menu.active)
@@ -376,6 +376,8 @@ static void pointer_packet(const u8 *packet) {
     if (my > shell.height - 1) my = shell.height - 1;
     if (auth_is_active()) {
         if (auth_pointer(mx, my, packet[0] & 1)) request_scene_redraw();
+        /* Keep button edges current across logout and the next sign-in. */
+        held=(packet[0]&1)!=0;right_held=(packet[0]&2)!=0;
         compositor_draw_cursor(0);
         return;
     }

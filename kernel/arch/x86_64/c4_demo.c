@@ -9,8 +9,8 @@ static void complete(const Process64 *process) {
     if (process->state != PROCESS_EXITED || process->exit_status != 0) {
         memory_log("[C4] demo state="); memory_hex(process->state);
         memory_log(" status="); memory_hex((uint64_t)process->exit_status);
-        memory_log(" vector="); memory_hex(process->frame.vector);
-        memory_log(" error="); memory_hex(process->frame.error);
+        memory_log(" vector="); memory_hex(process->thread.frame.vector);
+        memory_log(" error="); memory_hex(process->thread.frame.error);
         memory_log("\n");
     }
     check(process->state == PROCESS_EXITED && process->exit_status == 0, "SDK demo exit 0");

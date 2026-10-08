@@ -3,6 +3,7 @@
 #include "../system.h"
 /* Stable IDs; PollikMark occupies slot 6. */
 enum { APP_WELCOME, APP_FILES, APP_TERMINAL, APP_NOTES, APP_SETTINGS, APP_BROWSER, APP_POLLIKMARK, APP_CALCULATOR,
+    APP_PHOTOS, APP_VIDEO, APP_DOCUMENTS,
 #ifdef POLLIK_INSTALL_MEDIA
     APP_COUNT = APP_CALCULATOR /* Installer keeps its seven original slots. */
 #else
@@ -48,6 +49,12 @@ void gui_app_render(int id, int width, int height, int active);
 void gui_app_click(int id, int x, int y);
 int gui_app_drag(int id, int x, int y, int active);
 void gui_app_key(int id, u8 code, int shift, int control);
+char gui_key_character(u8 code);
+int gui_app_context_enter(int id);
+void gui_app_context_leave(int previous);
+int gui_app_context_current(void);
+unsigned gui_app_context_rights(void);
+void gui_app_authorize_admin(int id);
 void gui_app_scroll(int id, int delta);
 int gui_app_cursor(int id, int x, int y);
 void gui_app_opened(int id);
@@ -77,6 +84,25 @@ int files_is_media(const char *name);
 void files_open_image(const char *path, const char *name);
 const char *files_selected_name(void);
 void files_open_path(const char *path);
+int files_drag_path(int x,int y,char path[128],char name[64],int *is_dir);
+int files_drop_target(int x,int y,char path[128]);
+int files_move_path(const char *source,const char *directory);
+void files_refresh(void);
+int viewers_open_path(const char *path,const char *name);
+void photos_render(int width,int height,int active);
+void video_render(int width,int height,int active);
+void documents_render(int width,int height,int active);
+void photos_close(void);
+void video_close(void);
+void documents_close(void);
+void photos_key(u8 code,char ch,int shift,int control);
+void video_key(u8 code,char ch,int shift,int control);
+void documents_key(u8 code,char ch,int shift,int control);
+void photos_click(int x,int y);
+void video_click(int x,int y);
+void documents_scroll(int delta);
+int photos_poll(void);
+int video_poll(void);
 void notes_init(void);
 void notes_render(int width, int height, int active);
 void notes_resized(int width, int height);
@@ -98,6 +124,8 @@ void terminal_key(u8 code, char ch, int shift, int control);
 void terminal_click(int x, int y);
 int terminal_drag(int x, int y, int active);
 void terminal_scroll(int delta);
+void terminal_session_clear(void);
+void notes_session_clear(void);
 void settings_render(int width, int height, int active);
 void settings_click(int x, int y);
 int settings_drag(int x,int y,int active);

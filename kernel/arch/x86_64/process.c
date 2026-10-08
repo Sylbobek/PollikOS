@@ -55,31 +55,54 @@ int process64_internal_parent_live(uint64_t pid) {
         if (slots[i] && slots[i]->pid == pid && !process64_internal_dead(slots[i])) return 1;
     return 0;
 }
-void process64_internal_transition(Process64 *p, Process64State next) {
-    Process64State old = p->state;
-    memory_require((old == PROCESS_BUILDING && next == PROCESS_READY) ||
-        (old == PROCESS_READY && (next == PROCESS_RUNNING || next == PROCESS_BLOCKED ||
-                                 next == PROCESS_KILLED || next == PROCESS_FAULTED)) ||
-        (old == PROCESS_RUNNING && (next == PROCESS_READY || next == PROCESS_BLOCKED ||
-                                   next == PROCESS_EXITED || next == PROCESS_FAULTED ||
-                                   next == PROCESS_KILLED)) ||
-        (old == PROCESS_BLOCKED && (next == PROCESS_READY || next == PROCESS_KILLED)),
-        "legal process state transition");
-    p->state = next;
-    /* At this checkpoint a process owns exactly one embedded TCB, so the
-     * scheduler queue and the process record must never disagree: the
-     * dispatcher checks thread->state, syscalls check process->state. */
-    p->thread.state = next;
+void process64_internal_transition(Process64 *p, Thread64State next) {
+    Thread64State old=p->thread.state;
+    memory_require((old==THREAD_BUILDING && next==THREAD_READY) ||
+        (old==THREAD_READY && (next==THREAD_RUNNING || next==THREAD_BLOCKED || next==THREAD_KILLED || next==THREAD_FAULTED)) ||
+        (old==THREAD_RUNNING && (next==THREAD_READY || next==THREAD_BLOCKED || next==THREAD_EXITED || next==THREAD_FAULTED || next==THREAD_KILLED)) ||
+        (old==THREAD_BLOCKED && (next==THREAD_READY || next==THREAD_KILLED)),"legal thread state transition");
+    p->thread.state=next;
+    switch(next) {
+    case THREAD_EXITED: p->state=PROCESS_EXITED; break;
+    case THREAD_FAULTED: p->state=PROCESS_FAULTED; break;
+    case THREAD_KILLED: p->state=PROCESS_KILLED; break;
+    default: p->state=PROCESS_ACTIVE; break;
+    }
+}
+static const Credentials kernel_credentials={0};
+static uint64_t elevation_requester,elevation_session;
+void process64_complete_elevation(int accepted) {
+    for(size_t i=0;i<process64_capacity();i++) {
+        Process64 *p=slots[i];
+        if(p && p->pid==elevation_requester && p->credentials.session==elevation_session &&
+           elevation_session==security_session_id() && !process64_internal_dead(p)) {
+            p->admin_spawn_session=accepted?elevation_session:0;
+            p->thread.frame.rax=accepted?0:(uint64_t)-(int64_t)USER_EPERM;
+            break;
+        }
+    }
+    elevation_requester=elevation_session=0;
+    security_session_resume();
+}
+const Credentials *security_current(void) {
+    Process64 *p=scheduler64_current(); return p?&p->credentials:&kernel_credentials;
+}
+void process64_end_session(uint64_t session) {
+    for(size_t i=0;i<process64_capacity();i++) {
+        Process64 *p=slots[i];
+        if(p && p->credentials.session==session && session && !process64_internal_dead(p))
+            (void)process64_kill(p->pid,0);
+    }
 }
 static void wake_ready(Process64 *p) {
-    process64_internal_transition(p, PROCESS_READY);
-    if (!p->stopped) scheduler64_enqueue(&p->thread);
+    process64_internal_transition(p, THREAD_READY);
+    if (!p->thread.stopped) scheduler64_enqueue(&p->thread);
 }
 static UserWait64 wait_status(const Process64 *child) {
     UserWait64 status = {USER_WAIT_VERSION, 0, 0, 0, 0};
     if (child->state == PROCESS_FAULTED) {
         status.kind = USER_WAIT_KIND_FAULTED;
-        status.code = (int32_t)child->frame.vector;
+        status.code = (int32_t)child->thread.frame.vector;
         status.address = child->fault_address;
     } else if (child->state == PROCESS_KILLED) {
         status.kind = USER_WAIT_KIND_KILLED;
@@ -98,7 +121,7 @@ static void complete_wait(Process64 *parent, Process64 *child) {
     if (parent->wait_status_va)
         memory_require(copy_to_user64(&parent->space, parent->wait_status_va, &status, sizeof(status)) == USER_COPY_OK,
                        "wait status delivery");
-    parent->frame.rax = child->pid;
+    parent->thread.frame.rax = child->pid;
     parent->waiting = 0;
     parent->wait_pid = 0;
     parent->wait_status_va = 0;
@@ -139,7 +162,7 @@ static int64_t sleep_request(Process64 *process, uint64_t milliseconds) {
     if (milliseconds > USER_SLEEP_MAX_MS) return -USER_E2BIG;
     if (!milliseconds) return 0;
     uint64_t quantum = 1000/TIMER64_HZ;
-    process->wake_tick = scheduler64_ticks()+(milliseconds+quantum-1)/quantum;
+    process->thread.wake_tick = scheduler64_ticks()+(milliseconds+quantum-1)/quantum;
     return 1;
 }
 /* When a process disappears, its children become kernel-owned (parent 0) and
@@ -149,8 +172,8 @@ static void orphan_children(uint64_t pid) {
         Process64 *child = slots[i];
         if (!child || child->parent_pid != pid) continue;
         if (child->zombie) {
-            child->managed = 0;
-            child->queued = 0;
+            child->thread.managed = 0;
+            child->thread.queued = 0;
             memory_require(process64_destroy(child), "orphan zombie reclamation");
         } else {
             child->parent_pid = 0;
@@ -164,22 +187,22 @@ static void orphan_children(uint64_t pid) {
 int process64_reclaim(Process64 *process) {
     memory_context_check();
     if (!process64_internal_known(process)) return 0;
-    network64_http_owner_cleanup(process->pid);
+    network64_owner_cleanup(process->pid);
     audio64_stream_cleanup(process->pid);
     window64_process_cleanup(process);
     file64_cleanup(process);
     if (process->space.root)
         memory_require(vmm64_destroy(&process->space) == VM_OK, "zombie address space teardown");
-    if (process->kernel_stack.pages)
-        memory_require(vmm64_stack_destroy(vmm64_kernel(), &process->kernel_stack) == VM_OK,
+    if (process->thread.kernel_stack.pages)
+        memory_require(vmm64_stack_destroy(vmm64_kernel(), &process->thread.kernel_stack) == VM_OK,
                        "zombie kernel stack teardown");
-    process->user_stack = (GuardedStack){0};
+    process->thread.user_stack = (GuardedStack){0};
     process->io_waiting = 0;
     return 1;
 }
 int process64_destroy(Process64 *process) {
     memory_context_check();
-    if (!process64_internal_known(process) || process == scheduler64_current() || process->managed || process->queued) return 0;
+    if (!process64_internal_known(process) || process == scheduler64_current() || process->thread.managed || process->thread.queued) return 0;
     size_t slot = process->slot;
     process->io_waiting = 0;
     window64_process_cleanup(process);
@@ -188,8 +211,8 @@ int process64_destroy(Process64 *process) {
     pipe64_wake_blocked(); /* closed pipe ends may unblock other processes */
     if (process->space.root)
         memory_require(vmm64_destroy(&process->space) == VM_OK, "process address space teardown");
-    if (process->kernel_stack.pages)
-        memory_require(vmm64_stack_destroy(vmm64_kernel(), &process->kernel_stack) == VM_OK,
+    if (process->thread.kernel_stack.pages)
+        memory_require(vmm64_stack_destroy(vmm64_kernel(), &process->thread.kernel_stack) == VM_OK,
                        "process kernel stack teardown");
     slots[slot] = 0;
     for (size_t page = 0; page < PROCESS_CONTROL_PAGES; ++page)
@@ -218,11 +241,18 @@ static Process64 *process64_prepare(void) {
     process->thread.owner = process;
     process->slot = slot;
     process->state = PROCESS_BUILDING;
+    process->thread.state=THREAD_BUILDING;
+    Process64 *creator=scheduler64_current();
+    process->credentials=creator?creator->credentials:security_user_credentials();
+#ifdef SELFTEST
+    /* Only the explicit disposable-image regression target is privileged. */
+    if(!creator && !security_session_id()) process->credentials=kernel_credentials;
+#endif
     if (vmm64_create(&process->space) != VM_OK ||
         vmm64_stack_create(vmm64_kernel(), control+PROCESS_CONTROL_PAGES*MM_PAGE_SIZE, 4, 1, 0,
-                           &process->kernel_stack) != VM_OK ||
+                           &process->thread.kernel_stack) != VM_OK ||
         vmm64_stack_create(&process->space, USER_STACK_BASE, USER_STACK_PAGES, USER_STACK_GUARDS, 1,
-                           &process->user_stack) != VM_OK) goto failure;
+                           &process->thread.user_stack) != VM_OK) goto failure;
     process->pid = next_pid++;
     process->pgid = process->pid;
     process->parent_pid = 0;
@@ -236,13 +266,13 @@ static Process64 *process64_prepare(void) {
     process->io_fd = 0;
     process->io_va = 0;
     process->io_count = 0;
-    if (!fpu64_state_init(process->fpu_state)) goto failure;
+    if (!fpu64_state_init(process->thread.fpu_state)) goto failure;
     file64_init(process);
     heap64_reset(process);
-    process->frame.rsp = process->user_stack.top;
-    process->frame.cs = USER_CS;
-    process->frame.ss = USER_SS;
-    process->frame.flags = 2;
+    process->thread.frame.rsp = process->thread.user_stack.top;
+    process->thread.frame.cs = USER_CS;
+    process->thread.frame.ss = USER_SS;
+    process->thread.frame.flags = 2;
     return process;
 failure:
     memory_require(process64_destroy(process), "partial process teardown");
@@ -263,13 +293,13 @@ Process64 *process64_create(unsigned payload_mode, uint64_t private_value) {
     for (size_t i = 0; i < bytes; ++i) target[i] = user_payload_start[i];
     memory_require(copy_to_user64(&process->space, USER_DATA, &private_value, sizeof(private_value)) == USER_COPY_OK,
                    "initial process data");
-    process->frame.rip = USER_CODE;
-    process->frame.rsp = process->user_stack.top;
-    process->frame.cs = USER_CS;
-    process->frame.ss = USER_SS;
-    process->frame.flags = 2; /* IF/IOPL/TF/NT/VM/AC clear */
-    process->frame.r12 = payload_mode;
-    process64_internal_transition(process, PROCESS_READY);
+    process->thread.frame.rip = USER_CODE;
+    process->thread.frame.rsp = process->thread.user_stack.top;
+    process->thread.frame.cs = USER_CS;
+    process->thread.frame.ss = USER_SS;
+    process->thread.frame.flags = 2; /* IF/IOPL/TF/NT/VM/AC clear */
+    process->thread.frame.r12 = payload_mode;
+    process64_internal_transition(process, THREAD_READY);
     return process;
 failure:
     memory_require(process64_destroy(process), "partial process teardown");
@@ -288,10 +318,10 @@ static Elf64Result startup_stack(Process64 *process, size_t argc, const char *co
         if (length == STARTUP_MAX_STRING || length+1 > STARTUP_MAX_STRINGS-total) return ELF64_ARGUMENTS;
         lengths[i] = length+1; total += length+1;
     }
-    virt_addr_t strings = process->user_stack.top-total;
+    virt_addr_t strings = process->thread.user_stack.top-total;
     size_t table_bytes = 5*8+(argc+1+envc+1)*8;
     virt_addr_t rsp = (strings-table_bytes) & ~UINT64_C(15);
-    if (rsp < process->user_stack.base+process->user_stack.guards*4096) return ELF64_ARGUMENTS;
+    if (rsp < process->thread.user_stack.base+process->thread.user_stack.guards*4096) return ELF64_ARGUMENTS;
     uint64_t arguments[STARTUP_MAX_ARGS+1], environment[STARTUP_MAX_ENV+1];
     arguments[argc] = 0; environment[envc] = 0;
     virt_addr_t cursor = strings;
@@ -307,9 +337,9 @@ static Elf64Result startup_stack(Process64 *process, size_t argc, const char *co
         copy_to_user64(&process->space, argv_address, arguments, (argc+1)*8) != USER_COPY_OK ||
         copy_to_user64(&process->space, envp_address, environment, (envc+1)*8) != USER_COPY_OK)
         return ELF64_ARGUMENTS;
-    process->frame.rsp = rsp;
-    process->frame.rdi = argc; process->frame.rsi = argv_address;
-    process->frame.rdx = envp_address; process->frame.rcx = STARTUP_VERSION;
+    process->thread.frame.rsp = rsp;
+    process->thread.frame.rdi = argc; process->thread.frame.rsi = argv_address;
+    process->thread.frame.rdx = envp_address; process->thread.frame.rcx = STARTUP_VERSION;
     return ELF64_OK;
 }
 Process64 *process64_create_elf(const void *image, size_t size, size_t argc, const char *const *argv,
@@ -319,13 +349,13 @@ Process64 *process64_create_elf(const void *image, size_t size, size_t argc, con
     if (*error != ELF64_OK) return 0;
     Process64 *process = process64_prepare();
     if (!process) { *error = ELF64_NOMEM; return 0; }
-    *error = elf64_load(&process->space, image, size, &process->frame.rip);
+    *error = elf64_load(&process->space, image, size, &process->thread.frame.rip);
     if (*error == ELF64_OK) *error = startup_stack(process, argc, argv, envc, envp);
     if (*error != ELF64_OK) {
         memory_require(process64_destroy(process), "failed ELF process teardown");
         return 0;
     }
-    process64_internal_transition(process, PROCESS_READY);
+    process64_internal_transition(process, THREAD_READY);
     return process;
 }
 int process64_internal_return_valid(Process64 *process, UserFrame *frame) {
@@ -346,17 +376,17 @@ int process64_test_return(Process64 *p, UserFrame *f) { return process64_interna
 int process64_run(Process64 *process, Process64Result *result) {
     memory_context_check();
     if (!process64_internal_known(process) || !result || scheduler64_current() || scheduler64_running() ||
-        process->managed || process->state != PROCESS_READY) return 0;
-    if (!process64_internal_signal_prepare(process, &process->frame) || !process64_internal_return_valid(process, &process->frame)) {
-        process64_internal_transition(process, PROCESS_FAULTED);
+        process->thread.managed || process->thread.state != THREAD_READY) return 0;
+    if (!process64_internal_signal_prepare(process, &process->thread.frame) || !process64_internal_return_valid(process, &process->thread.frame)) {
+        process64_internal_transition(process, THREAD_FAULTED);
         process->exit_status = 141;
-        process->frame.vector = 13;
+        process->thread.frame.vector = 13;
     } else {
         memory_require(scheduler64_context_begin(process), "synchronous process context");
-        process64_internal_transition(process, PROCESS_RUNNING);
+        process64_internal_transition(process, THREAD_RUNNING);
         memory_require(vmm64_switch(&process->space) == VM_OK, "process CR3 entry");
-        fpu64_state_restore(process->fpu_state);
-        process64_enter(&process->frame, scheduler64_resume_stack());
+        fpu64_state_restore(process->thread.fpu_state);
+        process64_enter(&process->thread.frame, scheduler64_resume_stack());
         /* Resumed on the original kernel stack, kernel CR3 and RSP0 restored.
          * Only now is it safe to release the former interrupt/kernel stack. */
         memory_require(!scheduler64_current(), "process return context");
@@ -365,22 +395,38 @@ int process64_run(Process64 *process, Process64Result *result) {
     result->state = process->state;
     result->exit_status = process->exit_status;
     result->fault_address = process->fault_address;
-    frame_copy(&result->frame, &process->frame);
+    frame_copy(&result->frame, &process->thread.frame);
     return process64_destroy(process);
 }
 #endif
 static void finish(Process64 *process, UserFrame *frame, int fault, int status, uint64_t address)
     __attribute__((noreturn));
 static void finish(Process64 *process, UserFrame *frame, int fault, int status, uint64_t address) {
-    network64_http_owner_cleanup(process->pid);
+    network64_owner_cleanup(process->pid);
     audio64_stream_cleanup(process->pid);
-    frame_copy(&process->frame, frame);
-    process64_internal_transition(process, fault ? PROCESS_FAULTED : PROCESS_EXITED);
+    frame_copy(&process->thread.frame, frame);
+    process64_internal_transition(process, fault ? THREAD_FAULTED : THREAD_EXITED);
     process->exit_status = status;
     process->fault_address = address;
     process64_internal_wake_waiter(process);
     if (fault) {
         memory_log("[USER64] fault pid="); memory_hex(process->pid);
+        uint64_t candidates[4];Mapping executable;
+        if(copy_from_user64(&process->space,candidates,frame->rsp,sizeof(candidates))==USER_COPY_OK) {
+            for(unsigned i=0;i<4;i++) if(vmm64_user_page(&process->space,candidates[i],VM_EXEC,&executable)==VM_OK) {
+                memory_log(" return_pc=");memory_hex(candidates[i]);break;
+            }
+        }
+        uint64_t base=frame->rbp;
+        for(unsigned depth=0;depth<4;depth++) {
+            uint64_t link[2];
+            if(base<process->thread.user_stack.base || base+16>process->thread.user_stack.top ||
+               copy_from_user64(&process->space,link,base,sizeof(link))!=USER_COPY_OK) break;
+            if(vmm64_user_page(&process->space,link[1],VM_EXEC,&executable)==VM_OK) {
+                memory_log(" caller=");memory_hex(link[1]);
+            }
+            if(link[0]<=base) break;base=link[0];
+        }
         memory_log(" vector="); memory_hex(frame->vector);
         memory_log(" error="); memory_hex(frame->error);
         memory_log(" rip="); memory_hex(frame->rip);
@@ -456,6 +502,11 @@ static int64_t spawn_request(Process64 *parent, UserFrame *frame, int with_group
         if (pgid && !spawn_group_allowed(parent, (uint64_t)pgid)) return -USER_EPERM;
         requested_pgid = (uint64_t)pgid;
     }
+    uint64_t rights=frame->rax==USER_SPAWN_RIGHTS?frame->r10:
+        (parent->credentials.capabilities&CAP_ADMIN?parent->credentials.capabilities:(parent->credentials.capabilities&~CAP_DEVICE));
+    int elevated=frame->rax==USER_SPAWN_RIGHTS && rights==CAP_ADMIN_ALL &&
+        parent->admin_spawn_session && parent->admin_spawn_session==security_session_id();
+    if(!elevated && (rights & ~(uint64_t)parent->credentials.capabilities)) return -USER_EPERM;
     char path[USER_PATH_MAX];
     int64_t error = path64_user(parent, frame->rdi, path);
     if (error) return error;
@@ -467,10 +518,12 @@ static int64_t spawn_request(Process64 *parent, UserFrame *frame, int with_group
                                    STARTUP_MAX_ENV, &storage_used, &envc);
     if (error) return error;
     Process64 *child = 0;
-    vfs_file_t **previous = fs64_fd_context(0); /* kernel-owned descriptor context */
+    Descriptor64 *previous = fs64_fd_context(0); /* kernel-owned descriptor context */
     Launch64Result result = launch64_create(path, argc, spawn_argv, envc, spawn_envp, &child);
     fs64_fd_context(previous);
     if (result != LAUNCH_OK) return launch64_user_error(result);
+    child->credentials=parent->credentials;
+    child->credentials.capabilities=(uint32_t)rights;
     child->parent_pid = parent->pid;
     child->pgid = requested_pgid ? requested_pgid : child->pid;
     for (unsigned i = 0; i < sizeof(child->cwd); ++i) {
@@ -482,6 +535,7 @@ static int64_t spawn_request(Process64 *parent, UserFrame *frame, int with_group
         memory_require(process64_destroy(child), "spawn insertion rollback");
         return -USER_EAGAIN;
     }
+    if(elevated)parent->admin_spawn_session=0;
     return (int64_t)child->pid;
 }
 static int wait_matches(const Process64 *parent, const Process64 *child, int64_t selector) {
@@ -518,9 +572,9 @@ static int64_t wait_request(Process64 *parent, UserFrame *frame) {
             return -USER_EFAULT;
         uint64_t pid = child->pid;
         if (!child->zombie) {
-            memory_require(!child->queued && child != scheduler64_current(),
+            memory_require(!child->thread.queued && child != scheduler64_current(),
                            "terminal child is detached before wait reaping");
-            child->managed = 0;
+            child->thread.managed = 0;
             memory_require(process64_reclaim(child), "dead child reclaim");
         }
         child->zombie = 1;
@@ -594,7 +648,7 @@ static int64_t setpgid_request(Process64 *sender, UserFrame *frame) {
     return 0;
 }
 int proc64_dispatch(Process64 *process, UserFrame *frame) {
-    if (frame->rax != USER_SPAWN && frame->rax != USER_SPAWN_GROUP && frame->rax != USER_WAITPID &&
+    if (frame->rax != USER_SPAWN && frame->rax != USER_SPAWN_RIGHTS && frame->rax != USER_SPAWN_GROUP && frame->rax != USER_WAITPID &&
         frame->rax != USER_KILL && frame->rax != USER_FOREGROUND &&
         frame->rax != USER_SIGNAL_SEND && frame->rax != USER_SIGACTION &&
         frame->rax != USER_SIGPROCMASK && frame->rax != USER_SIGPENDING &&
@@ -689,7 +743,7 @@ static int64_t pipe_read_request(Process64 *process, UserFrame *frame) {
     if (!count) return 0;
     if (user_range_check(&process->space, frame->rsi, (size_t)count, 1) != USER_COPY_OK)
         return -USER_EFAULT;
-    int index = process->pipe_index[fd];
+    int index = process->fds[fd].pipe;
     uint8_t buffer[USER_READ_MAX];
     size_t ready = pipe64_read_data(index, buffer, (size_t)count);
     if (ready) {
@@ -709,13 +763,13 @@ static int64_t pipe_read_request(Process64 *process, UserFrame *frame) {
 }
 static int64_t pipe_read_available_request(Process64 *process, UserFrame *frame) {
     uint64_t fd=frame->rdi, count=frame->rdx;
-    if (fd>=USER_FD_LIMIT || file64_kind(process,fd)!=FD64_PIPE || process->pipe_write[fd])
+    if (fd>=USER_FD_LIMIT || file64_kind(process,fd)!=FD64_PIPE || (process->fds[fd].rights&FD64_WRITE))
         return -USER_EBADF;
     if (count>USER_READ_MAX) return -USER_E2BIG;
     if (!count) return 0;
     if (user_range_check(&process->space,frame->rsi,(size_t)count,1)!=USER_COPY_OK)
         return -USER_EFAULT;
-    int index=process->pipe_index[fd];
+    int index=process->fds[fd].pipe;
     uint8_t buffer[USER_READ_MAX];
     size_t ready=pipe64_read_data(index,buffer,(size_t)count);
     if (!ready) return pipe64_has_writers(index) ? -USER_EAGAIN : 0;
@@ -730,7 +784,7 @@ static int64_t pipe_write_request(Process64 *process, UserFrame *frame) {
     if (!count) return 0;
     if (user_range_check(&process->space, frame->rsi, (size_t)count, 0) != USER_COPY_OK)
         return -USER_EFAULT;
-    int index = process->pipe_index[fd];
+    int index = process->fds[fd].pipe;
     uint8_t buffer[USER_WRITE_CHUNK];
     size_t chunk = count > sizeof(buffer) ? sizeof(buffer) : (size_t)count;
     if (copy_from_user64(&process->space, buffer, frame->rsi, chunk) != USER_COPY_OK)
@@ -756,14 +810,14 @@ void process64_internal_tty_wake_readers(void) {
     for (size_t i = 0; i < process64_capacity(); ++i) {
         Process64 *p = slots[i];
         if (!p || !p->io_waiting || p->io_kind != IO64_TTY_READ ||
-            p->state != PROCESS_BLOCKED) continue;
+            p->thread.state != THREAD_BLOCKED) continue;
         uint8_t buffer[256];
         size_t want = p->io_count > sizeof(buffer) ? sizeof(buffer) : (size_t)p->io_count;
         size_t ready = tty64_pop(buffer, want);
         int64_t result = (int64_t)ready;
         if (ready && copy_to_user64(&p->space, p->io_va, buffer, ready) != USER_COPY_OK)
             result = -(int64_t)USER_EFAULT;
-        p->frame.rax = (uint64_t)result;
+        p->thread.frame.rax = (uint64_t)result;
         p->io_waiting = 0;
         wake_ready(p);
         if (!tty64_available()) break;
@@ -772,10 +826,10 @@ void process64_internal_tty_wake_readers(void) {
 void pipe64_wake_blocked(void) {
     for (size_t i = 0; i < process64_capacity(); ++i) {
         Process64 *p = slots[i];
-        if (!p || !p->io_waiting || p->state != PROCESS_BLOCKED) continue;
+        if (!p || !p->io_waiting || p->thread.state != THREAD_BLOCKED) continue;
         if (p->io_kind != IO64_PIPE_READ && p->io_kind != IO64_PIPE_WRITE) continue;
         int fd = p->io_fd;
-        int index = fd < USER_FD_LIMIT ? p->pipe_index[fd] : PIPE64_NONE;
+        int index = fd < USER_FD_LIMIT ? p->fds[fd].pipe : PIPE64_NONE;
         int64_t result = 0;
         if (!pipe64_used(index)) {
             result = -(int64_t)USER_EBADF; /* the descriptor vanished */
@@ -807,7 +861,7 @@ void pipe64_wake_blocked(void) {
                 continue;
             }
         }
-        p->frame.rax = (uint64_t)result;
+        p->thread.frame.rax = (uint64_t)result;
         p->io_waiting = 0;
         wake_ready(p);
     }
@@ -815,17 +869,33 @@ void pipe64_wake_blocked(void) {
 int process64_trap(UserFrame *frame, uint64_t cr2) {
     if ((frame->cs & 3) != 3) return 0; /* kernel faults never become user errors */
     Process64 *process = scheduler64_current();
-    memory_require(process && process->state == PROCESS_RUNNING, "CPL3 without active process");
+    memory_require(process && process->thread.state == THREAD_RUNNING, "CPL3 without active process");
     if (frame->vector == 2 || frame->vector == 8 || frame->vector == 18) return 0;
-    memory_require(kernel64_get_rsp0() == process->kernel_stack.top &&
-                   (uintptr_t)frame >= process->kernel_stack.base+4096 &&
-                   (uintptr_t)(frame+1) <= process->kernel_stack.top, "per-process RSP0 entry");
-    fpu64_state_save(process->fpu_state);
-    if (process->kill_pending) scheduler64_park(scheduler64_current_thread(), frame);
+    memory_require(kernel64_get_rsp0() == process->thread.kernel_stack.top &&
+                   (uintptr_t)frame >= process->thread.kernel_stack.base+4096 &&
+                   (uintptr_t)(frame+1) <= process->thread.kernel_stack.top, "per-process RSP0 entry");
+    fpu64_state_save(process->thread.fpu_state);
+    if (process->thread.kill_pending) scheduler64_park(scheduler64_current_thread(), frame);
     if (frame->vector != USER_GATE && frame->vector != USER_SYSCALL_VECTOR)
         finish(process, frame, 1, 128+(int)frame->vector, frame->vector == 14 ? cr2 : 0);
     if (frame->rax == USER_EXIT) finish(process, frame, 0, (int)(frame->rdi & 255), 0);
-    if (frame->rax == USER_ABI_INFO) {
+    if(frame->rax==USER_SESSION) {
+        if(frame->rdi==USER_SESSION_ID) frame->rax=process->credentials.session;
+        else if(frame->rdi==USER_SESSION_RIGHTS) frame->rax=process->credentials.capabilities;
+        else {
+            unsigned requested=frame->rdi==USER_SESSION_LOCK?SESSION_LOCKED:
+                frame->rdi==USER_SESSION_LOGOUT?SESSION_LOGOUT:
+                frame->rdi==USER_SESSION_PASSWORD?SESSION_PASSWORD:
+                frame->rdi==USER_SESSION_ELEVATE?SESSION_ELEVATE:SESSION_NONE;
+            frame->rax=security_session_request(&process->credentials,requested)?0:(uint64_t)-(int64_t)USER_EPERM;
+            if(requested==SESSION_ELEVATE && frame->rax==0) {
+                elevation_requester=process->pid;elevation_session=process->credentials.session;
+                process->admin_spawn_session=0;
+            }
+            if(security_session_state()!=SESSION_ACTIVE && process->credentials.session)
+                scheduler64_park(&process->thread,frame);
+        }
+    } else if (frame->rax == USER_ABI_INFO) {
         uint32_t requested_size = 0;
         if (copy_from_user64(&process->space, &requested_size, frame->rdi,
                              sizeof(requested_size)) != USER_COPY_OK) {
@@ -841,7 +911,8 @@ int process64_trap(UserFrame *frame, uint64_t cr2) {
             info.transport = POLLIKOS_ABI_TRANSPORT_SYSCALL64;
             info.operation_namespace = POLLIKOS_ABI_NAMESPACE_X86_64;
             info.features = POLLIKOS_ABI_FEATURE_PROCESS | POLLIKOS_ABI_FEATURE_FILES |
-                            POLLIKOS_ABI_FEATURE_NETWORK | POLLIKOS_ABI_FEATURE_WINDOWS;
+                            POLLIKOS_ABI_FEATURE_NETWORK | POLLIKOS_ABI_FEATURE_WINDOWS |
+                            POLLIKOS_ABI_FEATURE_IPC | POLLIKOS_ABI_FEATURE_STREAMS | POLLIKOS_ABI_FEATURE_RIGHTS;
             size_t written = requested_size < sizeof(info) ? requested_size : sizeof(info);
             if (copy_to_user64(&process->space, frame->rdi, &info, written) != USER_COPY_OK)
                 frame->rax = (uint64_t)-(int64_t)USER_EFAULT;
@@ -871,25 +942,10 @@ int process64_trap(UserFrame *frame, uint64_t cr2) {
         frame->rax = (uint64_t)result;
     } else if (frame->rax == USER_PIPE_READ_NOWAIT) {
         frame->rax=(uint64_t)pipe_read_available_request(process,frame);
-    } else if (frame->rax == USER_HTTP_OPEN) {
-        char url[1024];
-        UserCopyResult copied=copy_string_from_user64(&process->space,url,frame->rdi,sizeof(url));
-        if (copied==USER_COPY_TOO_LONG) frame->rax=(uint64_t)-(int64_t)USER_ENAMETOOLONG;
-        else if (copied!=USER_COPY_OK) frame->rax=(uint64_t)-(int64_t)USER_EFAULT;
-        else frame->rax=(uint64_t)network64_http_open(process->pid,url);
-    } else if (frame->rax == USER_HTTP_READ) {
-        uint8_t buffer[4096];
-        if (!frame->rdx || frame->rdx>sizeof(buffer)) frame->rax=(uint64_t)-(int64_t)USER_E2BIG;
-        else if (user_range_check(&process->space,frame->rsi,(size_t)frame->rdx,1)!=USER_COPY_OK)
-            frame->rax=(uint64_t)-(int64_t)USER_EFAULT;
-        else {
-            int64_t result=network64_http_read(process->pid,frame->rdi,buffer,(int)frame->rdx);
-            if (result>0 && copy_to_user64(&process->space,frame->rsi,buffer,(size_t)result)!=USER_COPY_OK)
-                frame->rax=(uint64_t)-(int64_t)USER_EFAULT;
-            else frame->rax=(uint64_t)result;
-        }
-    } else if (frame->rax == USER_HTTP_CLOSE) {
-        frame->rax=(uint64_t)network64_http_close(process->pid,frame->rdi);
+    } else if(frame->rax>=USER_STREAM_OPEN && frame->rax<=USER_STREAM_CLOSE) {
+        frame->rax=(uint64_t)network64_dispatch(process,frame);
+    } else if(frame->rax==USER_HTTP_OPEN || frame->rax==USER_HTTP_READ || frame->rax==USER_HTTP_CLOSE) {
+        frame->rax=(uint64_t)-(int64_t)USER_ENOTSUP; /* old HTTP ABI requires SDK rebuild */
     } else if ((frame->rax == USER_READ || frame->rax == USER_WRITE) &&
                frame->rdi < USER_FD_LIMIT && file64_kind(process, frame->rdi) == FD64_PIPE) {
         int64_t result = frame->rax == USER_READ ? pipe_read_request(process, frame)
@@ -903,13 +959,13 @@ int process64_trap(UserFrame *frame, uint64_t cr2) {
     } else if (!file64_dispatch(process, frame) && !heap64_dispatch(process, frame) &&
                !proc64_dispatch(process, frame) && !window64_dispatch(process, frame))
         frame->rax = (uint64_t)-(int64_t)USER_ENOSYS;
-    if (process->kill_pending) scheduler64_park(scheduler64_current_thread(), frame);
-    if (process->stop_pending) scheduler64_park(scheduler64_current_thread(), frame);
+    if (process->thread.kill_pending) scheduler64_park(scheduler64_current_thread(), frame);
+    if (process->thread.stop_pending) scheduler64_park(scheduler64_current_thread(), frame);
     if (!process64_internal_signal_prepare(process, frame)) finish(process, frame, 1, 142, frame->rsp);
-    if (process->kill_pending) scheduler64_park(scheduler64_current_thread(), frame);
+    if (process->thread.kill_pending) scheduler64_park(scheduler64_current_thread(), frame);
     if (!process64_internal_return_valid(process, frame)) finish(process, frame, 1, 141, 0);
-    frame_copy(&process->frame, frame);
-    fpu64_state_restore(process->fpu_state);
+    frame_copy(&process->thread.frame, frame);
+    fpu64_state_restore(process->thread.fpu_state);
     return 1;
 }
 #ifdef SELFTEST
@@ -924,7 +980,7 @@ void process64_demo(void) {
 
 Process64 *process64_internal_find(uint64_t pid) {
     for (size_t i = 0; i < process64_capacity(); ++i)
-        if (slots[i] && slots[i]->pid == pid && slots[i]->managed) return slots[i];
+        if (slots[i] && slots[i]->pid == pid && slots[i]->thread.managed) return slots[i];
     return 0;
 }
 static int signal_supported(int signal) {
@@ -999,7 +1055,7 @@ static int64_t signal_return_request(Process64 *process, UserFrame *frame) {
     process->signal_blocked = process->signal_saved_mask;
     frame_copy(frame, &process->signal_saved_frame);
     for (size_t i = 0; i < FPU64_STATE_SIZE; ++i)
-        process->fpu_state[i] = process->signal_saved_fpu[i];
+        process->thread.fpu_state[i] = process->signal_saved_fpu[i];
     process->signal_active = 0;
     process->signal_frame_va = 0;
     process->signal_frame_cookie = 0;
@@ -1036,7 +1092,7 @@ int process64_internal_signal_prepare(Process64 *process, UserFrame *frame) {
             return 0;
         frame_copy(&process->signal_saved_frame, frame);
         for (size_t i = 0; i < FPU64_STATE_SIZE; ++i)
-            process->signal_saved_fpu[i] = process->fpu_state[i];
+            process->signal_saved_fpu[i] = process->thread.fpu_state[i];
         process->signal_saved_mask = process->signal_blocked;
         process->signal_frame_va = address;
         process->signal_frame_cookie = token.cookie;
@@ -1061,14 +1117,14 @@ int64_t process64_signal_send(uint64_t pid, int signal) {
     }
     if (!signal_supported(signal)) return -USER_EINVAL;
     if (signal == USER_SIG_STOP) {
-        process->stopped = 1;
-        if (process->state == PROCESS_RUNNING) process->stop_pending = 1;
-        else if (process->state == PROCESS_READY) scheduler64_dequeue(&process->thread);
+        process->thread.stopped = 1;
+        if (process->thread.state == THREAD_RUNNING) process->thread.stop_pending = 1;
+        else if (process->thread.state == THREAD_READY) scheduler64_dequeue(&process->thread);
         return 0;
     }
     if (signal == USER_SIG_CONT) {
-        process->stopped = 0;
-        if (process->state == PROCESS_READY && process->managed && !process->queued)
+        process->thread.stopped = 0;
+        if (process->thread.state == THREAD_READY && process->thread.managed && !process->thread.queued)
             scheduler64_enqueue(&process->thread);
     }
     uint64_t bit = signal_bit(signal);
@@ -1080,13 +1136,13 @@ int64_t process64_signal_send(uint64_t pid, int signal) {
         return process64_kill(pid, signal) ? 0 : -USER_ESRCH;
     }
     process->signal_pending |= bit;
-    if (!process->stopped && !(process->signal_blocked & bit) && process->state == PROCESS_BLOCKED) {
-        process->wake_tick = 0;
+    if (!process->thread.stopped && !(process->signal_blocked & bit) && process->thread.state == THREAD_BLOCKED) {
+        process->thread.wake_tick = 0;
         process->waiting = 0;
         process->wait_pid = 0;
         process->wait_status_va = 0;
         process->io_waiting = 0;
-        process->frame.rax = (uint64_t)-(int64_t)USER_EINTR;
+        process->thread.frame.rax = (uint64_t)-(int64_t)USER_EINTR;
         wake_ready(process);
     }
     return 0;

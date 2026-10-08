@@ -1,6 +1,7 @@
 #include "app_internal.h"
 #include "../vfs.h"
 #include "../ui.h"
+#include "../account.h"
 
 static char note[1024] = "Welcome to " OS_LABEL ".\n\nYour files now have a home.\nPress CTRL+S to "
                          "save this note to disk.";
@@ -9,6 +10,13 @@ static int note_cursor_index, note_selection_anchor = -1, note_dragging;
 static int note_caret_row, note_caret_x;
 static char note_name[64] = "welcome.txt";
 static char notes_vfs_path[128] = "";
+
+void notes_session_clear(void) {
+    account_wipe(note,sizeof(note)); account_wipe(notes_vfs_path,sizeof(notes_vfs_path));
+    account_wipe(note_name,sizeof(note_name)); copy(note_name,"untitled.txt");
+    note_len=selected_file=note_changed=note_scroll=note_cursor_index=note_dragging=0;
+    note_selection_anchor=-1; note_caret_row=note_caret_x=0;
+}
 
 void notes_init(void) {
     if (files[0].name[0]) {

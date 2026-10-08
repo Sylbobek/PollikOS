@@ -7,7 +7,7 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--expect-cache', action='store_true')
 args = parser.parse_args()
 cmd = ['clang', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror', '-fuse-ld=lld',
-       'tests/pollikfs_read_native.c', '-o', 'build/pollikfs_read_native.exe']
+       'tests/pollikfs_read_native.c','kernel/fs_journal.c', '-o', 'build/pollikfs_read_native.exe']
 if args.expect_cache: cmd.append('-DEXPECT_CACHED_READS=1')
 print('COMMAND ' + subprocess.list2cmdline(cmd), flush=True)
 subprocess.run(cmd, cwd=ROOT, check=True)

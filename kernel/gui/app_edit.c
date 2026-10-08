@@ -1,10 +1,12 @@
 #include "app_internal.h"
+#include "../account.h"
 
 static char clipboard[1024];
 static int clipboard_len;
 
 void app_clipboard_copy(const char *text, int length) {
     if (!text || length < 0) length = 0;
+    if(!length) account_wipe(clipboard,sizeof(clipboard));
     if (length > (int)sizeof(clipboard) - 1) length = (int)sizeof(clipboard) - 1;
     for (int i = 0; i < length; i++) clipboard[i] = text[i];
     clipboard[length] = 0;

@@ -7,9 +7,9 @@ static void complete(const Process64 *p) {
     if (p->state != PROCESS_EXITED || p->exit_status != 42 || file64_count(p)) {
         memory_log("[DIR64] demo state="); memory_hex(p->state);
         memory_log(" status="); memory_hex((uint64_t)p->exit_status);
-        memory_log(" vector="); memory_hex(p->frame.vector);
-        memory_log(" error="); memory_hex(p->frame.error);
-        memory_log(" line="); memory_hex(p->frame.r15);
+        memory_log(" vector="); memory_hex(p->thread.frame.vector);
+        memory_log(" error="); memory_hex(p->thread.frame.error);
+        memory_log(" line="); memory_hex(p->thread.frame.r15);
         memory_log(" descriptors="); memory_hex(file64_count(p));
         memory_log("\n");
     }

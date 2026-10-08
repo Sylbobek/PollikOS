@@ -25,10 +25,12 @@ static void create(unsigned slot, uint64_t command, uint64_t limit) {
     Process64 *p = new_image(&error);
     check(p && error == ELF64_OK, "scheduler ELF construction");
     check(p->thread.owner == p && p->thread.tid, "primary TCB owner and nonzero TID");
+    check(p->state==PROCESS_ACTIVE && p->thread.state==THREAD_READY,
+          "process lifetime independent of ready thread state");
     for (size_t i = 0; i < PROCESS_MAX; ++i)
         if (records[i].p) check(records[i].p->thread.tid != p->thread.tid, "live TID uniqueness");
     uint64_t identity = 'A'+slot;
-    *(volatile uint64_t *)(p->kernel_stack.base+4096) = UINT64_C(0xfeed000000000000)|identity;
+    *(volatile uint64_t *)(p->thread.kernel_stack.base+4096) = UINT64_C(0xfeed000000000000)|identity;
     put(p, 0, command); put(p, 8, identity); put(p, 32, 0);
     records[slot] = (Record){p, identity, limit, 0, 0, PROCESS_KILLED};
     if (command == 1) records[slot].expected = PROCESS_EXITED;
@@ -47,14 +49,14 @@ static void complete(const Process64 *p) {
     while (i < PROCESS_MAX && records[i].p != p) ++i;
     check(i < PROCESS_MAX, "completion identity");
     Record *r = &records[i];
-    check(*(volatile uint64_t *)(p->kernel_stack.base+4096) == (UINT64_C(0xfeed000000000000)|r->identity),
+    check(*(volatile uint64_t *)(p->thread.kernel_stack.base+4096) == (UINT64_C(0xfeed000000000000)|r->identity),
           "per-process kernel stack canary");
-    check(p->state == r->expected && !p->queued && p->ticks >= r->minimum_ticks,
+    check(p->state == r->expected && !p->thread.queued && p->thread.ticks >= r->minimum_ticks,
           "scheduler terminal state and accounting");
     check(!process64_kill(p->pid, 9), "already terminal kill returns error");
     if (p->state == PROCESS_EXITED) { check(p->exit_status == 42, "resumed register/stack checks exit 42"); ++exits; }
     if (p->state == PROCESS_FAULTED) {
-        check(p->frame.vector == r->vector && p->frame.error == r->error, "scheduled fault diagnostic"); ++faults;
+        check(p->thread.frame.vector == r->vector && p->thread.frame.error == r->error, "scheduled fault diagnostic"); ++faults;
     }
     if (p->state == PROCESS_KILLED) ++kills;
     uint64_t data[6];
@@ -73,7 +75,7 @@ static void complete(const Process64 *p) {
 static void stress_boundary(void) {
     for (unsigned i = 0; i < 3; ++i) {
         Process64 *p = records[i].p;
-        if (p && p->ticks && p->ticks % 100 == 0) put(p, 32, 1);
+        if (p && p->thread.ticks && p->thread.ticks % 100 == 0) put(p, 32, 1);
     }
 }
 static void churn_boundary(void) {
@@ -85,8 +87,9 @@ static void churn_boundary(void) {
 }
 static void idle_boundary(void) {
     uint64_t elapsed = scheduler64_stats().ticks-idle_start;
-    if (elapsed >= 3 && records[0].p && records[0].p->state == PROCESS_BLOCKED) {
-        check(records[0].p->ticks == 0 && process64_wake(records[0].p->pid) &&
+    if (elapsed >= 3 && records[0].p && records[0].p->thread.state == THREAD_BLOCKED) {
+        check(records[0].p->state==PROCESS_ACTIVE,"blocked thread preserves active process lifetime");
+        check(records[0].p->thread.ticks == 0 && process64_wake(records[0].p->pid) &&
               !process64_wake(records[0].p->pid), "blocked wake exactly once");
     }
     if (elapsed >= 4 && records[1].p) check(process64_kill(records[1].p->pid, 9), "kill blocked process");
@@ -102,8 +105,8 @@ void scheduler64_selftest(void) {
     for (unsigned i = 1; i < 3; ++i) {
         Mapping a, b;
         check(records[0].p->space.root != records[i].p->space.root &&
-            records[0].p->kernel_stack.top != records[i].p->kernel_stack.top &&
-            records[0].p->user_stack.top == records[i].p->user_stack.top &&
+            records[0].p->thread.kernel_stack.top != records[i].p->thread.kernel_stack.top &&
+            records[0].p->thread.user_stack.top == records[i].p->thread.user_stack.top &&
             vmm64_lookup(&records[0].p->space, USER_DATA, &a) == VM_OK &&
             vmm64_lookup(&records[i].p->space, USER_DATA, &b) == VM_OK && a.physical != b.physical,
             "separate CR3 data and kernel stacks");
@@ -159,7 +162,7 @@ void scheduler64_selftest(void) {
         pmm64_fail_after(-1);
         if (p) {
             scheduler64_fail_submit(1);
-            check(!scheduler64_submit(p) && !p->managed && !p->queued && p->state == PROCESS_READY,
+            check(!scheduler64_submit(p) && !p->thread.managed && !p->thread.queued && p->thread.state == THREAD_READY,
                   "injected insertion failure does not transfer ownership");
             scheduler64_fail_submit(0);
             check(process64_destroy(p), "caller cleans rejected process");

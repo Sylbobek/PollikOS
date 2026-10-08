@@ -38,7 +38,7 @@ DomNode *dom_create_element(const char *tag) {
     if (!node)
         return 0;
     int i = 0;
-    while (tag[i] && i < 15) {
+    while (tag[i] && i < (int)sizeof(node->tag)-1) {
         char c = tag[i];
         if (c >= 'A' && c <= 'Z')
             c += 32;
@@ -236,6 +236,9 @@ void dom_free_tree(DomNode *node) {
         node->text = 0;
     }
     kfree(node->image);
+#ifdef POLLIK_BROWSER_STANDALONE
+    for(int i=0;i<node->attr_count;i++){kfree(node->attr_names[i]);kfree(node->attr_vals[i]);}
+#endif
     if (node->canvas) { kfree(node->canvas); node->canvas = 0; }
     EventListener *el = node->listeners;
     while (el) {
@@ -265,23 +268,30 @@ const char *dom_get_attribute(DomNode *node, const char *name) {
 }
 void dom_set_attribute(DomNode *node, const char *name, const char *val) {
     if (!node || !name) return;
-    store_attr(node, name, val ? val : "", 1);
+    if(!val)val="";
+    store_attr(node, name, val, 1);
     /* Mirror the legacy fast fields so layout/render see the change. */
-    if (str_eq_n(name, "id")) { int i=0; while (val[i] && i<31) { node->id[i]=val[i]; i++; } node->id[i]=0; }
-    else if (str_eq_n(name, "class")) { int i=0; while (val[i] && i<63) { node->class_name[i]=val[i]; i++; } node->class_name[i]=0; }
-    else if (str_eq_n(name, "href")) { int i=0; while (val[i] && i<127) { node->href[i]=val[i]; i++; } node->href[i]=0; }
-    else if (str_eq_n(name, "src")) { int i=0; while (val[i] && i<127) { node->src[i]=val[i]; i++; } node->src[i]=0; }
-    else if (str_eq_n(name, "value")) { int i=0; while (val[i] && i<63) { node->value[i]=val[i]; i++; } node->value[i]=0; }
-    else if (str_eq_n(name, "name")) { int i=0; while (val[i] && i<31) { node->name[i]=val[i]; i++; } node->name[i]=0; }
+    #define MIRROR(attribute,field) if(str_eq_n(name,attribute)){unsigned i=0;while(val[i] && i<sizeof(node->field)-1){node->field[i]=val[i];i++;}node->field[i]=0;}
+    MIRROR("id",id) else MIRROR("class",class_name) else MIRROR("href",href)
+    else MIRROR("src",src) else MIRROR("value",value) else MIRROR("name",name)
+    else MIRROR("style",style_attr) else MIRROR("rel",rel) else MIRROR("type",input_type)
+    else MIRROR("action",action) else MIRROR("method",method)
+    #undef MIRROR
 }
 void dom_remove_attribute(DomNode *node, const char *name) {
     if (!node || !name) return;
     for (int i = 0; i < node->attr_count; i++) {
         if (!str_eq_n(node->attr_names[i], name)) continue;
+#ifdef POLLIK_BROWSER_STANDALONE
+        kfree(node->attr_names[i]);kfree(node->attr_vals[i]);
+        for(int j=i;j+1<node->attr_count;j++){node->attr_names[j]=node->attr_names[j+1];node->attr_vals[j]=node->attr_vals[j+1];}
+        node->attr_names[node->attr_count-1]=0;node->attr_vals[node->attr_count-1]=0;
+#else
         for (int j = i; j + 1 < node->attr_count; j++) {
             int k = 0; while (node->attr_names[j+1][k] && k < DOM_ATTR_NAME_MAX) { node->attr_names[j][k]=node->attr_names[j+1][k]; k++; } node->attr_names[j][k]=0;
             k = 0; while (node->attr_vals[j+1][k] && k < DOM_ATTR_VAL_MAX) { node->attr_vals[j][k]=node->attr_vals[j+1][k]; k++; } node->attr_vals[j][k]=0;
         }
+#endif
         node->attr_count--;
         /* Clear mirrored fast fields so layout/selectors stop seeing them. */
         if (str_eq_n(name, "id")) node->id[0] = 0;
@@ -440,10 +450,15 @@ void dom_set_inner_html(DomNode *node, const char *html, int len) {
     if (!html || len <= 0) return;
     DomNode *frag = html_parse(html, len);
     if (!frag) return;
+#ifdef POLLIK_BROWSER_UPSTREAM
+    DomNode *body=dom_query_selector(frag,"body");
+    DomNode *c = body?body->first_child:frag->first_child;
+#else
     DomNode *c = frag->first_child;
+#endif
     while (c) {
         DomNode *next = c->next_sibling;
-        dom_remove_child(frag, c);
+        dom_remove_child(c->parent, c);
         dom_append_child(node, c);
         c = next;
     }
@@ -528,6 +543,20 @@ int str_eq_n(const char *a, const char *b) {
 }
 static void store_attr(DomNode *node, const char *name, const char *val, int overwrite) {
     if (!name[0]) return;
+#ifdef POLLIK_BROWSER_STANDALONE
+    size_t nl=strlen(name),vl=strlen(val);
+    if(nl>=DOM_ATTR_NAME_MAX || vl>=DOM_ATTR_VAL_MAX)return;
+    int index=node->attr_count;
+    for(int i=0;i<node->attr_count;i++)if(str_eq_n(node->attr_names[i],name)){if(!overwrite)return;index=i;break;}
+    if(index==DOM_MAX_ATTRS)return;
+    char *n=kmalloc((u32)nl+1),*v=kmalloc((u32)vl+1);
+    if(!n || !v){kfree(n);kfree(v);return;}
+    memcpy(n,name,nl+1);
+    if(overwrite)memcpy(v,val,vl+1);else decode_html_entities(val,(int)vl,v,(int)vl+1);
+    if(index<node->attr_count){kfree(node->attr_names[index]);kfree(node->attr_vals[index]);}
+    else ++node->attr_count;
+    node->attr_names[index]=n;node->attr_vals[index]=v;
+#else
     for (int i = 0; i < node->attr_count; i++)
         if (str_eq_n(node->attr_names[i], name)) {
             if (!overwrite) return; /* first wins when parsing */
@@ -545,6 +574,7 @@ static void store_attr(DomNode *node, const char *name, const char *val, int ove
     decode_html_entities(val, (int)strlen(val), decoded, sizeof(decoded));
     int m = 0; while (decoded[m] && m < DOM_ATTR_VAL_MAX - 1) { node->attr_vals[i][m] = decoded[m]; m++; }
     node->attr_vals[i][m] = 0;
+#endif
 }
 
 static void parse_attribute(DomNode *node, const char *attr_name, const char *attr_val) {
@@ -646,7 +676,11 @@ static void parse_attribute(DomNode *node, const char *attr_name, const char *at
     }
 }
 
+#ifdef POLLIK_BROWSER_UPSTREAM
+DomNode *html_parse_legacy(const char *html, int len) {
+#else
 DomNode *html_parse(const char *html, int len) {
+#endif
     if (!html || len <= 0)
         return 0;
 

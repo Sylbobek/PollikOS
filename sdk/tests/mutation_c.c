@@ -18,8 +18,10 @@ static int failures;
         ++failures; \
     } } while (0)
 #define DIRECTORY "/mutation"
+static const char *work_directory=DIRECTORY;
 static void under(char *out, const char *name) {
-    strcpy(out, DIRECTORY "/");
+    strcpy(out, work_directory);
+    strcat(out,"/");
     strcat(out, name);
 }
 static void pattern(char *buffer, unsigned long length, unsigned long seed) {
@@ -589,6 +591,7 @@ static int mode_diskfull(void) {
 }
 int main(int argc, char **argv) {
     const char *mode = argc > 1 ? argv[1] : "basic";
+    if (strcmp(mode, "demo") == 0) { work_directory="/tmp/mutation"; return mode_basic(); }
     if (strcmp(mode, "basic") == 0) return mode_basic();
     if (strcmp(mode, "multi") == 0) return mode_multi();
     if (strcmp(mode, "large") == 0) return mode_large();

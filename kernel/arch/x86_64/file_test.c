@@ -31,10 +31,10 @@ static void complete(const Process64 *p) {
     unsigned mode = (unsigned)get(p, 0);
     if (p->state == PROCESS_EXITED && p->exit_status != 42) {
         memory_log("[FD64] user check mode="); memory_hex(mode);
-        memory_log(" line="); memory_hex(p->frame.r15);
+        memory_log(" line="); memory_hex(p->thread.frame.r15);
         memory_log(" result="); memory_hex(get(p, 32)); memory_log("\n");
     }
-    if (mode == 4) check(p->state == PROCESS_FAULTED && p->frame.vector == 14 && p->frame.error == 7,
+    if (mode == 4) check(p->state == PROCESS_FAULTED && p->thread.frame.vector == 14 && p->thread.frame.error == 7,
                          "fault with open descriptors");
     else if (mode == 5) check(p->state == PROCESS_KILLED && p->exit_status == 124,
                               "kill with open descriptors");
@@ -61,15 +61,15 @@ static void bulk_boundary(void) {
 }
 static void isolation_boundary(void) {
     Process64 *a = peers[0], *b = peers[1];
-    if (a && b && !get(a, 16) && get(a, 8) == 1 && get(b, 8) == 1 && a->ticks >= 3 && b->ticks >= 3) {
-        check(a->files[3] && b->files[3] && a->files[3] != b->files[3] &&
-            a->files[3]->inode != b->files[3]->inode && a->files[3]->offset == 1 && b->files[3]->offset == 1,
+    if (a && b && !get(a, 16) && get(a, 8) == 1 && get(b, 8) == 1 && a->thread.ticks >= 3 && b->thread.ticks >= 3) {
+        check(a->fds[3].file && b->fds[3].file && a->fds[3].file != b->fds[3].file &&
+            a->fds[3].file->inode != b->fds[3].file->inode && a->fds[3].file->offset == 1 && b->fds[3].file->offset == 1,
             "fd 3 maps distinct files and offsets after preemption");
         check(get(a, 24) == 3 && get(b, 24) == 3, "same userspace descriptor number");
         put(a, 16, 1); /* A closes while B keeps its own fd 3 open. */
     }
     if (!isolation_verified && a && get(a, 8) == 2 && b && get(b, 8) == 1) {
-        check(!file64_count(a) && file64_count(b) == 1 && b->files[3]->offset == 1,
+        check(!file64_count(a) && file64_count(b) == 1 && b->fds[3].file->offset == 1,
               "peer close cannot close or seek another process descriptor");
         isolation_verified = 1;
         put(b, 16, 1);
@@ -90,8 +90,8 @@ static void io_boundary(void) {
 }
 static void kill_boundary(void) {
     Process64 *p = peers[0];
-    if (p && get(p, 8) == 1 && !p->tick_limit)
-        check(process64_tick_limit(p->pid, p->ticks+3), "kill after all files are open");
+    if (p && get(p, 8) == 1 && !p->thread.tick_limit)
+        check(process64_tick_limit(p->pid, p->thread.ticks+3), "kill after all files are open");
 }
 static void run(Scheduler64Boundary boundary) {
     check(scheduler64_run(100, boundary, complete) && !scheduler64_count(), "file scheduler completes");

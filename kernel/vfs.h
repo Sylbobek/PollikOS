@@ -54,6 +54,7 @@ typedef struct vfs_file {
     u32 size;
     u32 inode;
     int ref_count;
+    unsigned user_access; /* snapshotted policy, checked on inherited fds */
 #ifdef POLLIK_X64
     /* In-memory identity token, never part of an on-disk or syscall ABI.
      * Snapshots the inode allocation epoch at open so a descriptor whose
@@ -69,6 +70,7 @@ int vfs_open(const char *path, int flags);
 int vfs_close(int fd);
 int vfs_read(int fd, void *buf, u32 count);
 int vfs_write(int fd, const void *buf, u32 count);
+int vfs_write_preflight(int fd, u32 count);
 int vfs_seek(int fd, int offset, int whence);
 int vfs_fstat(int fd, vfs_stat_t *st);
 int vfs_stat(const char *path, vfs_stat_t *st);
@@ -77,9 +79,7 @@ int vfs_unlink(const char *path);
 int vfs_rmdir(const char *path);
 int vfs_readdir(int fd, vfs_dirent_t *dirent);
 int vfs_rename(const char *oldpath, const char *newpath);
-#ifdef POLLIK_X64
 int vfs_rename_replace(const char *oldpath, const char *newpath);
-#endif
 unsigned vfs_debug_handles(void);
 
 /* Per-process FD table management */

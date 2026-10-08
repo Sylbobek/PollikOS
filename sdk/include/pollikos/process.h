@@ -47,4 +47,5 @@ int pollikos_run(const char *path, const char *const argv[], int *exit_code);
  * integer), and declare which child owns Ctrl+C on the console. */
 long pollikos_kill(long pid, int reason);
 long pollikos_foreground(long pid);
+long pollikos_spawn_rights(const char *path,const char *const argv[],const char *const envp[],unsigned rights);
 #endif

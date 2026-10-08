@@ -261,14 +261,14 @@ The full syscall migration remains future work; the temporary ABI is documented 
 
 | Area | Current status | Evidence / immediate gap |
 | --- | --- | --- |
-| Desktop, Dock, compositor, input | Native i386 | Existing default target retained; no x86_64 integration |
+| Desktop, Dock, compositor, input | Native i386 and x86_64 clients | i386 retained; x86_64 has Ring 3 desktop, terminal, Files, Notes and Browser over kernel-owned window services; full GUI parity remains incomplete |
 | x86_64 kernel foundation | Partial, native guest execution | Long mode, page protections, GDT/TSS/IDT; no device IRQs |
 | PMM/VMM | Native i386; native x86_64 foundation | Sparse 64-bit bitmap PMM, DMA32, dynamic four-level tables, independent spaces, ownership/destruction and guarded stacks; verified with 5 GiB RAM; BSP, kernel memory APIs require IF=0 |
 | ELF/processes/scheduler | Native i386; bounded native x86_64 ELF64 processes | i386 ELF32 unchanged; static ET_EXEC/PT_LOAD with startup ABI v1, argc/argv/envp, isolated CPL3 execution and clean teardown; timer-driven round-robin, kill and deferred reaping; no dynamic linking |
 | File descriptors/VFS | Native i386; x86_64 per-process descriptors | Shared VFS and path launch; CPL3 open/read/seek/close/dup/dup2, 128 descriptors, pipes, safe copies, stat/fstat, directory enumeration, mutation and teardown; POSIX coverage remains partial |
 | PollikFS v2 | Shared i386/x86_64 read/write | Stable wire format; x86_64 ATA PIO mount, directories, direct/indirect/double-indirect inode pointer range (~64.24 MiB), 32 MiB gross volume and ENOSPC safety; i386 unchanged |
-| Terminal/shell | Native i386 windowed Terminal; native x86_64 serial console | i386 `gui/terminal.c` built-in dispatcher retained; x86_64 `/bin/pollish` has TTY editing/history, PATH execution, pipelines and file redirection; no PTY/job control |
-| Network/TLS | Native i386, partial | `net/`: RTL8139, ARP/IPv4/UDP/TCP/DNS and BearSSL integration; syscall sockets use a small global table; not a portable per-process POSIX API |
+| Terminal/shell | Native i386 Terminal; x86_64 serial and graphical terminal | i386 `gui/terminal.c` retained; x86_64 `/bin/pollish` has TTY editing/history, PATH execution, pipelines and redirection; no PTY/job control |
+| Network/TLS | Shared transport, Ring 3 HTTP on x86_64 | RTL8139, IPv4/TCP/DNS and certificate-validated BearSSL transport; owned stream tokens and SDK HTTP parser; not a portable POSIX socket API |
 | C runtime / SDK | PollikOS SDK 1.0.0 | `libpollikc.a` (buffered stdio, malloc, spawn/wait, filesystem), crt0, public headers; i386 has only the kernel-side runtime |
 | C/C++ compiler, assembler, linker | Native TinyCC 0.9.27 for scalar float/double; host Clang via SDK | `/bin/tcc` compiles and links C inside PollikOS; no C++, assembler or native linker beyond TinyCC |
 | Dynamic linker and pthreads | Not implemented for x86_64 | Anonymous mmap exists; thread support needs shared address spaces and thread-group lifecycle |
@@ -279,7 +279,7 @@ The full syscall migration remains future work; the temporary ABI is documented 
 | Node.js, npm, npx, Corepack, TypeScript | Not started / blocked | V8/libuv, threads, virtual memory, sockets, libc and native C++ toolchain; remains a required final target |
 | Go, Java/OpenJDK | Not started / blocked | OS services and runtime/toolchain ports |
 | Packages / Base and Developer profiles | Future work | No new packaging support claimed by this target |
-| PollikOS rebuilding itself | Blocked | Native compiler/build tools/Git/image construction do not exist yet |
+| PollikOS rebuilding itself | Not implemented | Native TinyCC compiles/links C and rebuilds SDK libc in the guest; rebuilding the whole OS still requires guest assembler, build tooling, linker and image construction |
 
 ## Remaining C runtime work
 

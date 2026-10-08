@@ -4,7 +4,7 @@
 static Process64 *demo_processes[3];
 static unsigned completed;
 static void complete(const Process64 *p) {
-    memory_require(p->state == PROCESS_KILLED && p->ticks == 6 && p->exit_status == 124,
+    memory_require(p->state == PROCESS_KILLED && p->thread.ticks == 6 && p->exit_status == 124,
                    "demo CPU budget termination");
     ++completed;
     for (size_t i = 0; i < 3; ++i) if (demo_processes[i] == p) demo_processes[i] = 0;

@@ -803,7 +803,15 @@ static void str_copy_limit(char *dest, const char *src, int max) {
     dest[i] = 0;
 }
 
+static int dialog_app=-1;
+static void dialog_result(void (*callback)(int),int result){
+    int previous=gui_app_context_enter(dialog_app);if(callback)callback(result);gui_app_context_leave(previous);
+}
+static void dialog_input_result(void (*callback)(const char *),const char *text){
+    int previous=gui_app_context_enter(dialog_app);if(callback)callback(text);gui_app_context_leave(previous);
+}
 void ui_dialog_message(const char *title, const char *msg, IconKind icon, void (*on_close)(int)) {
+    dialog_app=gui_app_context_current();
     UiDialog *d = &g_active_dialog;
     ui_menu_close(&g_active_menu);
     d->kind = DIALOG_MESSAGE;
@@ -822,6 +830,7 @@ void ui_dialog_message(const char *title, const char *msg, IconKind icon, void (
 }
 
 void ui_dialog_confirm(const char *title, const char *msg, const char *confirm_label, const char *cancel_label, int is_danger, IconKind icon, void (*on_result)(int)) {
+    dialog_app=gui_app_context_current();
     UiDialog *d = &g_active_dialog;
     ui_menu_close(&g_active_menu);
     d->kind = DIALOG_CONFIRM;
@@ -840,6 +849,7 @@ void ui_dialog_confirm(const char *title, const char *msg, const char *confirm_l
 }
 
 void ui_dialog_input(const char *title, const char *msg, const char *initial_val, IconKind icon, void (*on_input_result)(const char *)) {
+    dialog_app=gui_app_context_current();
     UiDialog *d = &g_active_dialog;
     ui_menu_close(&g_active_menu);
     d->kind = DIALOG_INPUT;
@@ -1106,7 +1116,7 @@ int ui_dialog_on_key(int key, int shift, int control) {
             char buf[64];
             str_copy_limit(buf, d->input_text, sizeof(buf));
             ui_dialog_close();
-            if (cb) cb(buf);
+            dialog_input_result(cb,buf);
             return 1;
         }
         int result = (d->kind == DIALOG_MESSAGE) ? 1 : (d->focused_btn == 1);
@@ -1121,12 +1131,12 @@ int ui_dialog_on_key(int key, int shift, int control) {
         if (d->kind == DIALOG_INPUT) {
             void (*cb)(const char *) = d->on_input_result;
             ui_dialog_close();
-            if (cb) cb(NULL);
+            dialog_input_result(cb,NULL);
             return 1;
         }
         void (*cb)(int) = d->on_result;
         ui_dialog_close();
-        if (cb) cb(0);
+        dialog_result(cb,0);
         return 1;
     }
 
@@ -1213,12 +1223,12 @@ int ui_dialog_on_mouse_down(int mx, int my, int button) {
         if (d->kind == DIALOG_INPUT) {
             void (*cb)(const char *) = d->on_input_result;
             ui_dialog_close();
-            if (cb) cb(NULL);
+            dialog_input_result(cb,NULL);
             return 1;
         }
         void (*cb)(int) = d->on_result;
         ui_dialog_close();
-        if (cb) cb(0);
+        dialog_result(cb,0);
         return 1;
     }
 
@@ -1233,12 +1243,12 @@ int ui_dialog_on_mouse_down(int mx, int my, int button) {
             if (d->kind == DIALOG_INPUT) {
                 void (*cb)(const char *) = d->on_input_result;
                 ui_dialog_close();
-                if (cb) cb(NULL);
+                dialog_input_result(cb,NULL);
                 return 1;
             }
             void (*cb)(int) = d->on_result;
             ui_dialog_close();
-            if (cb) cb(0);
+            dialog_result(cb,0);
             return 1;
         }
         if (ui_button_hit(confirm_x, btn_y, btn_w, btn_h, mx, my)) {
@@ -1247,19 +1257,19 @@ int ui_dialog_on_mouse_down(int mx, int my, int button) {
                 char buf[64];
                 str_copy_limit(buf, d->input_text, sizeof(buf));
                 ui_dialog_close();
-                if (cb) cb(buf);
+                dialog_input_result(cb,buf);
                 return 1;
             }
             void (*cb)(int) = d->on_result;
             ui_dialog_close();
-            if (cb) cb(1);
+            dialog_result(cb,1);
             return 1;
         }
     } else {
         if (ui_button_hit(confirm_x, btn_y, btn_w, btn_h, mx, my)) {
             void (*cb)(int) = d->on_result;
             ui_dialog_close();
-            if (cb) cb(1);
+            dialog_result(cb,1);
             return 1;
         }
     }

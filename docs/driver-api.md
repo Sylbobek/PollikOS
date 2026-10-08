@@ -18,4 +18,4 @@ Ten kontrakt abstrahuje wyłącznie instrukcje port-I/O. Nie wykrywa urządzeń,
 
 ## Ograniczenia i kierunek rozwoju
 
-PollikFS nadal wiąże się z nazwami `ata_read_sector`/`ata_write_sector`; pośredni wybór ATA/AHCI zachodzi niżej w storage. Następny krok I/O powinien wprowadzić testowalny kontrakt block-device, z adapterami do istniejących backendów i bez zmiany formatu PollikFS. Dopiero realni konsumenci uzasadnią rejestr urządzeń, warstwę filtrów lub stosy sterowników. Sterowniki userspace, dynamiczne ładowanie, ogólny Device Manager i hotplug nie są zaimplementowane.
+PollikFS używa teraz kontraktu `BlockDevice` (`kernel/block_device.h`) z read/write/flush, początkiem FS i granicą okna sektorów. Adapter wykorzystuje istniejący wybór ATA/AHCI w storage; format PollikFS pozostaje zgodny. Ten sam kontrakt obsługuje journal/recovery i testy na pamięciowym urządzeniu sektorowym. Dopiero realni konsumenci uzasadnią rejestr urządzeń, warstwę filtrów lub stosy sterowników. Sterowniki userspace, dynamiczne ładowanie, ogólny Device Manager i hotplug nie są zaimplementowane.

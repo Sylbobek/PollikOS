@@ -54,9 +54,9 @@ _start:
     expect 24
     cmp dword [abi_info], 24
     jne bad
-    cmp word [abi_info+4], 1
+    cmp word [abi_info+4], POLLIKOS_ABI_VERSION_MAJOR
     jne bad
-    cmp word [abi_info+6], 0
+    cmp word [abi_info+6], POLLIKOS_ABI_VERSION_MINOR
     jne bad
     cmp dword [abi_info+8], 2
     jne bad
@@ -64,7 +64,10 @@ _start:
     jne bad
     cmp dword [abi_info+16], 2
     jne bad
-    cmp dword [abi_info+20], 27
+    %define REQUIRED_FEATURES (POLLIKOS_ABI_FEATURE_PROCESS | POLLIKOS_ABI_FEATURE_FILES | POLLIKOS_ABI_FEATURE_IPC | POLLIKOS_ABI_FEATURE_NETWORK | POLLIKOS_ABI_FEATURE_WINDOWS | POLLIKOS_ABI_FEATURE_STREAMS | POLLIKOS_ABI_FEATURE_RIGHTS)
+    mov eax,[abi_info+20]
+    and eax,REQUIRED_FEATURES
+    cmp eax,REQUIRED_FEATURES
     jne bad
     mov rdi, 0xffffff8000000000
     gate USER_ABI_INFO

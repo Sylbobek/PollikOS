@@ -28,8 +28,8 @@ static void complete(const Process64 *p) {
     if (p->state != PROCESS_EXITED || p->exit_status != expected_status) {
         memory_log("[C7] user state="); memory_hex(p->state);
         memory_log(" status="); memory_hex((uint64_t)p->exit_status);
-        memory_log(" vector="); memory_hex(p->frame.vector);
-        memory_log(" error="); memory_hex(p->frame.error);
+        memory_log(" vector="); memory_hex(p->thread.frame.vector);
+        memory_log(" error="); memory_hex(p->thread.frame.error);
         memory_log("\n");
     }
     check(p->state == PROCESS_EXITED && p->exit_status == expected_status, "C7 exit status");

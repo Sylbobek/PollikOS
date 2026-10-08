@@ -1,9 +1,14 @@
 #include "auth.h"
+#include "account.h"
+#include "security.h"
+#include "process.h"
+#include "wm.h"
 #include "graphics.h"
 #include "ui.h"
 #include "pollikfs.h"
 #include "vfs.h"
 #include "gui/apps.h"
+#include "gui/app_host.h"
 #include "audio.h"
 #include "include/bearssl/bearssl.h"
 #ifdef POLLIK_INSTALL_MEDIA
@@ -11,23 +16,6 @@
 #include "hw.h"
 #endif
 
-#define ACCOUNT_MAGIC 0x31524341u /* ACR1 */
-#define ACCOUNT_VERSION 1u
-#define ACCOUNT_KDF_ROUNDS 8192u
-#define ACCOUNT_PATH "/etc/account.db"
-#define INSTALL_MARKER "/etc/pollikos-installed"
-
-typedef struct __attribute__((packed)) {
-    u32 magic;
-    u32 version;
-    u32 rounds;
-    char username[32];
-    u8 salt[16];
-    u8 password_hash[32];
-    u8 reserved[36];
-} AccountRecord;
-
-_Static_assert(sizeof(AccountRecord) == 128, "account record wire size");
 
 enum {
     AUTH_SETUP_INTRO,
@@ -49,7 +37,7 @@ static char input[64];
 static int input_len, input_cursor, input_anchor = -1;
 static char new_password[64];
 static char message[96];
-static u32 entropy = 0x706f6c6cu;
+
 static int pointer_was_down;
 static int button_x, button_y, button_w, button_h;
 static int eye_x, eye_y, eye_w, eye_h, secret_field_active, show_password;
@@ -63,116 +51,32 @@ static void copy_text(char *dst, const char *src, u32 cap) {
 }
 
 static void clear_input(void) {
-    memset(input, 0, sizeof(input));
+    account_wipe(input, sizeof(input));
     input_len = input_cursor = 0;
     input_anchor = -1;
     input_dragging = 0;
     show_password = 0;
 }
 
-static int constant_equal(const u8 *a, const u8 *b, u32 length) {
-    u8 difference = 0;
-    for (u32 i = 0; i < length; ++i) difference |= a[i] ^ b[i];
-    return difference == 0;
-}
-
-/* Salted, deliberately expensive SHA-256 password KDF. The on-disk round
- * count makes future upgrades possible without storing plaintext passwords. */
-static void password_kdf(const char *password, const u8 salt[16], u32 rounds, u8 out[32]) {
-    br_sha256_context ctx;
-    u32 length = 0;
-    while (password[length] && length < 63) ++length;
-    br_sha256_init(&ctx);
-    br_sha256_update(&ctx, salt, 16);
-    br_sha256_update(&ctx, password, length);
-    br_sha256_out(&ctx, out);
-    for (u32 round = 1; round < rounds; ++round) {
-        br_sha256_init(&ctx);
-        br_sha256_update(&ctx, out, 32);
-        br_sha256_update(&ctx, salt, 16);
-        br_sha256_update(&ctx, password, length);
-        br_sha256_out(&ctx, out);
-    }
-}
-
-/* 1 valid, 0 absent, -1 present but invalid. */
-static int load_account(void) {
-    int fd = vfs_open(ACCOUNT_PATH, O_RDONLY);
-    if (fd < 0) return 0;
-    AccountRecord candidate;
-    int got = vfs_read(fd, &candidate, sizeof(candidate));
-    vfs_close(fd);
-    if (got != (int)sizeof(candidate) || candidate.magic != ACCOUNT_MAGIC ||
-        candidate.version != ACCOUNT_VERSION || candidate.rounds < 1024 ||
-        candidate.rounds > 1000000 || !candidate.username[0] || candidate.username[31]) return -1;
-    account = candidate;
-    return 1;
-}
-
-static int write_all(const char *path, const void *data, u32 length) {
-    int fd = vfs_open(path, O_WRONLY | O_CREAT | O_TRUNC);
-    if (fd < 0) return 0;
-    int written = vfs_write(fd, data, length);
-    int closed = vfs_close(fd);
-    return written == (int)length && closed == 0;
-}
-
-static void make_salt(u8 salt[16]) {
-    br_sha256_context ctx;
-    u8 digest[32];
-    u8 rtc[8];
-    u32 tick_sample = ticks;
-    for (int i = 0; i < 8; ++i) {
-        outb(0x70, (u8)i);
-        rtc[i] = inb(0x71);
-    }
-    entropy ^= ticks + (entropy << 7) + (entropy >> 3);
-    br_sha256_init(&ctx);
-    br_sha256_update(&ctx, &entropy, sizeof(entropy));
-    br_sha256_update(&ctx, &tick_sample, sizeof(tick_sample));
-    br_sha256_update(&ctx, rtc, sizeof(rtc));
-    br_sha256_update(&ctx, account.username, sizeof(account.username));
-    br_sha256_out(&ctx, digest);
-    memcpy(salt, digest, 16);
-    memset(digest, 0, sizeof(digest));
-}
-
-static int valid_username(const char *name) {
-    int length = 0;
-    while (name[length]) {
-        char c = name[length];
-        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-')) return 0;
-        ++length;
-    }
-    return length >= 2 && length <= 31;
-}
-
+static int load_account(void) { return account_load(&account); }
+static int valid_username(const char *name) { return account_valid_username(name); }
 static int create_account(void) {
-    memset(&account, 0, sizeof(account));
-    account.magic = ACCOUNT_MAGIC;
-    account.version = ACCOUNT_VERSION;
-    account.rounds = ACCOUNT_KDF_ROUNDS;
-    copy_text(account.username, input, sizeof(account.username));
-    make_salt(account.salt);
-    password_kdf(new_password, account.salt, account.rounds, account.password_hash);
-    vfs_mkdir("/etc");
-    vfs_mkdir("/home");
-    char home[64] = "/home/";
-    int at = 6;
-    for (int i = 0; account.username[i] && at + 1 < (int)sizeof(home); ++i) home[at++] = account.username[i];
-    home[at] = 0;
-    vfs_mkdir(home);
-    if (!write_all(ACCOUNT_PATH, &account, sizeof(account))) return 0;
-    const char marker[] = "PollikOS installation complete\n";
-    if (!write_all(INSTALL_MARKER, marker, sizeof(marker) - 1)) return 0;
-    serial("AUTH: account created; installation complete\n");
-    return 1;
+    unsigned long flags=hal_irq_save_disable();
+    int ok=account_create(&account,input,new_password);
+    hal_irq_restore(flags);
+    if(ok) serial("AUTH: account created; installation complete\n");
+    return ok;
 }
+static unsigned failures;
+static u32 retry_tick;
+static int password_change, logout_pending;
+static int admin_app=-1;
+static char old_password[64];
 
 void auth_init(void) {
     pointer_was_down = 0;
     clear_input();
-    memset(new_password, 0, sizeof(new_password));
+    account_wipe(new_password, sizeof(new_password));
     message[0] = 0;
 #ifdef POLLIK_INSTALL_MEDIA
     state = AUTH_FORMAT_WARNING;
@@ -187,9 +91,9 @@ void auth_init(void) {
     } else if (load_account() == 1) {
         state = AUTH_LOGIN;
         serial("AUTH: login required\n");
-    } else if (vfs_stat(ACCOUNT_PATH, &(vfs_stat_t){0}) == 0) {
-        state = AUTH_FORMAT_WARNING;
-        copy_text(message, "Account database is invalid; recovery format required", sizeof(message));
+    } else if (load_account() < 0) {
+        state = AUTH_LOGIN;
+        copy_text(message, "Account database unavailable; login denied", sizeof(message));
         serial("AUTH: invalid account database; login denied\n");
     } else {
         state = AUTH_SETUP_INTRO;
@@ -202,6 +106,8 @@ int auth_is_active(void) { return state != AUTH_UNLOCKED; }
 const char *auth_username(void) { return account.username[0] ? account.username : "User"; }
 
 void auth_lock(void) {
+    Credentials owner=security_user_credentials();
+    (void)security_session_request(&owner,SESSION_LOCKED);
     if (!account.username[0] && load_account() != 1) return;
     clear_input();
     pointer_was_down = 0;
@@ -210,6 +116,29 @@ void auth_lock(void) {
     serial("AUTH: session locked\n");
 }
 
+void auth_logout(void) {
+    admin_app=-1;
+    for(int id=0;id<APP_COUNT;id++) {
+        gui_app_closed(id);
+        wm_close(id);
+    }
+    app_clipboard_copy(0,0);
+    terminal_session_clear(); notes_session_clear();
+    password_change=0;
+    account_wipe(old_password,sizeof(old_password));
+    process_end_session(security_session_id()); security_session_end(); logout_pending=1;
+    auth_lock();
+}
+void auth_change_password(void) {
+    admin_app=-1;
+    password_change=1; account_wipe(old_password,sizeof(old_password)); auth_lock();
+    copy_text(message,"Enter your current password",sizeof(message));
+}
+void auth_run_admin(int app_id) {
+    if(!gui_app_get(app_id)||auth_is_active())return;
+    admin_app=app_id;auth_lock();
+    copy_text(message,"Administrator password. Esc cancels.",sizeof(message));
+}
 static void submit(void) {
     message[0] = 0;
     if (state == AUTH_SETUP_INTRO) {
@@ -234,39 +163,51 @@ static void submit(void) {
     } else if (state == AUTH_SETUP_CONFIRM) {
         if (memcmp(new_password, input, sizeof(new_password)) != 0) {
             copy_text(message, "Passwords do not match", sizeof(message));
-            memset(new_password, 0, sizeof(new_password));
+            account_wipe(new_password, sizeof(new_password));
             state = AUTH_SETUP_PASSWORD;
             clear_input();
             return;
         }
         copy_text(input, account.username, sizeof(input));
         input_len = (int)strlen(input);
-        if (!create_account()) {
+        unsigned long flags=hal_irq_save_disable();
+        int saved=password_change ? account_change(&account,old_password,new_password) : create_account();
+        hal_irq_restore(flags);
+        if (!saved) {
             copy_text(message, "Could not save the account to PollikFS", sizeof(message));
-            state = AUTH_SETUP_INTRO;
+            state = password_change ? AUTH_LOGIN : AUTH_SETUP_INTRO;
             clear_input();
             return;
         }
-        memset(new_password, 0, sizeof(new_password));
+        account_wipe(new_password, sizeof(new_password));
         clear_input();
 #ifdef POLLIK_INSTALL_MEDIA
         state = AUTH_INSTALL_COMPLETE;
         serial("INSTALL: complete; remove media and restart\n");
 #else
         state = AUTH_UNLOCKED;
+        if(password_change) { security_session_resume(); password_change=0; account_wipe(old_password,sizeof(old_password)); }
+        else security_session_begin(account.username);
         audio_play_sound(SOUND_LOGIN);
 #endif
     } else if (state == AUTH_LOGIN) {
-        u8 candidate[32];
-        password_kdf(input, account.salt, account.rounds, candidate);
-        int accepted = constant_equal(candidate, account.password_hash, sizeof(candidate));
-        memset(candidate, 0, sizeof(candidate));
+        if(retry_tick && (int)(ticks-retry_tick)<0) { copy_text(message,"Wait before trying again",sizeof(message)); return; }
+        unsigned long flags=hal_irq_save_disable();
+        int accepted = load_account()==1 && account_verify(&account,input);
+        if(accepted && password_change) copy_text(old_password,input,sizeof(old_password));
+        hal_irq_restore(flags);
         clear_input();
         if (accepted) {
+            failures=0; retry_tick=0;
+            if(password_change) { state=AUTH_SETUP_PASSWORD; return; }
+            if(logout_pending || security_session_state()==SESSION_NONE) { security_session_begin(account.username); logout_pending=0; }
+            else security_session_resume();
             state = AUTH_UNLOCKED;
+            if(admin_app>=0){int id=admin_app;admin_app=-1;gui_app_authorize_admin(id);app_host_open(id);serial("AUTH: administrator application authorized\n");}
             serial("AUTH: login accepted\n");
             audio_play_sound(SOUND_LOGIN);
         } else {
+            ++failures; retry_tick=ticks+120u*(failures>5?5:failures);
             copy_text(message, "Incorrect password", sizeof(message));
             serial("AUTH: login rejected\n");
         }
@@ -282,6 +223,11 @@ static void submit(void) {
         }
 #endif
         pollikfs_format();
+        if(!pollikfs_format_status()) {
+            state=AUTH_FORMAT_WARNING;
+            copy_text(message,"Formatting failed: I/O error or protected prefix",sizeof(message));
+            return;
+        }
         pollikfs_init();
         if (!pollikfs_mounted()) {
             state = AUTH_FORMAT_WARNING;
@@ -326,6 +272,7 @@ static void auth_insert(const char *text, int count) {
     message[0] = 0;
 }
 void auth_key_ex(u8 code, int shift, int control) {
+    if(code==1&&admin_app>=0){admin_app=-1;clear_input();security_session_resume();state=AUTH_UNLOCKED;message[0]=0;return;}
     static const char keys[128] = {
         [2]='1',[3]='2',[4]='3',[5]='4',[6]='5',[7]='6',[8]='7',[9]='8',[10]='9',[11]='0',
         [12]='-',[13]='=',[16]='q',[17]='w',[18]='e',[19]='r',[20]='t',[21]='y',[22]='u',[23]='i',
@@ -333,7 +280,7 @@ void auth_key_ex(u8 code, int shift, int control) {
         [36]='j',[37]='k',[38]='l',[39]=';',[40]='\'',[43]='\\',[44]='z',[45]='x',[46]='c',[47]='v',
         [48]='b',[49]='n',[50]='m',[51]=',',[52]='.',[53]='/',[57]=' '
     };
-    entropy ^= ((u32)code << 24) ^ ticks ^ (entropy << 5) ^ (entropy >> 2);
+    account_entropy_event(account_platform_time());
     if (code == 28) { submit(); return; }
     if (state == AUTH_SETUP_INTRO || state == AUTH_FORMAT_WARNING || state == AUTH_FORMAT_CONFIRM
 #ifdef POLLIK_INSTALL_MEDIA
@@ -543,7 +490,7 @@ void auth_render(int width, int height) {
     int show_field = 0, secret = 0;
     if (state == AUTH_SETUP_NAME) { title = "Create your account"; body = "Choose the name used to sign in"; show_field = 1; button = "Next"; }
     else if (state == AUTH_SETUP_PASSWORD) { title = "Protect your account"; body = "Choose a password with at least 6 characters"; show_field = 1; secret = 1; button = "Next"; }
-    else if (state == AUTH_SETUP_CONFIRM) { title = "Confirm your password"; body = "Enter the same password again"; show_field = 1; secret = 1; button = "Install"; }
+    else if (state == AUTH_SETUP_CONFIRM) { title = "Confirm your password"; body = "Enter the same password again"; show_field = 1; secret = 1; button = password_change ? "Change password" : "Install"; }
     else if (state == AUTH_LOGIN) { title = auth_username(); body = "Enter your password to continue"; show_field = 1; secret = 1; button = "Sign in"; }
     else if (state == AUTH_FORMAT_WARNING || state == AUTH_FORMAT_CONFIRM) {
 #ifdef POLLIK_INSTALL_MEDIA
@@ -615,7 +562,7 @@ void auth_render(int width, int height) {
  * plain pointer move never forces a full-screen repaint. The compositor draws
  * the cursor on its own cheap path, keeping login as smooth as the desktop. */
 int auth_pointer(int x, int y, int button_down) {
-    entropy ^= (u32)(x * 257 + y * 17) ^ ticks;
+    account_entropy_event(account_platform_time());
     int changed = 0;
     if (button_down && !pointer_was_down && secret_field_active &&
         x >= eye_x && x < eye_x + eye_w && y >= eye_y && y < eye_y + eye_h) {

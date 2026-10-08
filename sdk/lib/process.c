@@ -141,3 +141,7 @@ long pollikos_kill(long pid, int reason) {
 long pollikos_foreground(long pid) {
     return __pollikos_syscall1(USER_FOREGROUND, (uint64_t)pid);
 }
+
+long pollikos_spawn_rights(const char *path,const char *const argv[],const char *const envp[],unsigned rights) {
+    return __pollikos_syscall4(USER_SPAWN_RIGHTS,(uint64_t)(uintptr_t)path,(uint64_t)(uintptr_t)argv,(uint64_t)(uintptr_t)envp,rights);
+}

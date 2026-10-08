@@ -1,0 +1,59 @@
+name: Kernel and userspace
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      extended:
+        description: Run extended sessions, networking and console regressions
+        type: boolean
+        default: false
+  schedule:
+    - cron: '30 3 * * 1'
+permissions:
+  contents: read
+concurrency:
+  group: kernel-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  regression:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [i386, x86_64]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.11'
+      - name: Install runner toolchain
+        shell: pwsh
+        run: |
+          choco install nasm qemu llvm --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'Runner toolchain installation failed' }
+          python -m pip install pillow fonttools
+          if ($LASTEXITCODE -ne 0) { throw 'Python dependencies failed' }
+      - name: Build and run regressions
+        shell: pwsh
+        env:
+          EXTENDED: ${{ github.event_name == 'schedule' || inputs.extended }}
+        run: |
+          $env:PATH = "C:\Program Files\LLVM\bin;C:\Program Files\NASM;C:\Program Files\qemu;$env:PATH"
+          ./tools/ci.ps1 -Target '${{ matrix.target }}' -Extended:($env:EXTENDED -eq 'true')
+      - name: Preserve regression evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: regression-${{ matrix.target }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            build/ci/*.log
+            build/app-checkpoint.log
+            build/stage*.log
+            build/x86_64/**/*.log
+            build/x86_64/**/*.png

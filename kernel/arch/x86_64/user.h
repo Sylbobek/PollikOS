@@ -3,6 +3,8 @@
 #include "memory.h"
 #include "user_abi.h"
 #include "fpu.h"
+#include "../../security.h"
+#include "fd.h"
 _Static_assert(USER_CODE == MM_USER_START && USER_LIMIT == MM_USER_END, "shared user layout");
 _Static_assert(USER_MMAP_BASE < USER_MMAP_LIMIT && USER_MMAP_LIMIT <= USER_HEAP_BASE &&
                USER_HEAP_BASE < USER_HEAP_LIMIT && USER_HEAP_LIMIT < USER_STACK_BASE,
@@ -35,12 +37,11 @@ UserCopyResult copy_string_from_user64(const AddressSpace *space, char *destinat
                                       virt_addr_t source, size_t maximum);
 /* Tests effective permissions across every level, not just the leaf PTE. */
 VmResult vmm64_user_page(const AddressSpace *space, virt_addr_t address, unsigned required, Mapping *out);
-/* Combined process/thread state machine. At this checkpoint each process owns
- * exactly one embedded TCB, so the scheduler and syscall code compare both
- * process->state and thread->state against the same PROCESS_* values. */
-typedef enum { PROCESS_BUILDING, PROCESS_READY, PROCESS_RUNNING, PROCESS_BLOCKED,
-               PROCESS_EXITED, PROCESS_FAULTED, PROCESS_KILLED } Process64State;
-typedef Process64State Thread64State;
+/* Process lifetime and runnable thread state are distinct contracts. */
+typedef enum { PROCESS_BUILDING, PROCESS_ACTIVE, PROCESS_EXITED, PROCESS_FAULTED,
+               PROCESS_KILLED } Process64State;
+typedef enum { THREAD_BUILDING=32, THREAD_READY, THREAD_RUNNING, THREAD_BLOCKED,
+               THREAD_EXITED, THREAD_FAULTED, THREAD_KILLED } Thread64State;
 struct Process64;
 /* Scheduling state belongs to a thread. At this checkpoint each process owns
  * one embedded primary TCB; scheduler queues and CPU context store Thread64*. */
@@ -84,22 +85,9 @@ _Static_assert(sizeof(UserSignalAction64) == 32, "signal action ABI size");
 typedef struct Process64 {
     uint64_t pid;
     AddressSpace space;
-    union {
-        Thread64 thread;
-        struct {
-            uint64_t tid;
-            struct Process64 *owner;
-            GuardedStack kernel_stack, user_stack;
-            _Alignas(16) uint8_t fpu_state[FPU64_STATE_SIZE];
-            UserFrame frame;
-            Thread64State thread_state;
-            int thread_exit_status;
-            uint64_t ticks, dispatches, tick_limit;
-            unsigned managed, queued, kill_pending;
-            unsigned stopped, stop_pending;
-            uint64_t wake_tick;
-        };
-    };
+    Thread64 thread;
+    Credentials credentials;
+    uint64_t admin_spawn_session; /* One authenticated spawn; never a user-set credential. */
     Process64State state;
     int exit_status;
     size_t slot;
@@ -117,10 +105,7 @@ typedef struct Process64 {
     UserFrame signal_saved_frame;
     _Alignas(16) uint8_t signal_saved_fpu[FPU64_STATE_SIZE];
     unsigned signal_active;
-    uint8_t pipe_index[USER_FD_LIMIT];   /* PIPE64_NONE or pipe table slot */
-    uint8_t pipe_write[USER_FD_LIMIT];   /* 1 = write end for pipe_index[fd] */
-    uint8_t console_alias[USER_FD_LIMIT]; /* 0 default, else 1..3 = std stream */
-    uint8_t cloexec[USER_FD_LIMIT]; /* close-on-spawn flag per descriptor */
+    Descriptor64 fds[USER_FD_LIMIT];
     unsigned io_waiting;            /* suspended in a console or pipe transfer */
     uint8_t io_kind;                /* IO64_* transfer kind */
     uint8_t io_fd;                  /* descriptor of the blocked transfer */
@@ -130,11 +115,9 @@ typedef struct Process64 {
     virt_addr_t mmap_next; /* bump cursor inside the reserved mmap region */
     Mmap64Record mmap[USER_MMAP_MAX]; /* exact anonymous mapping ownership */
     char name[56]; /* owned diagnostic basename, PID remains identity */
-    struct vfs_file *files[USER_FD_LIMIT]; /* owned VFS objects, slots 3..127 */
-    uint8_t streams[3]; /* explicit standard stream backend kinds; zero means closed */
     char cwd[USER_PATH_MAX]; /* owned canonical absolute path; initially / */
 } Process64;
-_Static_assert(offsetof(Process64, fpu_state) % 16 == 0, "aligned FPU context");
+_Static_assert(offsetof(Process64, thread.fpu_state) % 16 == 0, "aligned FPU context");
 typedef struct {
     uint64_t pid;
     Process64State state;
@@ -144,6 +127,7 @@ typedef struct {
 } Process64Result;
 Process64 *process64_create(unsigned payload_mode, uint64_t private_value);
 int process64_destroy(Process64 *process);
+void process64_end_session(uint64_t session);
 int process64_reclaim(Process64 *process); /* heavy state -> waitable zombie */
 int process64_slots_full(void);
 size_t process64_capacity(void);

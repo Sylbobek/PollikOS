@@ -5,7 +5,10 @@ copy; save() writes it beside the target and replaces the original only after
 the complete image has been written. Superblock validation happens before any
 change, so unrelated or damaged images are refused rather than altered.
 """
+import os
 import struct
+import tempfile
+import zlib
 from pathlib import Path
 
 POLLIK2_MAGIC = 0x504B4632
@@ -23,6 +26,23 @@ NAME_CAPACITY = 55
 
 class PollikFsError(Exception):
     pass
+
+
+def require_clean_journal(data):
+    """Host writers never replay or discard the kernel's metadata redo log."""
+    if len(data) < START:
+        raise PollikFsError("image is too small for the journal prefix")
+    prefix = data[:START]
+    if not any(prefix):
+        return  # Legacy volume with an unused prefix; the kernel claims it.
+    magic, version, state, count, checksum = struct.unpack_from("<5I", prefix)
+    header = bytearray(prefix[:512])
+    struct.pack_into("<I", header, 16, 0)
+    if (magic != 0x314A4B50 or version != 1 or state > 1 or count > 31 or
+            zlib.crc32(header) != checksum or (state == 0 and count != 0)):
+        raise PollikFsError("corrupt or unknown journal prefix; refusing host writes")
+    if state:
+        raise PollikFsError("pending journal; boot the current kernel for recovery before host writes")
 
 
 def _pack_dirent(inode, name, file_type):
@@ -48,6 +68,7 @@ class PollikFsImage:
             raise PollikFsError("image is smaller than its superblock geometry")
         if self.bitmap_block == 0 or self.bitmap_count == 0 or self.inode_table_block == 0:
             raise PollikFsError("PollikFS superblock layout is not supported")
+        require_clean_journal(self.data)
 
     @classmethod
     def load(cls, path):
@@ -55,9 +76,26 @@ class PollikFsImage:
 
     def save(self, path):
         target = Path(path)
-        pending = target.with_name(target.name + ".pending")
-        pending.write_bytes(self.data)
-        pending.replace(target)
+        require_clean_journal(self.data)
+        if target.exists():
+            with target.open("rb") as current:
+                require_clean_journal(current.read(START))
+                if os.fstat(current.fileno()).st_size != len(self.data):
+                    raise PollikFsError("refusing to truncate or extend an existing image")
+        pending = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=target.parent, prefix=target.name + ".",
+                                             suffix=".pending", delete=False) as output:
+                pending = Path(output.name)
+                if output.write(self.data) != len(self.data):
+                    raise PollikFsError("short image write")
+                output.flush()
+                os.fsync(output.fileno())
+            pending.replace(target)
+            pending = None
+        finally:
+            if pending is not None:
+                pending.unlink(missing_ok=True)
 
     # -- bitmap ------------------------------------------------------------
     def _bitmap_bit(self, block):

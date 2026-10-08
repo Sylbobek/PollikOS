@@ -2,6 +2,9 @@
 #include "net_manager.h"
 #include "net_util.h"
 #include "../hal.h"
+#ifdef POLLIK_X64
+#include "../arch/x86_64/paging.h"
+#endif
 #ifndef POLLIK_X64
 #include "../mem.h"
 #endif
@@ -95,122 +98,143 @@ void tls_init(void) {
 }
 
 #ifdef POLLIK_X64
-static TlsSocket tls64;
+#define TLS64_BASE (MM_KERNEL_START+UINT64_C(0x3c000000))
+static unsigned tls_slots;
+_Static_assert(sizeof(TlsSocket)<=65536,"TLS context slot");
+static TlsSocket *tls_allocate(void) {
+    unsigned slot=0;while(slot<8 && (tls_slots&(1u<<slot))) ++slot;
+    if(slot==8) return 0;
+    uintptr_t base=TLS64_BASE+slot*65536;size_t pages=(sizeof(TlsSocket)+4095)/4096,mapped=0;
+    while(mapped<pages && vmm64_alloc_page(vmm64_kernel(),base+mapped*4096,VM_WRITE)==VM_OK) ++mapped;
+    if(mapped!=pages) { while(mapped) { --mapped;memory_require(vmm64_unmap(vmm64_kernel(),base+mapped*4096,1,0)==VM_OK,"TLS rollback"); }return 0; }
+    tls_slots|=1u<<slot;return (TlsSocket *)base;
+}
 
-int tls64_start(TcpSocket *tcp_sock, const char *hostname) {
+TlsSocket *tls64_start(TcpSocket *tcp_sock, const char *hostname) {
     if (!tcp_sock || !hostname || !hostname[0]) return 0;
-    memset(&tls64, 0, sizeof(tls64));
-    tls64.tcp_sock = tcp_sock;
-    tls64.started_ticks = ticks;
-    br_ssl_client_init_full(&tls64.sc, &tls64.xc, TRUST_ANCHORS, NUM_TRUST_ANCHORS);
-    br_ssl_engine_set_buffer(&tls64.sc.eng, tls64.iobuf, sizeof(tls64.iobuf), 1);
+    TlsSocket *tls_sock=tls_allocate();if(!tls_sock) return 0;
+    memset(tls_sock,0,sizeof(*tls_sock));
+    tls_sock->tcp_sock = tcp_sock;
+    tls_sock->started_ticks = ticks;
+    br_ssl_client_init_full(&tls_sock->sc, &tls_sock->xc, TRUST_ANCHORS, NUM_TRUST_ANCHORS);
+    br_ssl_engine_set_buffer(&tls_sock->sc.eng, tls_sock->iobuf, sizeof(tls_sock->iobuf), 1);
     unsigned char entropy[32];
     u32 days, seconds;
     if (!tls_platform_entropy(entropy) || !tls_platform_time(&days, &seconds)) {
         serial("TLS64: secure entropy or valid UTC RTC unavailable\n");
-        memset(&tls64, 0, sizeof(tls64));
+        tls64_abort(tls_sock);
         return 0;
     }
-    br_ssl_engine_inject_entropy(&tls64.sc.eng, entropy, sizeof(entropy));
+    br_ssl_engine_inject_entropy(&tls_sock->sc.eng, entropy, sizeof(entropy));
     memset(entropy, 0, sizeof(entropy));
-    br_x509_minimal_set_time(&tls64.xc, days, seconds);
-    br_ssl_engine_set_versions(&tls64.sc.eng, BR_TLS12, BR_TLS12);
+    br_x509_minimal_set_time(&tls_sock->xc, days, seconds);
+    br_ssl_engine_set_versions(&tls_sock->sc.eng, BR_TLS12, BR_TLS12);
     u8 dummy_ip[4];
-    const char *sni_name = net_parse_ip(hostname, dummy_ip) ? 0 : hostname;
-    if (!br_ssl_client_reset(&tls64.sc, sni_name, 0)) {
-        memset(&tls64, 0, sizeof(tls64));
+    /* BearSSL's DNS-name verifier does not implement IP SAN matching. Do not
+     * disable hostname validation to make numeric-IP HTTPS appear supported. */
+    if(net_parse_ip(hostname,dummy_ip)) { tls64_abort(tls_sock);return 0; }
+    const char *sni_name = hostname;
+    if (!br_ssl_client_reset(&tls_sock->sc, sni_name, 0)) {
+        tls64_abort(tls_sock);
         return 0;
     }
-    tls64.active = 1;
+    tls_sock->active = 1;
     serial("TLS64: certificate-validated handshake started\n");
-    return 1;
+    return tls_sock;
 }
 
-void tls64_poll(void) {
-    if (!tls64.active || tls64.failed || tls64.eof) return;
-    if (!tls64.ready && ticks - tls64.started_ticks > 3000u) {
+void tls64_poll(TlsSocket *tls_sock) {
+    if (!tls_sock || !tls_sock->active || tls_sock->failed || tls_sock->eof) return;
+    if (!tls_sock->ready && ticks - tls_sock->started_ticks > 3000u) {
         serial("TLS64: handshake timed out\n");
-        tls64.failed = 1;
+        tls_sock->failed = 1;
         return;
     }
     for (int budget = 0; budget < 8; ++budget) {
-        unsigned state = br_ssl_engine_current_state(&tls64.sc.eng);
+        unsigned state = br_ssl_engine_current_state(&tls_sock->sc.eng);
         if (state & BR_SSL_CLOSED) {
-            int error = br_ssl_engine_last_error(&tls64.sc.eng);
+            int error = br_ssl_engine_last_error(&tls_sock->sc.eng);
             if (error) {
                 char error_text[12]; number(error_text, (u32)error);
                 serial("TLS64: record processing failed, code="); serial(error_text); serial("\n");
-                tls64.failed = 1;
-            } else tls64.eof = 1;
+                tls_sock->failed = 1;
+            } else tls_sock->eof = 1;
             return;
         }
-        if ((state & BR_SSL_SENDAPP) && !tls64.ready) {
+        if ((state & BR_SSL_SENDAPP) && !tls_sock->ready) {
             serial("TLS64: certificate-validated handshake complete\n");
-            tls64.ready = 1;
+            tls_sock->ready = 1;
         }
         if ((state & BR_SSL_SENDREC) != 0) {
             size_t available = 0;
-            unsigned char *record = br_ssl_engine_sendrec_buf(&tls64.sc.eng, &available);
+            unsigned char *record = br_ssl_engine_sendrec_buf(&tls_sock->sc.eng, &available);
             if (!record || !available) return;
             int amount = (int)available;
             if (amount > 1460) amount = 1460;
-            int sent = tcp_send_nonblocking(tls64.tcp_sock, record, amount);
+            int sent = tcp_send_nonblocking(tls_sock->tcp_sock, record, amount);
             if (sent <= 0) {
                 /* SENDREC and RECVREC can be ready together. Keep draining
                  * inbound TLS records while TCP waits for the prior ACK. */
                 if (!(state & BR_SSL_RECVREC)) return;
             } else {
-                br_ssl_engine_sendrec_ack(&tls64.sc.eng, (size_t)sent);
+                br_ssl_engine_sendrec_ack(&tls_sock->sc.eng, (size_t)sent);
                 continue;
             }
         }
         if ((state & BR_SSL_RECVREC) != 0) {
             size_t available = 0;
-            unsigned char *record = br_ssl_engine_recvrec_buf(&tls64.sc.eng, &available);
+            unsigned char *record = br_ssl_engine_recvrec_buf(&tls_sock->sc.eng, &available);
             if (!record || !available) return;
             int amount = (int)available;
             if (amount > 1460) amount = 1460;
-            int received = tcp_read(tls64.tcp_sock, record, amount);
+            int received = tcp_read(tls_sock->tcp_sock, record, amount);
             if (received > 0) {
-                br_ssl_engine_recvrec_ack(&tls64.sc.eng, (size_t)received);
+                br_ssl_engine_recvrec_ack(&tls_sock->sc.eng, (size_t)received);
                 continue;
             }
-            if (tcp_has_error(tls64.tcp_sock) || tcp_is_eof(tls64.tcp_sock))
-                tls64.failed = 1;
+            if (tcp_has_error(tls_sock->tcp_sock) || tcp_is_eof(tls_sock->tcp_sock))
+                tls_sock->failed = 1;
             return;
         }
         return;
     }
 }
 
-int tls64_ready(void) { return tls64.active && tls64.ready && !tls64.failed; }
-int tls64_failed(void) { return tls64.failed; }
-int tls64_eof(void) { return tls64.eof; }
+int tls64_ready(TlsSocket *tls_sock) { return tls_sock && tls_sock->active && tls_sock->ready && !tls_sock->failed; }
+int tls64_failed(TlsSocket *tls_sock) { return !tls_sock || tls_sock->failed; }
+int tls64_eof(TlsSocket *tls_sock) { return tls_sock && tls_sock->eof; }
 
-int tls64_write(const u8 *data, int len) {
-    if (!tls64_ready() || !data || len <= 0) return 0;
+int tls64_write(TlsSocket *tls_sock,const u8 *data, int len) {
+    if (!tls64_ready(tls_sock) || !data || len <= 0) return 0;
     size_t available = 0;
-    unsigned char *buffer = br_ssl_engine_sendapp_buf(&tls64.sc.eng, &available);
+    unsigned char *buffer = br_ssl_engine_sendapp_buf(&tls_sock->sc.eng, &available);
     if (!buffer || !available) return 0;
     if ((size_t)len > available) len = (int)available;
     memcpy(buffer, data, (size_t)len);
-    br_ssl_engine_sendapp_ack(&tls64.sc.eng, (size_t)len);
-    br_ssl_engine_flush(&tls64.sc.eng, 0);
+    br_ssl_engine_sendapp_ack(&tls_sock->sc.eng, (size_t)len);
+    br_ssl_engine_flush(&tls_sock->sc.eng, 0);
     return len;
 }
 
-int tls64_read(u8 *buf, int max_len) {
-    if (!tls64_ready() || !buf || max_len <= 0) return 0;
+int tls64_read(TlsSocket *tls_sock,u8 *buf, int max_len) {
+    if (!tls64_ready(tls_sock) || !buf || max_len <= 0) return 0;
     size_t available = 0;
-    unsigned char *buffer = br_ssl_engine_recvapp_buf(&tls64.sc.eng, &available);
+    unsigned char *buffer = br_ssl_engine_recvapp_buf(&tls_sock->sc.eng, &available);
     if (!buffer || !available) return 0;
     if ((size_t)max_len > available) max_len = (int)available;
     memcpy(buf, buffer, (size_t)max_len);
-    br_ssl_engine_recvapp_ack(&tls64.sc.eng, (size_t)max_len);
+    br_ssl_engine_recvapp_ack(&tls_sock->sc.eng, (size_t)max_len);
     return max_len;
 }
 
-void tls64_abort(void) { memset(&tls64, 0, sizeof(tls64)); }
+void tls64_abort(TlsSocket *tls_sock) {
+    if(!tls_sock) return;
+    uintptr_t base=(uintptr_t)tls_sock;unsigned slot=(unsigned)((base-TLS64_BASE)/65536);
+    memory_require(slot<8 && (tls_slots&(1u<<slot)),"TLS context owner");
+    memset(tls_sock,0,sizeof(*tls_sock));
+    for(size_t i=0;i<(sizeof(*tls_sock)+4095)/4096;i++) memory_require(vmm64_unmap(vmm64_kernel(),base+i*4096,1,0)==VM_OK,"TLS cleanup");
+    tls_slots&=~(1u<<slot);
+}
 
 #else
 TlsSocket *tls_connect(TcpSocket *tcp_sock, const char *hostname, int timeout_ticks) {
