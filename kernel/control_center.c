@@ -93,10 +93,10 @@ int control_center_poll(unsigned now){
 static void label(int x,int y,const char *s,u32 color){ui_bridge_text(left()+x,top()+y,s,color,2);}
 static u32 panel_color(void){ThemeColors *t=ui_theme();return blend(t->surface_elevated,t->accent,6);}
 static u32 card_color(void){return blend(panel_color(),ui_theme()->surface_secondary,160);}
-static void panel(int x,int y,int w,int h,int radius){
-    ui_bridge_roundrect(x,y,w,h,radius,panel_color());
+static void panel(int slot,int x,int y,int w,int h,int radius){
+    ui_bridge_glass(slot,x,y,w,h,radius,panel_color(),160);
 }
-static void card(int y,int h){ui_bridge_roundrect(left()+16,top()+y,WIDTH-32,h,16,card_color());}
+static void card(int y,int h){ui_bridge_rounded(left()+16,top()+y,WIDTH-32,h,16,card_color(),136);}
 static void slider(int y,int value,int minimum){
     ThemeColors *t=ui_theme();int x=left()+30,w=WIDTH-60;
     int offset=(w-1)*(value-minimum)/(100-minimum);
@@ -110,7 +110,7 @@ static void detail_draw(GraphicsClip clip){
     int x=detail_left(),y=top()+detail_top(kind)+(256-cc_detail_slide)*8/256;
     int h=detail_height(kind)*cc_detail_slide/256;
     if(h<8)return;
-    panel(x,y,w,h,h<44?h/2:22);
+    panel(UI_GLASS_DETAIL,x,y,w,h,h<44?h/2:22);
     GraphicsClip inner=clip;
     if(inner.x1<x+12)inner.x1=x+12;if(inner.x2>x+w-12)inner.x2=x+w-12;
     if(inner.y1<y+12)inner.y1=y+12;if(inner.y2>y+h-12)inner.y2=y+h-12;
@@ -143,7 +143,7 @@ void control_center_draw(void){
     GraphicsClip old=graphics_get_clip(),clip=old;if(clip.y1<32)clip.y1=32;graphics_set_clip(clip);
     ThemeColors *t=ui_theme();int x=left(),y=top();
     int sx=search_left(),row=0;
-    panel(sx,y,SEARCH_WIDTH,SEARCH_HEIGHT,22);
+    panel(UI_GLASS_LAUNCHER,sx,y,SEARCH_WIDTH,SEARCH_HEIGHT,22);
     ui_bridge_text(sx+16,y+14,"Applications",t->text,2);
     ui_bridge_roundrect(sx+12,y+48,SEARCH_WIDTH-24,36,12,card_color());
     ui_bridge_rect(sx+12,y+82,SEARCH_WIDTH-24,cc_search_focus?2:1,cc_search_focus?t->accent:t->border);
@@ -168,7 +168,7 @@ void control_center_draw(void){
         row++;
     }
     if(!row&&cc_query[0])ui_bridge_text(sx+20,y+125,"No applications",t->text_muted,1);
-    panel(x,y,WIDTH,HEIGHT,24);
+    panel(UI_GLASS_CONTROL,x,y,WIDTH,HEIGHT,24);
     for(int i=0;i<2;i++){
         ui_bridge_roundrect(x+16+i*184,y+18,176,70,16,blend(card_color(),t->accent,cc_list==i+1?36:cc_hot==i+1?18:0));
         label(30+i*184,28,i?"Bluetooth":"Wi-Fi",t->text);
@@ -186,7 +186,7 @@ void control_center_draw(void){
     card(392,40);avatar(x+28,y+400,t->text_secondary);label(64,402,"Profile",t->text);
     detail_draw(clip);
     if(cc_context>=0){int mx=context_left(),my=y+context_top();
-        panel(mx,my,236,120,16);
+        panel(UI_GLASS_CONTEXT,mx,my,236,120,16);
         const char *actions[]={"Open","Run as admin",cc_pins&(1u<<cc_context)?"Unpin":"Pin to recommended"};
         for(int i=0;i<3;i++){ui_bridge_roundrect(mx+8,my+8+i*36,220,32,10,card_color());ui_bridge_text(mx+20,my+15+i*36,actions[i],t->text,1);}
     }

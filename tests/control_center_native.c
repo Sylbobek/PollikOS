@@ -46,6 +46,7 @@ static void rectangle(int x,int y,int w,int h){(void)y;CHECK(x>=0&&x+w<=1024&&w>
 void ui_bridge_roundrect(int x,int y,int w,int h,int r,u32 c){(void)r;(void)c;rectangle(x,y,w,h);}
 void ui_bridge_roundrect_stroke(int x,int y,int w,int h,int r,int t,u32 c,u32 f){(void)t;(void)f;ui_bridge_roundrect(x,y,w,h,r,c);}
 void ui_bridge_rounded(int x,int y,int w,int h,int r,u32 c,int a){(void)a;ui_bridge_roundrect(x,y,w,h,r,c);}
+void ui_bridge_glass(int slot,int x,int y,int w,int h,int r,u32 c,int a){(void)slot;(void)a;ui_bridge_roundrect(x,y,w,h,r,c);}
 void ui_bridge_text(int x,int y,const char *s,u32 c,int scale){(void)y;(void)c;(void)s;CHECK(x>=0&&x<1024&&(scale==1||scale==2));}
 void ui_dialog_message(const char *a,const char *b,IconKind c,void (*callback)(int)){(void)a;(void)b;(void)c;(void)callback;dialogs++;}
 static void advance(unsigned ms){clock_ms+=ms;control_center_poll(clock_ms);}
@@ -99,6 +100,9 @@ int main(void){
     CHECK(app_at(0)==-1);control_center_key_ex(30,0,1);control_center_key(33);control_center_key(23);
     control_center_click(search_left()+SEARCH_WIDTH-16,top()+124);CHECK(cc_context==APP_FILES);
     CHECK(context_left()>search_left()+SEARCH_WIDTH&&!cc_detail_kind&&!cc_detail_slide);
+    control_center_click(left()+30,top()+40);CHECK(cc_context==-1&&cc_list==1);settle();
+    control_center_click(search_left()+SEARCH_WIDTH-16,top()+124);
+    CHECK(cc_context==APP_FILES&&!cc_list&&!cc_detail_kind&&!cc_detail_slide);
     control_center_click(context_left()+20,top()+context_top()+96);CHECK(saved_pins==(1u<<APP_FILES));
     control_center_close();control_center_toggle();settle();
     CHECK(app_at(0)==APP_FILES);control_center_click(search_left()+SEARCH_WIDTH-16,top()+124);

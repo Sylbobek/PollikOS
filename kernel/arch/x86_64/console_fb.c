@@ -15,6 +15,7 @@ static volatile uint8_t *pixels;
 static unsigned width, height, byte_pitch, bytes_per_pixel, columns, rows, cx, cy;
 static int ready, esc_state, esc_value;
 static int mouse_visible, mouse_drawn, mouse_x, mouse_y;
+static unsigned mouse_suspend;
 static uint8_t mouse_under[16][12][4];
 #define ELEVATION_BASE (MM_KERNEL_START+UINT64_C(0x34000000))
 static u32 *elevation_original,*elevation_blur;
@@ -41,7 +42,7 @@ static void mouse_erase(void) {
     mouse_drawn=0;
 }
 static void mouse_draw(void) {
-    if (!ready || !mouse_visible || mouse_drawn) return;
+    if (!ready || !mouse_visible || mouse_drawn || mouse_suspend) return;
     for (unsigned y=0; y<16; ++y) for (unsigned x=0; x<12; ++x) {
         unsigned px=(unsigned)mouse_x+x, py=(unsigned)mouse_y+y;
         if (px>=width || py>=height) continue;
@@ -109,7 +110,7 @@ static void ansi(uint8_t final) {
 }
 void console_fb_write(const char *data, size_t length) {
     if (!ready) return;
-    mouse_erase();
+    console_fb_overlay_begin();
     window64_console_begin();
     for (size_t i=0;i<length;i++) {
         uint8_t ch=(uint8_t)data[i];
@@ -128,7 +129,7 @@ void console_fb_write(const char *data, size_t length) {
         if (++cx>=columns) newline();
     }
     window64_console_end();
-    mouse_draw();
+    console_fb_overlay_end();
 }
 void console_fb_mouse_enable(void) { mouse_visible=1; mouse_draw(); }
 void console_fb_mouse_move(int x, int y) {
@@ -143,45 +144,50 @@ unsigned console_fb_width(void) { return width; }
 unsigned console_fb_height(void) { return height; }
 unsigned console_fb_pitch(void) { return ready?byte_pitch:0; }
 unsigned console_fb_bpp(void) { return ready?bytes_per_pixel*8:0; }
-void console_fb_overlay_begin(void) { mouse_erase(); }
-void console_fb_overlay_end(void) { mouse_draw(); }
+void console_fb_overlay_begin(void) { mouse_suspend++;mouse_erase(); }
+void console_fb_overlay_end(void) { if(mouse_suspend)mouse_suspend--;mouse_draw(); }
 int console_fb_read_pixels(unsigned x, unsigned y, unsigned count, uint32_t *out) {
     if (!ready || !out || y>=height || x>width || count>width-x) return 0;
     for (unsigned i=0;i<count;i++) {
         volatile uint8_t *p=pixels+y*byte_pitch+(x+i)*bytes_per_pixel;
-        out[i]=(uint32_t)p[2]<<16|(uint32_t)p[1]<<8|p[0];
+        out[i]=bytes_per_pixel==4?(*(volatile uint32_t *)p&0xffffffu):(uint32_t)p[2]<<16|(uint32_t)p[1]<<8|p[0];
     }
     return 1;
 }
 int console_fb_write_pixels(unsigned x, unsigned y, unsigned count, const uint32_t *in) {
     if (!ready || !in || y>=height || x>width || count>width-x) return 0;
-    for (unsigned i=0;i<count;i++) put_pixel(x+i,y,in[i]);
+    if(bytes_per_pixel==4){volatile u32 *dst=(volatile u32 *)(pixels+y*byte_pitch+x*4);for(unsigned i=0;i<count;i++)dst[i]=in[i]&0xffffffu;}
+    else for (unsigned i=0;i<count;i++) put_pixel(x+i,y,in[i]);
     return 1;
 }
 void console_fb_elevation_capture(void){
     if(!ready||width<400||height<440||elevation_pages)return;
     elevation_sw=(width+1)/2;elevation_sh=(height+1)/2;
     uint64_t original_pages=((uint64_t)width*height*4+4095)/4096;
-    uint64_t blur_pages=((uint64_t)elevation_sw*elevation_sh*4+4095)/4096;
-    uint64_t total=original_pages+2*blur_pages,mapped=0;
+    uint64_t total=original_pages*2,mapped=0;
     if(total*4096>UINT64_C(0x04000000))return;
     while(mapped<total&&vmm64_alloc_page(vmm64_kernel(),ELEVATION_BASE+mapped*4096,VM_WRITE)==VM_OK)mapped++;
     if(mapped!=total){while(mapped){mapped--;memory_require(vmm64_unmap(vmm64_kernel(),ELEVATION_BASE+mapped*4096,1,0)==VM_OK,"elevation backdrop rollback");}return;}
     elevation_original=(u32 *)(uintptr_t)ELEVATION_BASE;
     elevation_blur=(u32 *)(uintptr_t)(ELEVATION_BASE+original_pages*4096);
-    u32 *scratch=(u32 *)(uintptr_t)(ELEVATION_BASE+(original_pages+blur_pages)*4096);
-    mouse_erase();
+    console_fb_overlay_begin();
     for(unsigned y=0;y<height;y++)console_fb_read_pixels(0,y,width,elevation_original+y*width);
     for(unsigned y=0;y<elevation_sh;y++)for(unsigned x=0;x<elevation_sw;x++)elevation_blur[y*elevation_sw+x]=elevation_original[(y*2)*width+x*2];
-    pollik_box_blur(elevation_blur,scratch,(int)elevation_sw,(int)elevation_sh,1);
-    account_wipe(scratch,(size_t)blur_pages*4096);
-    for(uint64_t i=original_pages+blur_pages;i<total;i++)memory_require(vmm64_unmap(vmm64_kernel(),ELEVATION_BASE+i*4096,1,0)==VM_OK,"elevation scratch cleanup");
-    elevation_pages=(unsigned)(original_pages+blur_pages);mouse_draw();
+    pollik_box_blur(elevation_blur,elevation_original,(int)elevation_sw,(int)elevation_sh,1);
+    /* Expand from the last pixel: source samples stay intact until consumed.
+     * Original is scratch here; save_background repopulates it after hiding. */
+    for(int y=(int)height-1;y>=0;y--)for(int x=(int)width-1;x>=0;x--){
+        unsigned sx=(unsigned)x/2,sy=(unsigned)y/2,nx=sx+1<elevation_sw?sx+1:sx,ny=sy+1<elevation_sh?sy+1:sy;
+        u32 a=pollik_color_mix(elevation_blur[sy*elevation_sw+sx],elevation_blur[sy*elevation_sw+nx],(x&1)*128);
+        u32 b=pollik_color_mix(elevation_blur[ny*elevation_sw+sx],elevation_blur[ny*elevation_sw+nx],(x&1)*128);
+        elevation_blur[(unsigned)y*width+(unsigned)x]=pollik_color_mix(pollik_color_mix(a,b,(y&1)*128),0x100b20,112);
+    }
+    elevation_pages=(unsigned)total;console_fb_overlay_end();
 }
 void console_fb_elevation_save_background(void){
-    if(!elevation_original)return;mouse_erase();
+    if(!elevation_original)return;console_fb_overlay_begin();
     for(unsigned y=0;y<height;y++)console_fb_read_pixels(0,y,width,elevation_original+y*width);
-    mouse_draw();
+    console_fb_overlay_end();
 }
 static void elevation_round(int x,int y,int w,int h,int radius,u32 color){
     for(int row=0;row<h;row++){
@@ -199,14 +205,9 @@ static void elevation_center(int y,const char *s,u32 color){
     shown[n]=0;elevation_text(((int)width-w)/2,y,shown,color);
 }
 void console_fb_elevation_draw(const char *application,unsigned length,int error,int caret){
-    if(!ready||width<400||height<440)return;mouse_erase();
+    if(!ready||width<400||height<440)return;console_fb_overlay_begin();
     if(elevation_blur){
-        for(unsigned y=0;y<height;y++)for(unsigned x=0;x<width;x++){
-            unsigned sx=x/2,sy=y/2,nx=sx+1<elevation_sw?sx+1:sx,ny=sy+1<elevation_sh?sy+1:sy;
-            u32 a=pollik_color_mix(elevation_blur[sy*elevation_sw+sx],elevation_blur[sy*elevation_sw+nx],(x&1)*128);
-            u32 b=pollik_color_mix(elevation_blur[ny*elevation_sw+sx],elevation_blur[ny*elevation_sw+nx],(x&1)*128);
-            put_pixel(x,y,pollik_color_mix(pollik_color_mix(a,b,(y&1)*128),0x100b20,112));
-        }
+        for(unsigned y=0;y<height;y++)console_fb_write_pixels(0,y,width,elevation_blur+y*width);
     }else fill(0,0,width,height,0x171b2b);
     int fy=(int)height*2/5+34,fx=((int)width-352)/2;
     elevation_center(fy-204,application,0xffffff);elevation_center(fy-172,"Run as administrator",0xe1d6f5);
@@ -222,7 +223,7 @@ void console_fb_elevation_draw(const char *application,unsigned length,int error
     if(caret)fill((unsigned)(fx+12+elevation_text_width(masked)),(unsigned)(fy+10),2,22,0xffffff);
     if(error)elevation_center(fy+62,"Incorrect password",0xffcad8);
     elevation_round((int)width/2-90,fy+112,180,42,14,0x494357);elevation_center(fy+125,"Cancel",0xffffff);
-    mouse_draw();
+    console_fb_overlay_end();
 }
 int console_fb_elevation_button(int x,int y){
     if(!ready||width<400||height<440)return 0;
@@ -231,11 +232,11 @@ int console_fb_elevation_button(int x,int y){
     if(x>=fx+308&&x<fx+352&&y>=fy&&y<fy+42)return 2;return 0;
 }
 void console_fb_elevation_end(void){
-    mouse_erase();if(!elevation_pages){fill(0,0,width,height,0x11131a);mouse_draw();return;}
+    console_fb_overlay_begin();if(!elevation_pages){fill(0,0,width,height,0x11131a);console_fb_overlay_end();return;}
     for(unsigned y=0;y<height;y++)console_fb_write_pixels(0,y,width,elevation_original+y*width);
     account_wipe(elevation_original,(size_t)elevation_pages*4096);
     for(unsigned i=0;i<elevation_pages;i++)memory_require(vmm64_unmap(vmm64_kernel(),ELEVATION_BASE+(uint64_t)i*4096,1,0)==VM_OK,"elevation backdrop cleanup");
-    elevation_original=elevation_blur=0;elevation_pages=0;mouse_draw();
+    elevation_original=elevation_blur=0;elevation_pages=0;console_fb_overlay_end();
 }
 void console_fb_draw_window_frame(unsigned x, unsigned y, unsigned w, unsigned h,
                                   const char *title) {

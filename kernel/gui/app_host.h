@@ -15,6 +15,8 @@ void ui_bridge_roundrect(int x, int y, int w, int h, int r, u32 color);
 void ui_bridge_roundrect_border(int x, int y, int w, int h, int r, int t, u32 color);
 void ui_bridge_roundrect_stroke(int x, int y, int w, int h, int r, int t, u32 stroke, u32 fill);
 void ui_bridge_rounded(int x, int y, int w, int h, int r, u32 color, int opacity);
+enum { UI_GLASS_WELCOME,UI_GLASS_CONTROL,UI_GLASS_LAUNCHER,UI_GLASS_DETAIL,UI_GLASS_CONTEXT,UI_GLASS_COUNT };
+void ui_bridge_glass(int slot,int x,int y,int w,int h,int radius,u32 tint,int opacity);
 void ui_bridge_blit_rgba(int x, int y, int w, int h, const u8 *rgba, int sw, int sh);
 void ui_bridge_text(int x, int y, const char *s, u32 color, int scale);
 void app_draw_centered(int x, int y, int w, const char *s, u32 color, int scale);

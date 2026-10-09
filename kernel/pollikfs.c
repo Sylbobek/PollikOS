@@ -1363,6 +1363,7 @@ static int mutate_rename_replace(const char *oldpath, const char *newpath) {
 }
 
 u32 pollikfs_free_blocks(void) { return g_fs_mounted ? g_sb.free_blocks : 0; }
+u32 pollikfs_capacity_blocks(void) { return g_fs_mounted ? g_sb.total_blocks-g_sb.data_blocks_start : 0; }
 u32 pollikfs_free_inodes(void) { return g_fs_mounted ? g_sb.free_inodes : 0; }
 
 static PollikSuperblock transaction_before;

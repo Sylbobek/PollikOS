@@ -7,6 +7,15 @@ static u32 *draw_target;
 static int draw_target_w = 1024, draw_target_h = 768, draw_target_stride = 1024;
 static int screen_w = 1024, screen_h = 768;
 static GraphicsClip draw_clip = {0, 0, 1024, 768};
+static int alpha_surface;
+void graphics_set_alpha_surface(int enabled){alpha_surface=enabled!=0;}
+static u32 paint_color(u32 c){return alpha_surface?(c|0xff000000u):c;}
+static u32 paint_blend(u32 bg,u32 color,int opacity){
+    u32 rgb=blend(bg,color,opacity);
+    if(!alpha_surface)return rgb;
+    unsigned alpha=opacity+(((bg>>24)*(256-opacity))>>8);if(alpha>255)alpha=255;
+    return rgb|(alpha<<24);
+}
 /* All UI radii through the 29px dock, packed as sum(r*r), in BSS. */
 #define CORNER_CACHE_MAX 29
 static u8 corner_cache[8555];
@@ -52,6 +61,7 @@ void graphics_set_clip(GraphicsClip clip) {
     draw_clip = clip;
 }
 void set_draw_target(u32 *buf, int w, int h, int stride) {
+    alpha_surface=0;
     draw_target = buf;
     draw_target_w = w; draw_target_h = h; draw_target_stride = stride;
     draw_clip = (GraphicsClip){0, 0, w, h};
@@ -73,6 +83,7 @@ void app_host_blit(int x, int y, const u32 *src, int w, int h, int stride, u32 c
                      src+(sy+j)*stride+sx, (u32)w);
 }
 void rect(int x, int y, int w, int h, u32 c) {
+    c=paint_color(c);
     if (x < draw_clip.x1) { w -= draw_clip.x1 - x; x = draw_clip.x1; }
     if (y < draw_clip.y1) { h -= draw_clip.y1 - y; y = draw_clip.y1; }
     if (x + w > draw_clip.x2) w = draw_clip.x2 - x;
@@ -100,6 +111,18 @@ void rounded(int x, int y, int w, int h, int r, u32 c, int opacity) {
     if (opacity >= 256) { roundrect(x, y, w, h, r, c); return; }
     if (r > w / 2) r = w / 2;
     if (r > h / 2) r = h / 2;
+    if(alpha_surface){
+        int x1=x>draw_clip.x1?x:draw_clip.x1,x2=x+w<draw_clip.x2?x+w:draw_clip.x2;
+        int y1=y>draw_clip.y1?y:draw_clip.y1,y2=y+h<draw_clip.y2?y+h:draw_clip.y2;
+        for(int yy=y1;yy<y2;yy++)for(int xx=x1;xx<x2;xx++){
+            int cx=xx-x,cy=yy-y;
+            if(cx>=w-r)cx=w-1-cx;if(cy>=h-r)cy=h-1-cy;
+            int coverage=graphics_corner_coverage(r,cx,cy);
+            u32 *p=&draw_target[yy*draw_target_stride+xx];
+            *p=paint_blend(*p,c,opacity*coverage/64);
+        }
+        return;
+    }
     int inv = 256 - opacity;
     int cr = ((c >> 16) & 255) * opacity;
     int cg = ((c >> 8) & 255) * opacity;
@@ -161,6 +184,7 @@ void rounded(int x, int y, int w, int h, int r, u32 c, int opacity) {
     }
 }
 void roundrect_slice(int x, int y, int w, int h, int r, u32 c, int j_start, int j_end) {
+    c=paint_color(c);
     if (w <= 0 || h <= 0) return;
     if (r > w / 2) r = w / 2;
     if (r > h / 2) r = h / 2;
@@ -194,7 +218,7 @@ void roundrect_slice(int x, int y, int w, int h, int r, u32 c, int j_start, int 
             int coverage = graphics_corner_coverage(r, i, cj);
             if (coverage) {
                 u32 *p = &draw_target[yy * draw_target_stride + xx];
-                *p = coverage == 64 ? c : blend(*p, c, coverage * 4);
+                *p = coverage == 64 ? c : paint_blend(*p, c, coverage * 4);
             }
         }
         int mid_start = x + r, mid_end = x + w - r;
@@ -212,7 +236,7 @@ void roundrect_slice(int x, int y, int w, int h, int r, u32 c, int j_start, int 
             int coverage = graphics_corner_coverage(r, ci, cj);
             if (coverage) {
                 u32 *p = &draw_target[yy * draw_target_stride + xx];
-                *p = coverage == 64 ? c : blend(*p, c, coverage * 4);
+                *p = coverage == 64 ? c : paint_blend(*p, c, coverage * 4);
             }
         }
     }
@@ -285,10 +309,10 @@ static void letter(int x, int y, u8 c, u32 color, int scale) {
             int index = j * g->width + i;
             u8 packed = font_coverage[g->offset + index / 2];
             int coverage = (index & 1) ? packed & 15 : packed >> 4;
-            if (coverage == 15) draw_target[yy * draw_target_stride + xx] = color;
+            if (coverage == 15) draw_target[yy * draw_target_stride + xx] = paint_color(color);
             else if (coverage) {
                 u32 *p = &draw_target[yy * draw_target_stride + xx];
-                *p = blend(*p, color, font_scale_table[coverage]);
+                *p = paint_blend(*p, color, font_scale_table[coverage]);
             }
         }
     }

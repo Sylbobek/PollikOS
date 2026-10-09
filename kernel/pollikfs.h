@@ -87,6 +87,7 @@ void pollikfs_access_denied(void);
 void pollikfs_range_denied(void);
 /* Filesystem resource accounting for tests and diagnostics. */
 u32 pollikfs_free_blocks(void);
+u32 pollikfs_capacity_blocks(void);
 u32 pollikfs_free_inodes(void);
 #ifdef SELFTEST
 void pollikfs_fail_after(long long successful_allocations); /* -1 disables */

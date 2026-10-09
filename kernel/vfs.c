@@ -10,7 +10,7 @@ static int path_access(const char *path,unsigned access) {
 static int file_access(const vfs_file_t *file,unsigned access) {
     const Credentials *c=security_current();
     unsigned rights=(access&ACCESS_READ?CAP_FILE_READ:0)|(access&ACCESS_WRITE?CAP_FILE_WRITE:0);
-    if(security_has(c,rights) && (!c->uid || (file->user_access&access)==access)) return 1;
+    if(security_has(c,rights) && (!c->uid || (c->capabilities&CAP_ADMIN) || (file->user_access&access)==access)) return 1;
     pollikfs_access_denied(); return 0;
 }
 

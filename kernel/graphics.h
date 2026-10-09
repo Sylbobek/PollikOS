@@ -11,6 +11,8 @@ int graphics_corner_coverage(int radius, int x, int y);
 /* Selecting a target resets its scissor to the complete target. Save/restore
  * the caller's clip explicitly around temporary client-cache targets. */
 void set_draw_target(u32 *buffer, int width, int height, int stride);
+/* Cached translucent clients use premultiplied ARGB; ordinary targets use RGB. */
+void graphics_set_alpha_surface(int enabled);
 GraphicsClip graphics_get_clip(void);
 void graphics_set_clip(GraphicsClip clip);
 void rect(int x, int y, int w, int h, u32 color);

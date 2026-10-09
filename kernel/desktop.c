@@ -23,7 +23,7 @@
 #include "../common/app_search.h"
 
 static int desktop_ready;
-void app_host_capture_admin_background(void){compositor_paint(1);compositor_capture_admin_background();}
+void app_host_capture_admin_background(void){compositor_paint(2);compositor_capture_admin_background();}
 unsigned app_host_launcher_pins(void){
     char text[24]={0};int fd=vfs_open("/home/.config/launcher.conf",O_RDONLY);if(fd<0)return APP_SEARCH_DEFAULT_PINS;
     int n=vfs_read(fd,text,sizeof(text)-1);vfs_close(fd);if(n<=0)return 0;return app_search_parse_pins(text);

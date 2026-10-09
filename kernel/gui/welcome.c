@@ -74,9 +74,7 @@ void welcome_render(int width, int height, int active) {
     if (height >= 340 && card_w > 80) {
         for (int k = 0; k < 3; k++) {
             int x = 32 + k * (card_w + 8);
-            roundrect(x + 2, card_y + 3, card_w, card_h, UI_RADIUS_LARGE,
-                      dark ? 0x0d0f17 : 0xe2dcee);
-            roundrect(x, card_y, card_w, card_h, UI_RADIUS_LARGE, card_bg);
+            rounded(x, card_y, card_w, card_h, UI_RADIUS_LARGE, card_bg, 112);
             centered(x, card_y + 10, card_w, titles[k], card_title_col,
                      sys_text_width(titles[k], 2) <= card_w - 16 ? 2 : 1);
             app_text_box((AppRect){x + 8, card_y + 34, card_w - 16, 28}, details[k],

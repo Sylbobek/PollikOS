@@ -30,6 +30,7 @@
 #define ESC "\x1b"
 
 static int last_status;
+static int administrator;
 
 /* ------------------------------------------------------------------ output */
 static void emit(const char *data, size_t length) {
@@ -211,35 +212,10 @@ static int builtin_history(int argc, const char *const *argv) {
         printf("%4d  %s\n", index + 1, history_at(index));
     return 0;
 }
-static int builtin_help(int argc, const char *const *argv) {
-    (void)argc; (void)argv;
-    line_out("PollikOS shell builtins:");
-    line_out("  lock / logout / passwd   session and password controls");
-    line_out("  cd [dir]        change directory (no argument: /)");
-    line_out("  pwd             print the working directory");
-    line_out("  ls | dir [dir]  list directory entries ('/' marks directories)");
-    line_out("  cat | type FILE print file contents");
-    line_out("  mkdir DIR       create a directory");
-    line_out("  rm | del FILE   remove a file");
-    line_out("  rmdir DIR       remove an empty directory");
-    line_out("  mv | rename A B rename or move a path");
-    line_out("  touch FILE      create an empty file");
-    line_out("  echo ARGS       print arguments ($? and $NAME expand)");
-    line_out("  calc EXPR       arithmetic, parentheses, sqrt/abs/min/max, ^ and %");
-    line_out("  history [-c]    list or clear session history");
-    line_out("  env | set       list the environment; set NAME=VALUE adds one");
-    line_out("  status          print the last command exit status");
-    line_out("  clear | cls     clear the screen and scrollback");
-    line_out("  help            this text");
-    line_out("  exit [code]     leave the shell");
-    line_out("Pipelines and redirection (operators need spaces):");
-    line_out("  cmd1 | cmd2     pipe stdout into stdin");
-    line_out("  cmd < in        read stdin from a file");
-    line_out("  cmd > out       write stdout to a file");
-    line_out("  cmd >> out      append stdout to a file");
-    line_out("Anything else runs /bin, PATH, ./ or /absolute programs.");
-    return 0;
-}
+static int builtin_help(int argc,const char *const *argv);
+static int builtin_commands(int argc,const char *const *argv);
+static int builtin_which(int argc,const char *const *argv);
+static int resolve_program(const char *name,char *path,size_t capacity);
 static int builtin_ls(int argc, const char *const *argv) {
     const char *path = argc > 1 ? argv[1] : ".";
     DIR *directory = opendir(path);
@@ -360,6 +336,9 @@ static int run_external(const char *const *argv) {
     const char *command = argv[0];
     long pid = strchr(command, '/') ? pollikos_spawn(command, argv, 0)
                                     : pollikos_spawnp(command, argv, 0);
+    if(pid<0 && (errno==ENOENT || pid==-(long)USER_ENOENT) && !strchr(command,'/')) {
+        char path[USER_PATH_MAX];if(resolve_program(command,path,sizeof(path)))pid=pollikos_spawn(path,argv,0);
+    }
     if (pid <= 0) {
         if (errno == ENOENT || pid == -(long)USER_ENOENT || pid == -(long)USER_ENOEXEC)
             printf("'%s' is not recognized as a PollikOS command or executable.\n", command);
@@ -381,29 +360,98 @@ static int run_external(const char *const *argv) {
     return 128;
 }
 /* ------------------------------------------------------ builtins & stages */
+#include "pollish_commands.h"
 static int builtin_session(int argc,const char *const *argv) {
     if(argc!=1) { line_out("Usage: lock | logout | passwd"); return 1; }
     unsigned op=!strcmp(argv[0],"lock")?USER_SESSION_LOCK:!strcmp(argv[0],"logout")?USER_SESSION_LOGOUT:USER_SESSION_PASSWORD;
     if(pollikos_session_control(op)<0) { perror(argv[0]); return 1; } return 0;
 }
 typedef int (*builtin_fn)(int argc, const char *const *argv);
-typedef struct { const char *name; builtin_fn function; } Builtin;
+typedef struct { const char *name; builtin_fn function; const char *help; } Builtin;
 static const Builtin builtins[] = {
-    {"calc", builtin_calc}, {"lock",builtin_session}, {"logout",builtin_session}, {"passwd",builtin_session},
-    {"cd", builtin_cd}, {"pwd", builtin_pwd}, {"echo", builtin_echo},
-    {"clear", builtin_clear}, {"cls", builtin_clear},
-    {"history", builtin_history}, {"help", builtin_help},
-    {"ls", builtin_ls}, {"dir", builtin_ls},
-    {"cat", builtin_cat}, {"type", builtin_cat},
-    {"mkdir", builtin_mkdir}, {"rm", builtin_rm}, {"del", builtin_rm},
-    {"rmdir", builtin_rmdir}, {"mv", builtin_mv}, {"rename", builtin_mv},
-    {"touch", builtin_touch}, {"env", builtin_env}, {"set", builtin_set},
-    {"status", builtin_status}, {"exit", builtin_exit},
+    {"calc",builtin_calc,"EXPR: + - * / ^ percent, parentheses, sqrt/abs/min/max, pi/e"},
+    {"math",builtin_calc,"EXPR: alias for calc"}, {"expr",builtin_calc,"EXPR: alias for calc"},
+    {"admin",builtin_admin,"authenticate and enter an administrator shell; exit returns"},
+    {"sudo",builtin_admin,"COMMAND [ARGS], or -i; authenticate with the administrator password"},
+    {"sysinfo",builtin_system,"CPU, architecture, RAM, filesystem, session and process counts"},
+    {"uname",builtin_system,"kernel and architecture"},{"version",builtin_system,"PollikOS version"},
+    {"uptime",builtin_system,"time since boot"},{"date",builtin_system,"UTC calendar time"},
+    {"free",builtin_system,"managed physical RAM accounting"},{"df",builtin_system,"PollikFS capacity and free space, physical disk size"},
+    {"ps",builtin_system,"native process snapshots (admin sees every session)"},
+    {"whoami",builtin_system,"authenticated user and administrator role"},{"id",builtin_system,"UID, PID, session and kernel rights"},
+    {"abi",builtin_system,"kernel/userspace ABI version and features"},
+    {"devices",builtin_device,"detected device capabilities"},{"display",builtin_device,"framebuffer geometry"},
+    {"net",builtin_device,"network state and real TX/RX counters"},{"airplane",builtin_device,"[on|off]: network switch; write requires administrator"},
+    {"volume",builtin_device,"[0..100]: read/set volume; write requires administrator"},
+    {"sound",builtin_device,"play a native test tone (administrator)"},
+    {"reboot",builtin_device,"restart PollikOS (administrator)"},{"shutdown",builtin_device,"power off PollikOS (administrator)"},
+    {"poweroff",builtin_device,"alias for shutdown"},
+    {"fetch",builtin_fetch,"URL: HTTP/HTTPS GET to stdout; redirects and certificate verification"},
+    {"sleep",builtin_sleep,"SECONDS: wait 0..86400 seconds"},{"kill",builtin_kill,"[-SIGNAL] PID: send a native process signal"},
+    {"cp",builtin_cp,"SOURCE DESTINATION: atomic regular-file copy"},{"stat",builtin_stat,"PATH: inode, type, byte size and modification ticks"},
+    {"find",builtin_find,"[PATH]: walk real directories (maximum depth 32)"},
+    {"wc",builtin_count,"[FILE]: line, word and byte counts; defaults to stdin"},
+    {"head",builtin_count,"[-n LINES] [FILE]: first lines; defaults to stdin"},
+    {"commands",builtin_commands,"[PREFIX]: builtins and executable programs installed in PATH"},
+    {"which",builtin_which,"NAME: show builtin or actual executable path; .pol suffix optional"},
+    {"lock",builtin_session,"lock the authenticated session"},{"logout",builtin_session,"log out and reclaim session resources"},
+    {"passwd",builtin_session,"change the account password through the kernel prompt"},
+    {"cd",builtin_cd,"[DIR]: change directory"},{"pwd",builtin_pwd,"working directory"},{"echo",builtin_echo,"ARGS: print; $NAME and $? expand"},
+    {"clear",builtin_clear,"clear screen and scrollback (clear | cls)"},{"cls",builtin_clear,"alias for clear"},
+    {"history",builtin_history,"[-c]: list or clear session history"},{"help",builtin_help,"[COMMAND]: actual command usage"},
+    {"ls",builtin_ls,"[DIR]: list directory"},{"dir",builtin_ls,"alias for ls"},
+    {"cat",builtin_cat,"FILE: print content"},{"type",builtin_cat,"alias for cat"},
+    {"mkdir",builtin_mkdir,"DIR: create directory"},{"rm",builtin_rm,"FILE: remove file"},{"del",builtin_rm,"alias for rm"},
+    {"rmdir",builtin_rmdir,"DIR: remove an empty directory"},{"mv",builtin_mv,"SOURCE DESTINATION: move/rename"},{"rename",builtin_mv,"alias for mv"},
+    {"touch",builtin_touch,"FILE: create an empty file"},{"env",builtin_env,"environment variables"},
+    {"set",builtin_set,"NAME=VALUE: set environment variable"},{"status",builtin_status,"previous command exit status"},
+    {"exit",builtin_exit,"[CODE]: leave this shell (including administrator mode)"},
 };
 static const Builtin *find_builtin(const char *name) {
     for (size_t index = 0; index < sizeof(builtins)/sizeof(builtins[0]); ++index)
         if (strcmp(builtins[index].name, name) == 0) return &builtins[index];
     return 0;
+}
+static int executable_file(const char *path) {
+    int fd=open(path,O_RDONLY);if(fd<0)return 0;unsigned char header[5];
+    ssize_t n=read(fd,header,sizeof(header));close(fd);
+    return n==sizeof(header) && header[0]==127 && header[1]=='E' && header[2]=='L' && header[3]=='F' && header[4]==2;
+}
+static int resolve_program(const char *name,char *path,size_t capacity) {
+    if(strchr(name,'/')) {int n=snprintf(path,capacity,"%s",name);return n>=0 && (size_t)n<capacity && executable_file(path);}
+    const char *search=getenv("PATH");if(!search || !*search)search="/bin";
+    while(*search) {
+        const char *end=strchr(search,':');if(!end)end=search+strlen(search);size_t length=(size_t)(end-search);
+        if(length && length+strlen(name)+6<capacity){memcpy(path,search,length);path[length]='/';strcpy(path+length+1,name);
+            if(executable_file(path))return 1;strcat(path,".pol");if(executable_file(path))return 1;}
+        search=*end?end+1:end;
+    }return 0;
+}
+static int builtin_which(int argc,const char *const *argv) {
+    if(argc!=2){line_out("Usage: which NAME");return 2;}
+    if(find_builtin(argv[1])){printf("%s: shell builtin\n",argv[1]);return 0;}
+    char path[USER_PATH_MAX];if(resolve_program(argv[1],path,sizeof(path))){line_out(path);return 0;}
+    printf("%s: command not found\n",argv[1]);return 1;
+}
+static int builtin_commands(int argc,const char *const *argv) {
+    if(argc>2){line_out("Usage: commands [PREFIX]");return 2;}const char *prefix=argc==2?argv[1]:"";size_t length=strlen(prefix);
+    line_out("Shell builtins:");for(size_t i=0;i<sizeof(builtins)/sizeof(builtins[0]);i++)if(!strncmp(builtins[i].name,prefix,length))printf("  %-12s %s\n",builtins[i].name,builtins[i].help);
+    line_out("Installed PATH executables (.pol suffix optional):");const char *search=getenv("PATH");if(!search || !*search)search="/bin";
+    while(*search){const char *end=strchr(search,':');if(!end)end=search+strlen(search);size_t n=(size_t)(end-search);char directory[USER_PATH_MAX];
+        if(n && n<sizeof(directory)){memcpy(directory,search,n);directory[n]=0;DIR *dir=opendir(directory);if(dir){struct dirent *entry;
+            while((entry=readdir(dir))){char path[USER_PATH_MAX];int used=snprintf(path,sizeof(path),"%s/%s",directory,entry->d_name);
+                if(!strncmp(entry->d_name,prefix,length) && used>=0 && (size_t)used<sizeof(path) && executable_file(path))printf("  %s\n",path);}
+            closedir(dir);}}
+        search=*end?end+1:end;
+    }return 0;
+}
+static int builtin_help(int argc,const char *const *argv) {
+    if(argc>2){line_out("Usage: help [COMMAND]");return 2;}
+    if(argc==2){const Builtin *b=find_builtin(argv[1]);if(b){printf("%s: %s\n",b->name,b->help);return 0;}return builtin_which(argc,argv);}
+    line_out("PollikOS shell builtins:");
+    for(size_t i=0;i<sizeof(builtins)/sizeof(builtins[0]);i++)printf("%-12s %s\n",builtins[i].name,builtins[i].help);
+    line_out("Use commands to discover installed programs. Operators need spaces: A | B, < FILE, > FILE, >> FILE.");
+    line_out("Administrator: admin or sudo -i; exit returns to ordinary rights. sudo COMMAND runs one command.");return 0;
 }
 static int run_command(int argc, const char *const *argv) {
     const Builtin *builtin = find_builtin(argv[0]);
@@ -597,7 +645,7 @@ static int edit_length, edit_cursor, edit_history;
 static void prompt_text(char *buffer, size_t capacity, const char *prefix) {
     char cwd[256];
     if (!getcwd(cwd, sizeof(cwd))) snprintf(cwd, sizeof(cwd), "?");
-    snprintf(buffer, capacity, "%sPollikOS:%s> ", prefix ? prefix : "", cwd);
+    snprintf(buffer, capacity, "%sPollikOS:%s%s ", prefix ? prefix : "", cwd,administrator?"#":">");
 }
 static void refresh(void) {
     char buffer[LINE_MAX + 400];
@@ -733,6 +781,8 @@ static int native_libc_lock(void) {
 }
 
 static int bootstrap_native_libc(void) {
+    if(native_libc_ready())return 0;
+    if(mkdir("/tmp",0)<0 && errno!=EEXIST){perror("[pollish] prepare /tmp");return -1;}
     int locked=native_libc_lock();
     if (locked<=0) return locked==0?0:-1;
     out("[pollish] preparing native libc for /bin/tcc (first run)...\n");
@@ -800,12 +850,16 @@ static int bootstrap_native_libc(void) {
 
 /* -------------------------------------------------------------------- main */
 int main(int argc, char **argv) {
+    long rights=pollikos_session_control(USER_SESSION_RIGHTS);
+    administrator=rights>=0 && (rights&USER_CAP_ADMIN);
+    if(argc>1 && !strcmp(argv[1],"--admin-shell") && !administrator){line_out("Administrator shell requires authenticated kernel rights; use admin.");return 1;}
     /* Pipeline stages that are builtins run as children: pollish -c <command>
      * keeps shell state changes (cd) inside the child, like a real pipeline. */
     if (argc > 2 && strcmp(argv[1], "-c") == 0)
         return run_command(argc - 2, (const char *const *)argv + 2);
     history_load();
     line_out("PollikOS shell (pollish). Type 'help' for builtins.");
+    if(administrator)line_out("[pollish] administrator shell: all available commands; exit returns to the parent shell.");
     if (bootstrap_native_libc() != 0)
         line_out("[pollish] warning: native libc preparation failed");
     for (;;) {

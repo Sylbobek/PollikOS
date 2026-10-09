@@ -2,12 +2,11 @@
 #include "mouse.h"
 #include "console_fb.h"
 #include "../../hal.h"
+#include "../../../common/ps2_pointer.h"
+#include "scheduler.h"
 
 static int enabled;
-static uint8_t packet[4];
-static unsigned packet_size=3;
-static uint8_t device_id;
-static unsigned packet_length;
+static Ps2Pointer ps2_pointer;
 static int x, y;
 static unsigned buttons;
 static MouseEvent64 event_queue[64];
@@ -45,9 +44,12 @@ static int data(uint8_t value) {
     return 1;
 }
 static int auxiliary(uint8_t value) {
-    uint8_t response;
-    return command(0xd4) && data(value) && wait_output(&response,1) && response==0xfa;
+    for(unsigned retry=0;retry<3;retry++){
+        uint8_t response;if(!command(0xd4)||!data(value)||!wait_output(&response,1))return 0;
+        if(response==0xfa)return 1;if(response!=0xfe)return 0;
+    }return 0;
 }
+static int auxiliary_read(void){uint8_t byte;return wait_output(&byte,1)?byte:-1;}
 static void queue_event(unsigned kind, unsigned changed, int wheel) {
     MouseEvent64 event={USER_INPUT_EVENT_VERSION,USER_INPUT_EVENT_SIZE,kind,buttons,
                         changed,0,0,x,y,wheel,++event_sequence};
@@ -63,21 +65,10 @@ int mouse64_init(void) {
     uint8_t config;
     if (!command(0xa8) || !command(0x20) || !wait_output(&config,0)) return 0;
     /* Keep both PIC IRQs disabled: tty64_poll() services the controller on PIT. */
-    config=(uint8_t)(config&~0x23);
-    if (!command(0x60) || !data(config) || !auxiliary(0xf6)) return 0;
-    /* IntelliMouse sample-rate unlock; standard mice fall back to 3-byte mode. */
-    if (auxiliary(0xf3) && auxiliary(200) && auxiliary(0xf3) && auxiliary(100) &&
-        auxiliary(0xf3) && auxiliary(80) && command(0xd4) && data(0xf2)) {
-        uint8_t ack, id;
-        if (wait_output(&ack,1) && ack==0xfa && wait_output(&id,1) && (id==3 || id==4)) {
-            packet_size=4;
-            device_id=id;
-        }
-    }
-    if (!auxiliary(0xf4)) return 0;
+    config=(uint8_t)((config|0x40)&~0x33);
+    if(!command(0x60)||!data(config)||!ps2_pointer_configure(&ps2_pointer,auxiliary,auxiliary_read))return 0;
     x=(int)console_fb_width()/2;
     y=(int)console_fb_height()/2;
-    packet_length=0;
     buttons=0;
     event_head=event_count=0;
     enabled=1;
@@ -86,25 +77,11 @@ int mouse64_init(void) {
     return 1;
 }
 
-void mouse64_byte(uint8_t value) {
-    if (!enabled) return;
-    if (!packet_length && !(value&0x08)) return; /* packet sync bit */
-    packet[packet_length++]=value;
-    if (packet_length<packet_size) return;
-    packet_length=0;
-    if (packet[0]&0xc0) return; /* discard overflowed deltas */
-    int dx=(packet[0]&0x10)?(int)packet[1]-256:(int)packet[1];
-    int dy=(packet[0]&0x20)?(int)packet[2]-256:(int)packet[2];
+static void pointer_motion(const Ps2Motion *motion){
     int old_x=x,old_y=y;
     unsigned old_buttons=buttons;
-    int wheel=0;
-    if (packet_size==4) {
-        unsigned nibble=packet[3]&0x0f;
-        wheel=(nibble&8)?(int)nibble-16:(int)nibble;
-    }
-    buttons=packet[0]&7;
-    if (device_id==4) buttons|=((packet[3]&0x30)>>1);
-    x+=dx; y-=dy;
+    int wheel=motion->wheel;buttons=motion->buttons;
+    x+=motion->dx;y+=motion->dy;
     if (x<0) x=0; else if ((unsigned)x>=console_fb_width()) x=(int)console_fb_width()-1;
     if (y<0) y=0; else if ((unsigned)y>=console_fb_height()) y=(int)console_fb_height()-1;
     console_fb_mouse_move(x,y);
@@ -113,6 +90,12 @@ void mouse64_byte(uint8_t value) {
     if (changed) kind|=USER_INPUT_MOUSE_BUTTON;
     if (wheel) kind|=USER_INPUT_MOUSE_WHEEL;
     if (kind) queue_event(kind,changed,wheel);
+}
+void mouse64_byte(uint8_t value){
+    if(!enabled)return;Ps2Motion motion;
+    if(!ps2_pointer_feed(&ps2_pointer,value,(unsigned)(scheduler64_ticks()*10),&motion))return;
+    if(motion.tap){Ps2Motion down=motion;down.buttons|=1;pointer_motion(&down);motion.dx=motion.dy=motion.wheel=0;}
+    pointer_motion(&motion);
 }
 
 int mouse64_pop(MouseEvent64 *event) {
@@ -123,4 +106,4 @@ int mouse64_pop(MouseEvent64 *event) {
     return 1;
 }
 void mouse64_flush(void) { event_head=event_count=0; }
-int mouse64_wheel_enabled(void) { return enabled && packet_size==4; }
+int mouse64_wheel_enabled(void) { return enabled && (ps2_pointer.size==4||ps2_pointer.multifinger); }

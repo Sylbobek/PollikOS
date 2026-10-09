@@ -3,6 +3,7 @@ from pathlib import Path
 import json
 import struct
 import sys
+import re
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests"))
@@ -18,6 +19,9 @@ def build(output):
     hello = (output / "userspace/hello.elf").read_bytes()
     dynamic = bytearray(hello)
     struct.pack_into("<H", dynamic, 16, 3)  # unsupported ET_DYN
+    limit=re.search(r'^#define ELF64_MAX_IMAGE\s+\((\d+)\*1024\*1024\)',(ROOT/'kernel/arch/x86_64/elf64.h').read_text(),re.M)
+    if not limit:raise ValueError('Cannot derive the real ELF64 input limit for the oversized fixture')
+    oversized_bytes=int(limit.group(1))*1024*1024+1
     files = {
         "hello": hello,
         "argvtest": (output / "userspace/argvtest.elf").read_bytes(),
@@ -26,7 +30,7 @@ def build(output):
         "empty": b"", "tiny": hello[:32], "truncated": hello[:128],
         "invalid": b"bad ELF" + bytes(121), "dynamic": bytes(dynamic),
         # Above the raised loader cap but storable via the double-indirect level.
-        "large": bytes(2 * 1024 * 1024 + 1),
+        "large": bytes(oversized_bytes),
         "runtime": (output / "userspace/runtime.elf").read_bytes(),
         "memtest": (output / "userspace/memtest.elf").read_bytes(),
         "dirtest": (output / "userspace/dirtest.elf").read_bytes(),

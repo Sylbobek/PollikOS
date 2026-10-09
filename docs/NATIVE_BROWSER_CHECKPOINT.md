@@ -63,6 +63,16 @@ Wcześniejsze przerwanie inicjalizacji QuickJS usunięto: dokument nie rejestruj
 ponownie metod `querySelector`/`querySelectorAll` już nadanych przez wrapper DOM.
 Zrzut strony startowej potwierdzono na rzeczywistym framebufferze gościa.
 
+Wariant produkcyjny również przeszedł pełny test aplikacji, publiczny HTTPS,
+zawijanie tekstu z `text-align:center`, centrowanie bloku z `width:auto` i
+`max-width` oraz odczyt zapisanych zakładek/HTML po zamknięciu przeglądarki.
+Aktualne dowody: `build/browser-delivery-verification.log`,
+`build/browser-engine-verification.log`, `build/apps-final-verification.log`.
+Zrzuty: `build/x86_64/system/browser-home-native.png` i
+`build/x86_64/system/browser-https-native.png`. Obrazy produkcyjne zawierają
+licencję własnego kodu AGPL-3.0-only i oryginalne noty bibliotek w
+`/usr/share/licenses`; licencje upstreamowych komponentów nie są zmieniane.
+
 Budowanie: `powershell -File build-x86_64.ps1` lub wariant `-Production`.
 Launcher: `powershell -File run-x86_64.ps1 -PersistData` zachowuje zapisy na
 dysku danych po zamknięciu QEMU. Bez tej opcji launcher używa tymczasowego

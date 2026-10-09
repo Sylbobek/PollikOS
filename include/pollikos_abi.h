@@ -27,6 +27,7 @@ typedef unsigned int pollikos_abi_u32;
 #define POLLIKOS_ABI_FEATURE_WINDOWS (1u << 4)
 #define POLLIKOS_ABI_FEATURE_STREAMS (1u << 5)
 #define POLLIKOS_ABI_FEATURE_RIGHTS  (1u << 6)
+#define POLLIKOS_ABI_FEATURE_SYSTEM  (1u << 7)
 
 #define POLLIKOS_EFAULT 14
 #define POLLIKOS_EINVAL 22

@@ -16,8 +16,10 @@
 #include "devices.h"
 #include "audio_stream.h"
 #include "../../vfs.h"
+#include "../../pollikfs.h"
 #include "../../hal.h"
 #include "../../../include/pollikos_abi.h"
+#include "../../../sdk/include/pollikos_system.h"
 extern const uint8_t user_payload_start[], user_payload_end[];
 extern void process64_enter(UserFrame *frame, uintptr_t *resume_stack);
 extern void kernel64_debug_bytes(const char *data, size_t length);
@@ -70,6 +72,39 @@ void process64_internal_transition(Process64 *p, Thread64State next) {
     }
 }
 static const Credentials kernel_credentials={0};
+static int64_t system_query(Process64 *caller,const UserFrame *frame) {
+    if(!security_credentials_runnable(&caller->credentials))return -USER_EPERM;
+    if(frame->rdi==POLLIK_QUERY_SYSTEM) {
+        if(frame->r10<sizeof(PollikSystemInfo))return -USER_EINVAL;
+        PmmStats memory=pmm64_stats();
+        PollikSystemInfo info={0};info.version=POLLIK_SYSTEM_VERSION;info.size=sizeof(info);
+        info.uid=caller->credentials.uid;info.rights=caller->credentials.capabilities;
+        info.session=caller->credentials.session;info.uptime_ms=scheduler64_ticks()*1000/TIMER64_HZ;
+        info.ram_bytes=memory.managed*MM_PAGE_SIZE;info.ram_free_bytes=memory.free*MM_PAGE_SIZE;
+        info.disk_bytes=fs64_disk_bytes();info.fs_block_size=POLLIK2_BLOCK_SIZE;
+        info.fs_blocks=pollikfs_capacity_blocks();info.fs_free_blocks=pollikfs_free_blocks();
+        info.fs_free_inodes=pollikfs_free_inodes();info.fs_readonly=pollikfs_readonly();
+        info.process_limit=process64_capacity();
+        for(size_t i=0;i<process64_capacity();i++)if(slots[i])info.process_count++;
+        const char *name=security_username();for(unsigned i=0;name[i]&&i<sizeof(info.username)-1;i++)info.username[i]=name[i];
+        return copy_to_user64(&caller->space,frame->rdx,&info,sizeof(info))==USER_COPY_OK?0:-USER_EFAULT;
+    }
+    if(frame->rdi==POLLIK_QUERY_PROCESS) {
+        if(frame->r10<sizeof(PollikProcessInfo) || frame->rsi>PROCESS_MAX)return -USER_EINVAL;
+        for(size_t i=frame->rsi;i<process64_capacity();i++) {
+            Process64 *p=slots[i];if(!p)continue;
+            if(!(caller->credentials.capabilities&CAP_ADMIN) && p->credentials.session!=caller->credentials.session)continue;
+            PollikProcessInfo info={0};info.version=POLLIK_SYSTEM_VERSION;info.size=sizeof(info);
+            info.next_index=i+1;info.state=p->thread.state-THREAD_BUILDING;info.pid=p->pid;info.parent_pid=p->parent_pid;
+            info.pgid=p->pgid;info.session=p->credentials.session;info.uid=p->credentials.uid;
+            info.rights=p->credentials.capabilities;info.heap_bytes=p->heap_break-p->heap_base;
+            for(unsigned n=0;n<sizeof(info.name)-1&&p->name[n];n++)info.name[n]=p->name[n];
+            return copy_to_user64(&caller->space,frame->rdx,&info,sizeof(info))==USER_COPY_OK?1:-USER_EFAULT;
+        }
+        return 0;
+    }
+    return -USER_EINVAL;
+}
 static uint64_t elevation_requester,elevation_session;
 static char elevation_path[USER_PATH_MAX],elevation_name[USER_WINDOW_TITLE_MAX];
 const char *process64_elevation_name(void){return elevation_name[0]?elevation_name:"Application";}
@@ -915,6 +950,8 @@ int process64_trap(UserFrame *frame, uint64_t cr2) {
                 scheduler64_park(&process->thread,frame);
         }
         session_done:;
+    } else if (frame->rax == USER_SYSTEM_QUERY) {
+        frame->rax=system_query(process,frame);
     } else if (frame->rax == USER_ABI_INFO) {
         uint32_t requested_size = 0;
         if (copy_from_user64(&process->space, &requested_size, frame->rdi,
@@ -932,7 +969,7 @@ int process64_trap(UserFrame *frame, uint64_t cr2) {
             info.operation_namespace = POLLIKOS_ABI_NAMESPACE_X86_64;
             info.features = POLLIKOS_ABI_FEATURE_PROCESS | POLLIKOS_ABI_FEATURE_FILES |
                             POLLIKOS_ABI_FEATURE_NETWORK | POLLIKOS_ABI_FEATURE_WINDOWS |
-                            POLLIKOS_ABI_FEATURE_IPC | POLLIKOS_ABI_FEATURE_STREAMS | POLLIKOS_ABI_FEATURE_RIGHTS;
+                            POLLIKOS_ABI_FEATURE_IPC | POLLIKOS_ABI_FEATURE_STREAMS | POLLIKOS_ABI_FEATURE_RIGHTS | POLLIKOS_ABI_FEATURE_SYSTEM;
             size_t written = requested_size < sizeof(info) ? requested_size : sizeof(info);
             if (copy_to_user64(&process->space, frame->rdi, &info, written) != USER_COPY_OK)
                 frame->rax = (uint64_t)-(int64_t)USER_EFAULT;
@@ -1183,6 +1220,15 @@ int64_t process64_signal_group(uint64_t pgid, int signal) {
 int64_t process64_signal_target(Process64 *sender, int64_t target, int signal) {
     memory_context_check();
     if (!sender) return -USER_EINVAL;
+    if(sender->credentials.uid && !(sender->credentials.capabilities&CAP_ADMIN)) {
+        uint64_t group=target==0?sender->pgid:target<0?(uint64_t)(-(target+1))+1:0;
+        for(size_t i=0;i<process64_capacity();i++) {
+            Process64 *p=slots[i];if(!p || process64_internal_dead(p))continue;
+            if((target>0 && p->pid==(uint64_t)target) || (target<=0 && p->pgid==group)) {
+                if(p->credentials.uid!=sender->credentials.uid || p->credentials.session!=sender->credentials.session || (p->credentials.capabilities&CAP_ADMIN))return -USER_EPERM;
+            }
+        }
+    }
     if (target > 0) return process64_signal_send((uint64_t)target, signal);
     if (target == 0) return process64_signal_group(sender->pgid, signal);
     if (target == (-2147483647ll-1)) return -USER_EINVAL;

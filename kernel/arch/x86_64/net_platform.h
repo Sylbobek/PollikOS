@@ -18,6 +18,8 @@ size_t strlen(const char *text);
 void serial(const char *text);
 void number(char *out, u32 value);
 void memory_log(const char *message);
+void *tcp64_buffer_alloc(unsigned slot,unsigned bytes);
+void tcp64_buffer_free(void *buffer);
 
 static inline void outl(u16 port, u32 value) {
     hal_port_write32(port, value);

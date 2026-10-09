@@ -45,6 +45,7 @@ static int font_h(int scale) { return scale == 1 ? 13 : scale == 2 ? 20 : scale 
 void ui_bridge_rect(int x,int y,int w,int h,u32 c) { (void)c; bounds(x,y,w,h); }
 void ui_bridge_roundrect(int x,int y,int w,int h,int r,u32 c) { (void)r; if(drawing&&current==APP_TERMINAL)++terminal_rounded_paints; ui_bridge_rect(x,y,w,h,c); }
 void ui_bridge_roundrect_border(int x,int y,int w,int h,int r,int t,u32 c) { (void)r; (void)t; if(drawing&&current==APP_TERMINAL)++terminal_rounded_paints; ui_bridge_rect(x,y,w,h,c); }
+void ui_bridge_rounded(int x,int y,int w,int h,int r,u32 c,int opacity){(void)opacity;ui_bridge_roundrect(x,y,w,h,r,c);}
 void app_draw_letter(int x,int y,u8 c,u32 color,int scale) {
     (void)color;
     if (drawing && current == APP_TERMINAL) {

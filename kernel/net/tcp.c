@@ -51,11 +51,6 @@ struct TcpSocket {
 };
 
 static TcpSocket sockets[MAX_TCP_SOCKETS];
-#ifdef POLLIK_X64
-/* The x86_64 kernel has no general heap yet. Give each bounded TCP socket a
- * fixed receive ring so packet paths never borrow userspace memory. */
-static u8 tcp_rx_pool[MAX_TCP_SOCKETS][TCP_RX_BUFFER_SIZE];
-#endif
 static u16 next_ephemeral_port = 49200;
 static u32 initial_seq = 0x20260913;
 
@@ -144,7 +139,7 @@ TcpSocket *tcp_connect_start(NetworkInterface *iface, const u8 *remote_ip, u16 r
     s->retrans_count = 0;
 
 #ifdef POLLIK_X64
-    s->rx_buf = tcp_rx_pool[slot];
+    s->rx_buf = (u8 *)tcp64_buffer_alloc((unsigned)slot,TCP_RX_BUFFER_SIZE);
 #else
     s->rx_buf = (u8 *)kmalloc(TCP_RX_BUFFER_SIZE);
 #endif
@@ -257,7 +252,9 @@ int tcp_has_error(TcpSocket *s) {
 void tcp_abort(TcpSocket *s) {
     if (!s || !s->active) return;
     if (s->rx_buf) {
-#ifndef POLLIK_X64
+#ifdef POLLIK_X64
+        tcp64_buffer_free(s->rx_buf);
+#else
         kfree(s->rx_buf);
 #endif
         s->rx_buf = 0;
@@ -283,7 +280,9 @@ void tcp_close(TcpSocket *s) {
     }
 
     if (s->rx_buf) {
-#ifndef POLLIK_X64
+#ifdef POLLIK_X64
+        tcp64_buffer_free(s->rx_buf);
+#else
         kfree(s->rx_buf);
 #endif
         s->rx_buf = 0;

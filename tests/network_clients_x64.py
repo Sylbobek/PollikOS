@@ -1,9 +1,9 @@
 """Real guest TCP transport and Ring 3 HTTP parser against a local fixture."""
-import http.server,threading,tempfile,shutil,subprocess,socket,time
+import http.server,threading,tempfile,shutil,subprocess,socket,time,os
 from pathlib import Path
 from x86_64_console import Console,newest_image,ROOT
 from x86_64_security_session import port,connect
-B=ROOT/'build/x86_64/kernel'
+B=ROOT/'build/x86_64'/os.environ.get('POLLIK_X64_VARIANT','kernel')
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   self.send_response(200)

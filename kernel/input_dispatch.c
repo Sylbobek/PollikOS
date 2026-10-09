@@ -7,11 +7,12 @@
 #include "trash.h"
 #include "auth.h"
 #include "control_center.h"
+#include "../common/ps2_pointer.h"
 
 /* Private PS/2 decoder and pointer state. Symbol names remain compatible with
  * the existing QMP tests without exporting mutable pointers to other modules. */
 static int mx = 760, my = 500;
-static int mouse_packet_size = 3;
+static Ps2Pointer ps2_pointer;
 static int alt_held;
 static int window_only;
 static int s_ctrl_held = 0;
@@ -114,14 +115,8 @@ void input_dispatch_init(void) {
      * controller config bit 4 disables the keyboard clock; clear it along
      * with the auxiliary-disable bit before initializing the mouse. */
     wait_write(); outb(0x60, (config | 0x40) & ~0x33);
-    if (!mouse_cmd(0xf6)) { serial("INPUT mouse ACK failed\n"); return; }
-    int ok = mouse_cmd(0xf3) && mouse_cmd(200) && mouse_cmd(0xf3) && mouse_cmd(100) && mouse_cmd(0xf3) && mouse_cmd(80);
-    if (ok && mouse_cmd(0xf2)) {
-        int id = mouse_read();
-        if (id == 3) mouse_packet_size = 4;
-    }
-    mouse_cmd(0xf3); mouse_cmd(200);
-    if (mouse_cmd(0xf4)) serial(mouse_packet_size == 4 ? "INPUT PS/2 wheel ready; ACK/retry enabled\n" : "INPUT standard PS/2 ready\n");
+    if(!ps2_pointer_configure(&ps2_pointer,mouse_cmd,mouse_read)){serial("INPUT mouse ACK failed\n");return;}
+    serial(ps2_pointer.synaptics?"INPUT Synaptics PS/2 touchpad ready\n":ps2_pointer.size==4?"INPUT PS/2 wheel ready; ACK/retry enabled\n":"INPUT standard PS/2 ready\n");
 }
 static void click(void) {
     if(control_center_active()) {
@@ -365,11 +360,9 @@ static void key(u8 code) {
     }
     gui_app_key(top, code, shift, control);
 }
-static void pointer_packet(const u8 *packet) {
+static void pointer_packet(const Ps2Motion *motion) {
     static int held, right_held;
-    if (packet[0] & 0xc0) return;
-    int pdx = (int)packet[1] - ((packet[0] & 16) ? 256 : 0);
-    int pdy = -((int)packet[2] - ((packet[0] & 32) ? 256 : 0));
+    int pdx=motion->dx,pdy=motion->dy;
     if (pointer_acceleration) {
         int ax = pdx < 0 ? -pdx : pdx, ay = pdy < 0 ? -pdy : pdy;
         int speed = ax > ay ? ax : ay;
@@ -381,17 +374,17 @@ static void pointer_packet(const u8 *packet) {
     if (my < 0) my = 0;
     if (my > shell.height - 1) my = shell.height - 1;
     if (auth_is_active()) {
-        if (auth_pointer(mx, my, packet[0] & 1)) request_scene_redraw();
+        if (auth_pointer(mx, my, motion->buttons & 1)) request_scene_redraw();
         /* Keep button edges current across logout and the next sign-in. */
-        held=(packet[0]&1)!=0;right_held=(packet[0]&2)!=0;
+        held=(motion->buttons&1)!=0;right_held=(motion->buttons&2)!=0;
         compositor_draw_cursor(0);
         return;
     }
     if(control_center_active()) {
-        int down=packet[0]&1;
+        int down=motion->buttons&1;
         if(down&&!held&&!window_only)control_center_click(mx,my);
         if(!window_only)control_center_pointer(mx,my,down);
-        held=down;right_held=(packet[0]&2)!=0;compositor_draw_cursor(0);return;
+        held=down;right_held=(motion->buttons&2)!=0;compositor_draw_cursor(0);return;
     }
     /* A modal dialog repaints only its own card: focused-button changes and
      * title-bar drags damage the union of the old and new rectangle, never the
@@ -428,9 +421,9 @@ static void pointer_packet(const u8 *packet) {
         }
     }
     wm_perf_record_input(pdx != 0 || pdy != 0);
-    if (!window_only && !g_active_dialog.active && mouse_packet_size == 4 && packet[3])
-        gui_app_scroll(active_app(), (signed char)packet[3]);
-    int down = packet[0] & 1, right = packet[0] & 2;
+    if (!window_only && !g_active_dialog.active && motion->wheel)
+        gui_app_scroll(active_app(), motion->wheel);
+    int down = motion->buttons & 1, right = motion->buttons & 2;
     if (!window_only && !g_active_dialog.active && right && !right_held && my >= 32) {
         int interaction_changed_scene = shell.drag || shell.resizing >= 0 || shell.snap_preview != SNAP_NONE;
         cancel_interaction(-1);
@@ -620,16 +613,17 @@ static void pointer_packet(const u8 *packet) {
     compositor_draw_cursor(0);
 }
 void input_dispatch_poll(void) {
-    static u8 packet[4];
-    static int index;
     for (int count = 0; count < 256; count++) {
         u8 s = inb(0x64);
         if (!(s & 1)) break;
         u8 c = inb(0x60);
+        if(s&0xc0){ps2_pointer_stream_reset(&ps2_pointer);continue;}
         if (s & 32) {
-            if (index == 0 && !(c & 8)) continue;
-            packet[index++] = c;
-            if (index == mouse_packet_size) { index = 0; pointer_packet(packet); }
+            Ps2Motion motion;
+            if(ps2_pointer_feed(&ps2_pointer,c,wm_time_ms(),&motion)){
+                if(motion.tap){Ps2Motion down=motion;down.buttons|=1;pointer_packet(&down);motion.dx=motion.dy=motion.wheel=0;}
+                pointer_packet(&motion);
+            }
         } else key(c);
     }
 }

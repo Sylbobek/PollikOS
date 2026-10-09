@@ -17,6 +17,9 @@ def build(output):
     for library in ('libdom','libcss','libhubbub','libparserutils','libwapcaplet'):
         selected['/usr/share/licenses/'+library+'.txt']=(ROOT/'third_party'/library/'COPYING').read_bytes()
     selected['/usr/share/licenses/quickjs.txt']=(ROOT/'third_party/quickjs/LICENSE').read_bytes()
+    for library,notice in (('openlibm','LICENSE.md'),('bearssl','LICENSE.txt'),
+                           ('monocypher','LICENCE.md'),('tinycc','COPYING'),('minimp3','LICENSE')):
+        selected['/usr/share/licenses/'+library+'.txt']=(ROOT/'third_party'/library/notice).read_bytes()
     selected['/bin/media.pol']=(output/'userspace/media_player.elf').read_bytes()
     selected['/bin/video.pol']=(output/'userspace/video_player.elf').read_bytes()
     selected['/usr/lib/libpollikvideo.a']=(output/'codecs/libpollikvideo.a').read_bytes()
@@ -28,7 +31,8 @@ def build(output):
     for path,record in records.items():
         if record[0]!='file':continue
         if (path in tuple('/bin/'+a for a in apps) or path.startswith('/usr/include/') or
-            path.startswith('/usr/lib/') or path in ('/home/welcome.html','/home/welcome.css','/home/welcome.js')):
+            path.startswith('/usr/lib/') or path.startswith('/usr/src/libc/') or
+            path in ('/home/welcome.html','/home/welcome.css','/home/welcome.js')):
             selected[path]=source.read_file(path)
     for app in apps:
         if '/bin/'+app not in selected:raise ValueError(f'missing production app {app}')

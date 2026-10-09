@@ -12,6 +12,7 @@
 #include "cursor_sprites.h"
 #include "control_center.h"
 #include "desktop.h"
+#include "gui/app_host.h"
 
 static u32 *pixels, *wallpaper;
 static int wallpaper_theme = -1;
@@ -20,6 +21,7 @@ static u32 *auth_backdrop;
 static u32 auth_backdrop_pages;
 static int auth_backdrop_theme = -1, auth_backdrop_attempted;
 static int auth_scene_snapshot;
+static int auth_capture_only;
 #define DOCK_CACHE_WIDTH (NUM_APPS * 68 + 144)
 static u32 dock_background[DOCK_CACHE_WIDTH * 145];
 static int dock_background_valid;
@@ -36,11 +38,11 @@ static GraphicsClip client_damage[NUM_APPS];
 static int client_damage_valid[NUM_APPS];
 #define DOCK_GLASS_BLUR_RADIUS 3
 enum { DOCK_GLASS_BLUR_ROWS = DOCK_GLASS_BLUR_RADIUS * 2 + 1 };
-static u32 dock_glass_blur_rows[DOCK_GLASS_BLUR_ROWS][DOCK_CACHE_WIDTH];
-static u32 dock_glass_next_blur_row[DOCK_CACHE_WIDTH];
-static int dock_glass_vertical_sum[3][DOCK_CACHE_WIDTH];
+static u32 dock_glass_blur_rows[DOCK_GLASS_BLUR_ROWS][4096];
+static u32 dock_glass_next_blur_row[4096];
+static int dock_glass_vertical_sum[3][4096];
 
-static void dock_glass_blur_row(int source_y, int x1, int x2, int width, int height,
+static void dock_glass_blur_row(const u32 *source,int source_y, int x1, int x2, int width, int height,
                                 u32 *out) {
     int red = 0, green = 0, blue = 0;
     if (source_y < 0) source_y = 0;
@@ -49,7 +51,7 @@ static void dock_glass_blur_row(int source_y, int x1, int x2, int width, int hei
         int sx = x1 + k;
         if (sx < 0) sx = 0;
         if (sx >= width) sx = width - 1;
-        u32 color = pixels[source_y * width + sx];
+        u32 color = source[source_y * width + sx];
         red += (color >> 16) & 255;
         green += (color >> 8) & 255;
         blue += color & 255;
@@ -63,8 +65,8 @@ static void dock_glass_blur_row(int source_y, int x1, int x2, int width, int hei
             int entering_x = x + DOCK_GLASS_BLUR_RADIUS + 1;
             if (leaving_x < 0) leaving_x = 0;
             if (entering_x >= width) entering_x = width - 1;
-            u32 leaving = pixels[source_y * width + leaving_x];
-            u32 entering = pixels[source_y * width + entering_x];
+            u32 leaving = source[source_y * width + leaving_x];
+            u32 entering = source[source_y * width + entering_x];
             red += (int)((entering >> 16) & 255) - (int)((leaving >> 16) & 255);
             green += (int)((entering >> 8) & 255) - (int)((leaving >> 8) & 255);
             blue += (int)(entering & 255) - (int)(leaving & 255);
@@ -80,27 +82,23 @@ static int dock_glass_coverage(int width, int height, int radius, int x, int y) 
     return graphics_corner_coverage(radius, cx, cy);
 }
 
-static void dock_glass_blur_backdrop(int width, int height) {
-    int visible[APP_COUNT];
-    int count = dock_get_visible_apps(visible, APP_COUNT);
-    if (count <= 0 || width <= 0 || height <= 0) return;
-    int pill_w = count * 68 + 48 + (count > 1 ? DOCK_FILES_GAP : 0);
-    if (pill_w > DOCK_CACHE_WIDTH) pill_w = DOCK_CACHE_WIDTH;
-    int pill_x = (width - pill_w) / 2, pill_y = height - 96, pill_h = 84;
-    int radius = 35;
+static void glass_blur_rect(const u32 *source,int source_w,int source_h,int source_x,int source_y,
+                            int pill_x,int pill_y,int pill_w,int pill_h,int radius,
+                            u32 tint,int tint_opacity,int strength) {
+    int width=shell.width;
     GraphicsClip clip = graphics_get_clip();
     int x1 = pill_x > clip.x1 ? pill_x : clip.x1;
     int x2 = pill_x + pill_w < clip.x2 ? pill_x + pill_w : clip.x2;
     int y1 = pill_y > clip.y1 ? pill_y : clip.y1;
     int y2 = pill_y + pill_h < clip.y2 ? pill_y + pill_h : clip.y2;
-    if (x1 >= x2 || y1 >= y2) return;
+    if (x1 >= x2 || y1 >= y2 || x2-x1>4096) return;
 
     u32 *rows[DOCK_GLASS_BLUR_ROWS];
     u32 *next_row = dock_glass_next_blur_row;
     for (int k = 0; k < DOCK_GLASS_BLUR_ROWS; k++) {
         rows[k] = dock_glass_blur_rows[k];
-        dock_glass_blur_row(y1 + k - DOCK_GLASS_BLUR_RADIUS, x1, x2,
-                            width, height, rows[k]);
+        dock_glass_blur_row(source,y1 + k - DOCK_GLASS_BLUR_RADIUS - source_y, x1-source_x, x2-source_x,
+                            source_w, source_h, rows[k]);
     }
     int span = x2 - x1;
     for (int offset = 0; offset < span; offset++) {
@@ -127,14 +125,15 @@ static void dock_glass_blur_backdrop(int width, int height) {
                                  DOCK_GLASS_BLUR_ROWS << 8) |
                                 ((dock_glass_vertical_sum[2][offset] + DOCK_GLASS_BLUR_ROWS / 2) /
                                  DOCK_GLASS_BLUR_ROWS));
-            int opacity = (192 * coverage + 32) >> 6;
+            blurred=blend(blurred,tint,tint_opacity);
+            int opacity = (strength * coverage + 32) >> 6;
             u32 *dst = &pixels[y * width + x];
             *dst = blend(*dst, blurred, opacity);
         }
         if (y + 1 < y2) {
             u32 *leaving = rows[0];
-            dock_glass_blur_row(y + DOCK_GLASS_BLUR_RADIUS + 1, x1, x2,
-                                width, height, next_row);
+            dock_glass_blur_row(source,y + DOCK_GLASS_BLUR_RADIUS + 1-source_y, x1-source_x, x2-source_x,
+                                source_w, source_h, next_row);
             for (int offset = 0; offset < span; offset++) {
                 u32 old_color = leaving[offset], new_color = next_row[offset];
                 dock_glass_vertical_sum[0][offset] += (int)((new_color >> 16) & 255) -
@@ -149,6 +148,39 @@ static void dock_glass_blur_backdrop(int width, int height) {
             next_row = leaving;
         }
     }
+}
+
+static void dock_glass_blur_backdrop(int width,int height){
+    int visible[APP_COUNT],count=dock_get_visible_apps(visible,APP_COUNT);
+    if(count<=0||width<=0||height<=0)return;
+    int w=count*68+48+(count>1?DOCK_FILES_GAP:0);if(w>DOCK_CACHE_WIDTH)w=DOCK_CACHE_WIDTH;
+    glass_blur_rect(pixels,width,height,0,0,(width-w)/2,height-96,w,84,35,0,0,192);
+}
+
+typedef struct {u32 *pixels;u32 capacity;int x,y,w,h;} GlassBackdrop;
+static GlassBackdrop glass_backdrops[UI_GLASS_COUNT];
+static GraphicsClip glass_capture_clip;
+static int glass_welcome_alpha=256;
+static GraphicsClip clip_intersection(GraphicsClip a,GraphicsClip b);
+void ui_bridge_glass(int slot,int x,int y,int w,int h,int radius,u32 tint,int opacity){
+    if(slot<0||slot>=UI_GLASS_COUNT||w<=0||h<=0)return;
+    GlassBackdrop *cache=&glass_backdrops[slot];
+    int x1=x-DOCK_GLASS_BLUR_RADIUS,y1=y-DOCK_GLASS_BLUR_RADIUS;
+    int x2=x+w+DOCK_GLASS_BLUR_RADIUS,y2=y+h+DOCK_GLASS_BLUR_RADIUS;
+    if(x1<0)x1=0;if(y1<0)y1=0;if(x2>shell.width)x2=shell.width;if(y2>shell.height)y2=shell.height;
+    int cw=x2-x1,ch=y2-y1;if(cw<=0||ch<=0)return;
+    if(!cache->pixels&&!cache->capacity){
+        u32 count=slot==UI_GLASS_WELCOME?(u32)shell.width*shell.height:518u*518u;
+        u32 pages=(count*4+4095)/4096;
+        cache->pixels=(u32 *)pmm_alloc_pages(pages);cache->capacity=pages*1024;
+    }
+    if(!cache->pixels||(u32)cw*(u32)ch>cache->capacity){rounded(x,y,w,h,radius,tint,opacity);return;}
+    cache->x=x1;cache->y=y1;cache->w=cw;cache->h=ch;
+    GraphicsClip capture=clip_intersection(glass_capture_clip,(GraphicsClip){x1,y1,x2,y2});
+    if(capture.x1<capture.x2&&capture.y1<capture.y2)
+        for(int row=capture.y1;row<capture.y2;row++)
+            memcpy(cache->pixels+(row-y1)*cw+capture.x1-x1,pixels+row*shell.width+capture.x1,(u32)(capture.x2-capture.x1)*4);
+    glass_blur_rect(cache->pixels,cw,ch,x1,y1,x,y,w,h,radius,tint,opacity,slot==UI_GLASS_WELCOME?glass_welcome_alpha:256);
 }
 
 static void perf_begin(void) {
@@ -394,8 +426,9 @@ static int render_window_to_surface(int id, int is_active, const GraphicsClip *r
     int wx = 0, wy = 0;
     /* Cache straight RGB over the entire frame, including the exterior.
      * Geometry alpha is applied exactly once over the real scene below. */
-    rect(wx, wy, ww, wh, body);
-    rect(wx, wy, ww, 34, tb_bg);
+    rect(wx, wy, ww, wh, id==APP_WELCOME?0:body);
+    if(id==APP_WELCOME){graphics_set_alpha_surface(1);rounded(wx,wy,ww,34,0,tb_bg,70);}
+    else rect(wx, wy, ww, 34, tb_bg);
     if (is_active && ww > 24)
         rect(wx + 12, wy + 1, ww - 24, 1,
              blend(tb_bg, 0xffffff, is_dark ? 22 : 130));
@@ -516,6 +549,31 @@ static void compose_window_surface(int id, int is_active) {
     if (orig_w <= 0 || orig_h <= 0) {
         orig_w = window_width(id);
         orig_h = window_height(id);
+    }
+    if(id==APP_WELCOME){
+        int alpha=is_anim?anim->cur_alpha:256;
+        int radius=windows[id].state==WINDOW_STATE_MAXIMIZED?0:12;
+        glass_welcome_alpha=alpha;
+        ui_bridge_glass(UI_GLASS_WELCOME,wx,wy,ww,wh,radius,ui_theme()->surface_elevated,160);
+        static int glass_source_x[4096];int span=x2-x1;if(span>4096)span=4096;
+        for(int i=0;i<span;i++)glass_source_x[i]=(x1+i-wx)*orig_w/ww;
+        for(int y=y1;y<y2;y++){
+            int sy=(y-wy)*orig_h/wh,cy=y-wy;
+            if(cy>=wh-radius)cy=wh-1-cy;
+            for(int i=0;i<span;i++){
+                u32 color=src[sy*src_stride+glass_source_x[i]];unsigned a=color>>24;
+                if(!a)continue;
+                int cx=x1+i-wx;if(cx>=ww-radius)cx=ww-1-cx;
+                int coverage=graphics_corner_coverage(radius,cx,cy),op=alpha*coverage/64;
+                u32 *dst=&pixels[y*shell.width+x1+i];
+                if(a==255&&op==256){*dst=color&0xffffffu;continue;}
+                unsigned effective=a*op/256,inv=256-effective;
+                unsigned r=(((color>>16)&255)*op+((*dst>>16)&255)*inv)>>8;
+                unsigned g=(((color>>8)&255)*op+((*dst>>8)&255)*inv)>>8;
+                unsigned b=((color&255)*op+(*dst&255)*inv)>>8;
+                *dst=(r<<16)|(g<<8)|b;
+            }
+        }return;
     }
 
     if (is_anim && (ww != orig_w || wh != orig_h || anim->cur_alpha < 256)) {
@@ -982,7 +1040,8 @@ static void compositor_auth_backdrop(int width, int height) {
     if (!auth_backdrop_attempted) {
         auth_backdrop_attempted = 1;
         auth_backdrop_theme = shell.theme;
-        int scale=auth_scene_snapshot?2:4,radius=auth_scene_snapshot?1:3;
+        int shift=auth_scene_snapshot?1:2,scale=1<<shift,mask=scale-1,fraction=256>>shift;
+        int radius=auth_scene_snapshot?1:3;
         int sw = (width + scale-1) / scale, sh = (height + scale-1) / scale;
         u32 size = (u32)sw * sh * sizeof(u32);
         u32 *small = kmalloc(size), *temp = kmalloc(size);
@@ -997,13 +1056,13 @@ static void compositor_auth_backdrop(int width, int height) {
              * immediately; only the full-size presentation cache survives. */
             pollik_box_blur(small,temp,sw,sh,radius);
             for (int y = 0; y < height; y++) {
-                int sy = y / scale, ny = sy + 1 < sh ? sy + 1 : sy;
+                int sy = y >> shift, ny = sy + 1 < sh ? sy + 1 : sy;
                 int shade = 64 + y * 48 / height;
                 for (int x = 0; x < width; x++) {
-                    int sx = x / scale, nx = sx + 1 < sw ? sx + 1 : sx;
-                    u32 a = blend(small[sy * sw + sx], small[sy * sw + nx], (x % scale) * 256/scale);
-                    u32 b = blend(small[ny * sw + sx], small[ny * sw + nx], (x % scale) * 256/scale);
-                    u32 color=blend(a,b,(y % scale)*256/scale);
+                    int sx = x >> shift, nx = sx + 1 < sw ? sx + 1 : sx;
+                    u32 a = blend(small[sy * sw + sx], small[sy * sw + nx], (x & mask)*fraction);
+                    u32 b = blend(small[ny * sw + sx], small[ny * sw + nx], (x & mask)*fraction);
+                    u32 color=blend(a,b,(y & mask)*fraction);
                     auth_backdrop[y * width + x] = auth_scene_snapshot?blend(color,0x100b20,112):blend(blend(color,0x765591,112),0x100b20,shade);
                 }
             }
@@ -1018,11 +1077,12 @@ static void compositor_auth_backdrop(int width, int height) {
         if (small) kfree(small);
         if (temp) kfree(temp);
     }
-    memcpy(pixels, auth_backdrop ? auth_backdrop : source, (u32)width * height * sizeof(u32));
+    if(!auth_capture_only)memcpy(pixels, auth_backdrop ? auth_backdrop : source, (u32)width * height * sizeof(u32));
 }
 void compositor_capture_admin_background(void){
-    auth_scene_snapshot=1;auth_backdrop_attempted=0;
+    auth_scene_snapshot=1;auth_backdrop_attempted=0;auth_capture_only=1;
     compositor_auth_backdrop(shell.width,shell.height);
+    auth_capture_only=0;
 }
 
 void compositor_paint(int full) {
@@ -1133,7 +1193,7 @@ void compositor_paint(int full) {
 #ifdef POLLIK_COMPOSITOR_LEGACY_DAMAGE
         int blur_halo = DOCK_GLASS_BLUR_RADIUS;
 #else
-        int blur_halo = DOCK_GLASS_BLUR_RADIUS * 2;
+        int blur_halo = DOCK_GLASS_BLUR_RADIUS * ((windows[APP_WELCOME].open&&!windows[APP_WELCOME].minimized)||control_center_active()?4:2);
 #endif
         for (int i = 0; i < region_count; i++) {
             regions[i].x1 -= blur_halo;
@@ -1158,6 +1218,7 @@ void compositor_paint(int full) {
         GraphicsClip clip = clip_intersection(regions[r], (GraphicsClip){0, 0, width, height});
         if (clip.x1 >= clip.x2 || clip.y1 >= clip.y2) continue;
         graphics_set_clip(clip);
+        glass_capture_clip=clip;
         int span = clip.x2 - clip.x1;
         if (full == 1) {
             u32 count = (u32)width * (u32)height;

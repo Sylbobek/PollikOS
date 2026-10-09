@@ -1,5 +1,6 @@
 #ifdef POLLIK_X64
 #include "arch/x86_64/fs_platform.h"
+#include "arch/x86_64/net_platform.h"
 #else
 #include "system.h"
 #include "storage.h"
@@ -20,14 +21,45 @@ static u8 snapshot[17 * 512], candidate[17 * 512];
 static u8 header[512];
 
 #endif
+#ifdef POLLIK_X64
+static u64 ata_cycles_per_ms;
+static int ata_clock_tried;
+/* Device completion is asynchronous. An iteration count can expire while
+ * the host/disk is flushing; measure elapsed time even with IRQs disabled. */
+static void ata_clock_init(void) {
+    if(ata_clock_tried)return;ata_clock_tried=1;
+    u32 a,b,c,d;hal_cpuid(1,0,&a,&b,&c,&d);if(!(d&16u))return;
+    u8 speaker=inb(0x61);outb(0x61,speaker&(u8)~3u);
+    outb(0x43,0xb0);outb(0x42,11932&255);outb(0x42,11932>>8);
+    u64 begin=hal_read_tsc_serialized();outb(0x61,(speaker&(u8)~2u)|1u);
+    u32 limit=2000000;while(!(inb(0x61)&32u) && --limit)hal_cpu_relax();
+    u64 delta=hal_read_tsc_serialized()-begin;outb(0x61,speaker);
+    if(limit && delta/10>=1000 && delta/10<=10000000)ata_cycles_per_ms=delta/10;
+}
+#endif
 static int ata_wait(int data) {
+#ifdef POLLIK_X64
+    ata_clock_init();u64 begin=hal_read_tsc_serialized();
+    u32 budget=ata_cycles_per_ms?100000000:1000000;
+    for(u32 i=0;i<budget;i++) {
+        if(ata_cycles_per_ms && !(i&255u) && hal_read_tsc_serialized()-begin>ata_cycles_per_ms*5000u)break;
+#else
     for (u32 i = 0; i < 1000000; i++) {
+#endif
         u8 s = inb(0x1f7);
-        if (s == 0 || s == 255)
+        if (s == 0 || s == 255) {
+#ifdef POLLIK_X64
+            serial("[ATA64] no device while waiting\n");
+#endif
             return 0;
+        }
         if (!(s & 0x80)) {
-            if (s & 0x21)
+            if (s & 0x21) {
+#ifdef POLLIK_X64
+                char value[12];number(value,s);serial("[ATA64] status error=");serial(value);serial(data?" data\n":" completion\n");
+#endif
                 return 0;
+            }
             /* After a 256-word PIO transfer, DRQ must drop before another
              * command is issued. Seeing BSY clear alone can be an intermediate
              * device phase and leaves the next ATA request wedged busy. */
@@ -35,6 +67,9 @@ static int ata_wait(int data) {
                 return 1;
         }
     }
+#ifdef POLLIK_X64
+    serial(data?"[ATA64] data wait timeout\n":"[ATA64] completion wait timeout\n");
+#endif
     return 0;
 }
 static int ata_read_once(u8 drive, u32 lba, void *buffer) {
