@@ -8,6 +8,7 @@
  * keep the historical stdin contract. */
 void tty64_init(void);
 void tty64_enable(void);
+void tty64_usb_poll(void);
 int tty64_enabled(void);
 void tty64_set_foreground(uint64_t pgid); /* 0 clears; Ctrl+C signals this process group */
 void tty64_poll(void);                  /* poll UART, keyboard and mouse on PIT */

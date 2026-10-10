@@ -73,7 +73,7 @@ static void td_dump(td_t *td)
 		usb_debug("|..[OUT]............................................|\n");
 	else
 		usb_debug("|..[]...............................................|\n");
-	usb_debug("|:|============ UHCI TD at [0x%08lx] ==========|:|\n", virt_to_phys(td));
+	usb_debug("|:|============ UHCI TD at [0x%08lx] ==========|:|\n", (unsigned long)virt_to_phys(td));
 	usb_debug("|:+-----------------------------------------------+:|\n");
 	usb_debug("|:| Next  TD/QH     [0x%08lx]                  |:|\n", td->ptr & ~0xFUL);
 	usb_debug("|:+-----------------------------------------------+:|\n");

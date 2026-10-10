@@ -23,7 +23,7 @@ static int auth_backdrop_theme = -1, auth_backdrop_attempted;
 static int auth_scene_snapshot;
 static int auth_capture_only;
 #define DOCK_CACHE_WIDTH (NUM_APPS * 68 + 144)
-static u32 dock_background[DOCK_CACHE_WIDTH * 145];
+static u32 *dock_background;
 static int dock_background_valid;
 static int dirty_client[NUM_APPS] = {1, 1, 1, 1, 1, 1, 1};
 static int surface_active_state[NUM_APPS] = {-1, -1, -1, -1, -1, -1, -1};
@@ -38,9 +38,20 @@ static GraphicsClip client_damage[NUM_APPS];
 static int client_damage_valid[NUM_APPS];
 #define DOCK_GLASS_BLUR_RADIUS 3
 enum { DOCK_GLASS_BLUR_ROWS = DOCK_GLASS_BLUR_RADIUS * 2 + 1 };
-static u32 dock_glass_blur_rows[DOCK_GLASS_BLUR_ROWS][4096];
-static u32 dock_glass_next_blur_row[4096];
-static int dock_glass_vertical_sum[3][4096];
+static u32 (*dock_glass_blur_rows)[DOCK_CACHE_WIDTH];
+static u32 *dock_glass_next_blur_row;
+static int (*dock_glass_vertical_sum)[DOCK_CACHE_WIDTH];
+static int glass_scratch_attempted;
+static int glass_scratch_ready(void){
+    if(dock_glass_blur_rows)return 1;
+    if(glass_scratch_attempted)return 0;glass_scratch_attempted=1;
+    u32 bytes=(DOCK_GLASS_BLUR_ROWS+1+3)*DOCK_CACHE_WIDTH*4;
+    u32 *memory=(u32 *)pmm_alloc_pages((bytes+4095)/4096);if(!memory)return 0;
+    dock_glass_blur_rows=(u32 (*)[DOCK_CACHE_WIDTH])memory;
+    dock_glass_next_blur_row=memory+DOCK_GLASS_BLUR_ROWS*DOCK_CACHE_WIDTH;
+    dock_glass_vertical_sum=(int (*)[DOCK_CACHE_WIDTH])(dock_glass_next_blur_row+DOCK_CACHE_WIDTH);
+    return 1;
+}
 
 static void dock_glass_blur_row(const u32 *source,int source_y, int x1, int x2, int width, int height,
                                 u32 *out) {
@@ -86,12 +97,23 @@ static void glass_blur_rect(const u32 *source,int source_w,int source_h,int sour
                             int pill_x,int pill_y,int pill_w,int pill_h,int radius,
                             u32 tint,int tint_opacity,int strength) {
     int width=shell.width;
+    if(!glass_scratch_ready()){rounded(pill_x,pill_y,pill_w,pill_h,radius,tint,tint_opacity);return;}
     GraphicsClip clip = graphics_get_clip();
     int x1 = pill_x > clip.x1 ? pill_x : clip.x1;
     int x2 = pill_x + pill_w < clip.x2 ? pill_x + pill_w : clip.x2;
     int y1 = pill_y > clip.y1 ? pill_y : clip.y1;
     int y2 = pill_y + pill_h < clip.y2 ? pill_y + pill_h : clip.y2;
-    if (x1 >= x2 || y1 >= y2 || x2-x1>4096) return;
+    if(x1>=x2||y1>=y2)return;
+    /* Wide glass windows reuse the Dock's bounded scratch rows in stripes.
+     * Their cached source is immutable, so stripe borders sample raw pixels. */
+    if(x2-x1>DOCK_CACHE_WIDTH){
+        for(int x=x1;x<x2;x+=DOCK_CACHE_WIDTH){
+            int end=x+DOCK_CACHE_WIDTH;if(end>x2)end=x2;
+            graphics_set_clip((GraphicsClip){x,y1,end,y2});
+            glass_blur_rect(source,source_w,source_h,source_x,source_y,pill_x,pill_y,pill_w,pill_h,radius,tint,tint_opacity,strength);
+        }
+        graphics_set_clip(clip);return;
+    }
 
     u32 *rows[DOCK_GLASS_BLUR_ROWS];
     u32 *next_row = dock_glass_next_blur_row;
@@ -550,18 +572,19 @@ static void compose_window_surface(int id, int is_active) {
         orig_w = window_width(id);
         orig_h = window_height(id);
     }
+    static int src_x_map[4096];
     if(id==APP_WELCOME){
         int alpha=is_anim?anim->cur_alpha:256;
         int radius=windows[id].state==WINDOW_STATE_MAXIMIZED?0:12;
         glass_welcome_alpha=alpha;
         ui_bridge_glass(UI_GLASS_WELCOME,wx,wy,ww,wh,radius,ui_theme()->surface_elevated,160);
-        static int glass_source_x[4096];int span=x2-x1;if(span>4096)span=4096;
-        for(int i=0;i<span;i++)glass_source_x[i]=(x1+i-wx)*orig_w/ww;
+        int span=x2-x1;if(span>4096)span=4096;
+        for(int i=0;i<span;i++)src_x_map[i]=(x1+i-wx)*orig_w/ww;
         for(int y=y1;y<y2;y++){
             int sy=(y-wy)*orig_h/wh,cy=y-wy;
             if(cy>=wh-radius)cy=wh-1-cy;
             for(int i=0;i<span;i++){
-                u32 color=src[sy*src_stride+glass_source_x[i]];unsigned a=color>>24;
+                u32 color=src[sy*src_stride+src_x_map[i]];unsigned a=color>>24;
                 if(!a)continue;
                 int cx=x1+i-wx;if(cx>=ww-radius)cx=ww-1-cx;
                 int coverage=graphics_corner_coverage(radius,cx,cy),op=alpha*coverage/64;
@@ -583,7 +606,6 @@ static void compose_window_surface(int id, int is_active) {
          * dividing per pixel: this path runs on every open/close/minimize
          * frame, so the saved divides dominate an animation. Bounded by the
          * scene width; values match (x - wx) * orig_w / ww exactly. */
-        static int src_x_map[4096];
         if (aspan > (int)(sizeof(src_x_map) / sizeof(src_x_map[0])))
             aspan = (int)(sizeof(src_x_map) / sizeof(src_x_map[0]));
         for (int i = 0; i < aspan; i++) {
@@ -1044,18 +1066,20 @@ static void compositor_auth_backdrop(int width, int height) {
         int radius=auth_scene_snapshot?1:3;
         int sw = (width + scale-1) / scale, sh = (height + scale-1) / scale;
         u32 size = (u32)sw * sh * sizeof(u32);
-        u32 *small = kmalloc(size), *temp = kmalloc(size);
         if (!auth_backdrop) {
             auth_backdrop_pages = ((u32)width * height * sizeof(u32) + PMM_PAGE_SIZE - 1u) / PMM_PAGE_SIZE;
             auth_backdrop = (u32 *)pmm_alloc_pages(auth_backdrop_pages);
         }
+        u32 *small = auth_scene_snapshot?auth_backdrop:kmalloc(size), *temp = kmalloc(size);
+        int snapshot=auth_scene_snapshot;
         if (small && temp && auth_backdrop) {
             for (int y = 0; y < sh; y++)
                 for (int x = 0; x < sw; x++) small[y * sw + x] = source[y * scale * width + x * scale];
             /* Separable 7x7 box, clamped at every edge. Scratch is released
              * immediately; only the full-size presentation cache survives. */
             pollik_box_blur(small,temp,sw,sh,radius);
-            for (int y = 0; y < height; y++) {
+            if(snapshot)pollik_expand_blur2(auth_backdrop,(unsigned)width,(unsigned)height);
+            else for (int y = 0; y < height; y++) {
                 int sy = y >> shift, ny = sy + 1 < sh ? sy + 1 : sy;
                 int shade = 64 + y * 48 / height;
                 for (int x = 0; x < width; x++) {
@@ -1074,7 +1098,7 @@ static void compositor_auth_backdrop(int width, int height) {
             source=theme_wallpapers[shell.theme]?theme_wallpapers[shell.theme]:wallpaper;
             serial("AUTH: blur cache unavailable; using wallpaper\n");
         }
-        if (small) kfree(small);
+        if (small&&!snapshot) kfree(small);
         if (temp) kfree(temp);
     }
     if(!auth_capture_only)memcpy(pixels, auth_backdrop ? auth_backdrop : source, (u32)width * height * sizeof(u32));
@@ -1261,7 +1285,7 @@ void compositor_paint(int full) {
             dock_glass_blur_backdrop(width, height);
             dock_draw_pill();
 #ifndef POLLIK_COMPOSITOR_LEGACY_DAMAGE
-            if (full == 2) {
+            if (full == 2 && dock_background) {
                 GraphicsClip cache_bounds = {dock_x, dock_y, dock_x + dock_w, dock_y + dock_h};
                 GraphicsClip old_ring = clip_intersection(clip, cache_bounds);
                 for (int y = old_ring.y1; y < old_ring.y2; y++)
@@ -1275,13 +1299,13 @@ void compositor_paint(int full) {
              * hover frame; this clip may cover only a small section of it. */
             GraphicsClip cache_clip = clip_intersection(graphics_get_clip(),
                 (GraphicsClip){dock_x, dock_y, dock_x + dock_w, dock_y + dock_h});
-            if (cache_clip.x1 < cache_clip.x2 && cache_clip.y1 < cache_clip.y2) {
+            if (dock_background && cache_clip.x1 < cache_clip.x2 && cache_clip.y1 < cache_clip.y2) {
                 for (int y = cache_clip.y1; y < cache_clip.y2; y++)
                     memcpy(dock_background + (y - dock_y) * DOCK_CACHE_WIDTH + cache_clip.x1 - dock_x,
                            pixels + y * width + cache_clip.x1,
                            (u32)(cache_clip.x2 - cache_clip.x1) * 4);
             }
-            if (full == 1) dock_background_valid = 1;
+            if (full == 1) dock_background_valid = dock_background != 0;
 #ifndef POLLIK_COMPOSITOR_LEGACY_DAMAGE
             graphics_set_clip(clip);
 #endif
@@ -1336,6 +1360,7 @@ void compositor_init(void) {
         hal_cpu_halt_forever();
     }
     u32 scene_pages = ((u32)scene_bytes + PMM_PAGE_SIZE - 1u) / PMM_PAGE_SIZE;
+    dock_background = (u32 *)pmm_alloc_pages((DOCK_CACHE_WIDTH * 145 * sizeof(u32) + PMM_PAGE_SIZE-1)/PMM_PAGE_SIZE);
     pixels = (u32 *)pmm_alloc_pages(scene_pages);
     if (pixels) wallpaper = (u32 *)pmm_alloc_pages(scene_pages);
     if (!pixels || !wallpaper) {

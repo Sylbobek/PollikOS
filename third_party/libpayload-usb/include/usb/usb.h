@@ -346,6 +346,7 @@ int usb_interface_check(u16 vendor, u16 device);
 
 static inline void __printf(1, 2) usb_debug(const char *fmt, ...)
 {
+	(void)fmt;
 #ifdef USB_DEBUG
 	va_list ap;
 	va_start(ap, fmt);

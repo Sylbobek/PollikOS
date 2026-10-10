@@ -18,7 +18,7 @@ from format_pollikfs2 import format_disk
 from gui_fixture import create_gui_disk
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-BUILD = ROOT / 'build'
+BUILD = pathlib.Path(os.environ.get('POLLIK_GUI_BUILD', ROOT / 'build'))
 PREFIX = ('frame_count fps avg_frame_us p95_frame_us p99_frame_us worst_frame_us '
           'input_events_sec coalesced_mouse_sec client_paints_sec compositor_frames_sec '
           'presents_sec pixels_composed_sec pixels_presented_sec full_redraw_count '
@@ -58,11 +58,12 @@ def history_samples(history, write_index, count):
 
 class Guest:
     def __init__(self, resolution, label='benchmark', data_image=None, boot_only=False,
-                 boot_timeout=None, headless=False, accel=None, cpu=None, allow_reboot=False, network=False):
+                 boot_timeout=None, headless=False, accel=None, cpu=None, allow_reboot=False, network=False, input_devices=()):
         self.data_image = pathlib.Path(data_image).resolve() if data_image else None
         self.boot_only = boot_only
         self.allow_reboot = allow_reboot
         self.network = network
+        self.input_devices = list(input_devices)
         self.resolution = resolution
         self.width, self.height = map(int, resolution.split('x'))
         self.log = BUILD / f'{label}-{resolution}.log'
@@ -128,7 +129,7 @@ class Guest:
             '-drive', f'format=raw,file={data},if=ide,index=1{data_snapshot}',
             '-serial', f'file:{self.log}', '-qmp', f'tcp:127.0.0.1:{port},server=on,wait=off',
         ] + (['-netdev','user,id=close_test','-device','rtl8139,netdev=close_test'] if self.network else ['-nic','none'])
-          + ([] if self.allow_reboot else ['-no-reboot']), cwd=ROOT, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+          + self.input_devices + ([] if self.allow_reboot else ['-no-reboot']), cwd=ROOT, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         try:
             end = time.monotonic() + 40
             while self.connection is None:

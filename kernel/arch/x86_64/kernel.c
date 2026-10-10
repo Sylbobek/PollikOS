@@ -16,6 +16,7 @@
 #include "syscall.h"
 #include "tty.h"
 #include "console_fb.h"
+#include "../../factory_reset.h"
 #include "network.h"
 #include "../../hal.h"
 void c3_demo(void);
@@ -247,7 +248,7 @@ __attribute__((noreturn)) static void console64_run(void) {
         console_shell_exited = 0;
         (void)process64_tick_limit(process->pid, 0); /* interactive: no CPU budget */
         while (!console_shell_exited) {
-            if (!scheduler64_run(10, 0, session_completion)) halt();
+            if (!scheduler64_run(10, tty64_usb_poll, session_completion)) halt();
             int state=security_session_state();
             if(state==SESSION_ACTIVE) continue;
             int graphical_elevation=state==SESSION_ELEVATE&&console_fb_width()>=400&&console_fb_height()>=440;
@@ -257,11 +258,17 @@ __attribute__((noreturn)) static void console64_run(void) {
             gui_session_active=graphical_elevation;
             if(!graphical_elevation)console_fb_write("\033[2J\033[H",7);
             tty64_init();
-            if(state==SESSION_LOGOUT) {
+            if(state==SESSION_LOGOUT || state==SESSION_FACTORY_RESET) {
                 uint64_t old_session=security_session_id();
                 process64_end_session(old_session);
                 security_session_end();
                 while(scheduler64_count()) if(!scheduler64_run(10,0,session_completion)) halt();
+                if(state==SESSION_FACTORY_RESET) {
+                    serial64("[RESET64] removing account, /home and /tmp; preserving system files\n");
+                    if(!factory_reset_finish()){serial64("[RESET64] reset incomplete; request retained for next boot\n");halt();}
+                    serial64("[RESET64] factory reset complete; restarting\n");
+                    hal_cpu_triple_fault();
+                }
                 serial64("[SESSION64] logged out; resources reclaimed\n");
                 timer64_start();
                 int accepted=auth64_login();
@@ -353,6 +360,9 @@ static void kernel64_continue(void) {
         serial64("[VFS64] mount refused; disk unchanged\n");
         halt();
     }
+    int reset=factory_reset_pending();
+    if(reset<0){serial64("[RESET64] invalid reset request or read error; data unchanged\n");halt();}
+    if(reset && !factory_reset_finish()){serial64("[RESET64] interrupted reset could not finish; data preserved\n");halt();}
 #ifndef PRODUCTION
     if (!elf64_demo()) halt();
     file64_demo();

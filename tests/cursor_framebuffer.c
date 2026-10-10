@@ -36,5 +36,17 @@ static int sizes_and_background(void) {
 }
 int main(void) {
     setup();
-    return !(cursor_presentations() && sizes_and_background());
+    if(!(cursor_presentations() && sizes_and_background()))return 1;
+    static u32 native_auth_cache[N];
+    memcpy(before,scene,sizeof scene);memcpy(reference_lfb,hardware,sizeof hardware);
+    auth_backdrop=native_auth_cache;native_auth_allocate=1;native_auth_allocations=0;
+    compositor_capture_admin_background();
+    REQUIRE(native_auth_allocations==1);
+    REQUIRE(equal_pixels(scene,before,"capture changed cursor-free scene before auth frame"));
+    REQUIRE(equal_pixels(hardware,reference_lfb,"capture changed presented frame"));
+    REQUIRE(memcmp(native_auth_cache,scene,sizeof scene)!=0);
+    px=px+25;py=py+25;compositor_draw_cursor(0);
+    REQUIRE(compare_full());
+    printf("PASS administrator capture: cached blur leaves scene/frame intact, moving cursor restores correct pixels\n");
+    return 0;
 }

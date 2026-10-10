@@ -243,7 +243,7 @@ int scheduler64_run(uint64_t maximum_ticks, Scheduler64Boundary boundary, Schedu
         if (boundary) boundary();
         reap(completion);
         if (accounting.ticks-start >= maximum_ticks || !scheduler64_count()) break;
-        if(security_session_state()==SESSION_LOCKED || security_session_state()==SESSION_LOGOUT || security_session_state()==SESSION_PASSWORD || security_session_state()==SESSION_ELEVATE) break;
+        if(security_session_state()==SESSION_LOCKED || security_session_state()==SESSION_LOGOUT || security_session_state()==SESSION_PASSWORD || security_session_state()==SESSION_ELEVATE || security_session_state()==SESSION_FACTORY_RESET) break;
         if (!queue_count) {
             hal_cpu_idle_once_disabled(); /* atomic enable+halt avoids lost wakeups */
             continue;

@@ -25,7 +25,10 @@ extern int printf(const char *, ...);
 #define N (W * H)
 static u32 scene[N], background[N], reference[N], reference_lfb[N];
 static u32 hardware[N], before[N], cache_backup[(APP_COUNT * 68 + 144) * 145];
-_Static_assert(sizeof cache_backup == sizeof dock_background, "count-derived dock cache geometry");
+static u32 native_dock_background[DOCK_CACHE_WIDTH * 145];
+static u32 native_auth_scratch[2][N];
+static int native_auth_allocate,native_auth_allocations;
+_Static_assert(sizeof cache_backup == sizeof native_dock_background, "count-derived dock cache geometry");
 static u32 clients[NUM_APPS][420 * 320];
 static int px = 380, py = 220, cursor_kind, calls, paints, failures, last_full;
 static u32 last_pixels;
@@ -44,6 +47,14 @@ void serial(const char *s) { (void)s; }
 void number(char *out, u32 n) { (void)n; out[0] = 0; }
 uintptr_t pmm_alloc_pages(u32 n) { (void)n; return 0; }
 void pmm_free_pages(uintptr_t p, u32 n) { (void)p; (void)n; }
+volatile u32 ticks;
+void *kmalloc(u32 size){return native_auth_allocate&&size<=sizeof(native_auth_scratch[0])&&native_auth_allocations<2?native_auth_scratch[native_auth_allocations++]:0;}
+void kfree(void *memory){(void)memory;}
+int hal_cpu_has_cpuid(void){return 0;}
+void hal_cpuid(unsigned leaf,unsigned subleaf,unsigned *a,unsigned *b,unsigned *c,unsigned *d){(void)leaf;(void)subleaf;*a=*b=*c=*d=0;}
+void hal_port_write8(unsigned short port,unsigned char value){(void)port;(void)value;}
+u64 hal_read_tsc_serialized(void){return 0;}
+void hal_cpu_relax(void){}
 void klog_dec(const char *a, const char *b, u32 c) { (void)a; (void)b; (void)c; }
 Window *wm_get_window(int id) { return &g_windows[id]; }
 int wm_active_app(void) { return 1; }
@@ -117,8 +128,11 @@ void dock_draw_content(void) {
     sprite(360, H - 88, 56, 56, cursors_index[2], cursors_alpha[2], cursors_palette[2], 32, 36);
 }
 void ui_draw_dialog(void) { rounded(400, 200, 340, 280, 12, 0xeeeeee, 190); }
-void control_center_draw(void){}
-int control_center_active(void){return 0;}
+void control_center_draw(void){
+    ui_bridge_glass(UI_GLASS_CONTROL,500,60,350,450,22,0x20263a,160);
+    text(520,80,"Glass overlay",0xffffff,1);
+}
+int control_center_active(void){return 1;}
 void ui_draw_menu(UiMenu *m) { (void)m; rounded(100, 300, 250, 180, 8, 0x303040, 200); }
 void ui_draw_notifications(u32 now) {
     (void)now;
@@ -169,6 +183,7 @@ static int compare_full(void) {
     return 1;
 }
 static void setup(void) {
+    dock_background=native_dock_background;
     shell = (ShellState){.width = W, .height = H, .drag_app = 1, .drag = 1,
                          .drag_moved = 1, .resizing = -1, .hover = -1};
     pixels = scene; wallpaper = background;
@@ -218,9 +233,9 @@ static int held_drag(void) {
     REQUIRE(resize_calls == old_resizes + 1 && !resize_order_errors);
     REQUIRE(compare_full());
     /* Inactive neutral controls match the pre-followup2 chrome artwork. */
-    REQUIRE(clients[0][17 * 360 + 18] == 0xb8adb5);
-    REQUIRE(clients[0][17 * 360 + 36] == 0xb8b2ad);
-    REQUIRE(clients[0][17 * 360 + 54] == 0xadb8b2);
+    REQUIRE((clients[0][17 * 360 + 18]&0xffffffu) == 0xb8adb5);
+    REQUIRE((clients[0][17 * 360 + 36]&0xffffffu) == 0xb8b2ad);
+    REQUIRE((clients[0][17 * 360 + 54]&0xffffffu) == 0xadb8b2);
     printf("PASS accumulated held-drag frames, shadow-only cull, dock cache, resize, dim controls\n");
     return 1;
 }
@@ -303,6 +318,16 @@ static u64 test_pixel_hash(const u32 *buffer) {
 }
 #include "corners.h"
 int main(void) {
+    static u32 blur_scratch[(DOCK_GLASS_BLUR_ROWS+1+3)*DOCK_CACHE_WIDTH];
+    static u32 welcome_backdrop[N];
+    static u32 panel_backdrop[N];
+    dock_glass_blur_rows=(u32 (*)[DOCK_CACHE_WIDTH])blur_scratch;
+    dock_glass_next_blur_row=blur_scratch+DOCK_GLASS_BLUR_ROWS*DOCK_CACHE_WIDTH;
+    dock_glass_vertical_sum=(int (*)[DOCK_CACHE_WIDTH])(dock_glass_next_blur_row+DOCK_CACHE_WIDTH);
+    glass_backdrops[UI_GLASS_WELCOME].pixels=welcome_backdrop;
+    glass_backdrops[UI_GLASS_WELCOME].capacity=N;
+    glass_backdrops[UI_GLASS_CONTROL].pixels=panel_backdrop;
+    glass_backdrops[UI_GLASS_CONTROL].capacity=N;
     for(int percent=20;percent<=100;percent++) {
         framebuffer_set_brightness(percent);
         for(int value=0;value<256;value++) {

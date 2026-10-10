@@ -17,7 +17,20 @@ static inline void pollik_box_blur(unsigned *pixels,unsigned *scratch,int width,
     }
 }
 static inline unsigned pollik_color_mix(unsigned a,unsigned b,unsigned t){
-    unsigned s=256-t;return (((a>>16&255)*s+(b>>16&255)*t)>>8)<<16|
-        (((a>>8&255)*s+(b>>8&255)*t)>>8)<<8|(((a&255)*s+(b&255)*t)>>8);
+    unsigned s=256-t;
+    unsigned rb=(((a&0xff00ff)*s+(b&0xff00ff)*t)>>8)&0xff00ff;
+    unsigned g=(((a>>8)&255)*s+((b>>8)&255)*t)&0xff00;
+    return rb|g;
+}
+/* Grow a half-resolution RGB cache in place, backwards to preserve samples. */
+static inline void pollik_expand_blur2(unsigned *pixels,unsigned width,unsigned height){
+    unsigned sw=(width+1)/2,sh=(height+1)/2;
+    for(int y=(int)height-1;y>=0;y--)for(int x=(int)width-1;x>=0;x--){
+        unsigned sx=(unsigned)x>>1,sy=(unsigned)y>>1,nx=sx+1<sw?sx+1:sx,ny=sy+1<sh?sy+1:sy;
+        unsigned a=pixels[sy*sw+sx];
+        if(x&1)a=pollik_color_mix(a,pixels[sy*sw+nx],128);
+        if(y&1){unsigned b=pixels[ny*sw+sx];if(x&1)b=pollik_color_mix(b,pixels[ny*sw+nx],128);a=pollik_color_mix(a,b,128);}
+        pixels[(unsigned)y*width+(unsigned)x]=pollik_color_mix(a,0x100b20,112);
+    }
 }
 #endif

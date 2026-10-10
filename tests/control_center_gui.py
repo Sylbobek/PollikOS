@@ -42,7 +42,7 @@ def main():
                     picture = Image.open(path)
                     if all(picture.getpixel(point) == color for point, color in checks):
                         break
-                    assert time.monotonic() < deadline, (name, 'flyout has not finished presenting')
+                    assert time.monotonic() < deadline, (name, [(p,c,picture.getpixel(p)) for p,c in checks])
                 picture.save(path.with_suffix('.png'))
                 return picture, path.with_suffix('.png')
 
@@ -68,10 +68,31 @@ def main():
                            for shift in (16, 8, 0))
             def rgb(color):
                 return tuple((color >> shift) & 255 for shift in (16, 8, 0))
-            panel = rgb(mix(theme[3], theme[9], 6))
-            card = rgb(mix(mix(theme[3], theme[9], 6), theme[2], 160))
-            stable = [card, panel, card]
-            base, _ = snapshot('main', [((x + 196, y + 30), panel), *zip(samples, stable)])
+            tint = mix(theme[3], theme[9], 6)
+            card_tint = mix(tint, theme[2], 160)
+            def glass_color(slot, point):
+                values = g.words('glass_backdrops')[slot*6:slot*6+6]
+                address, capacity, bx, by, bw, bh = values
+                assert address and capacity and bw and bh, 'glass cache missing'
+                colors = []
+                for dy in range(-3, 4):
+                    row = max(0, min(bh-1, point[1]-by+dy))
+                    data = g.memory(address+row*bw*4, bw*4)
+                    line = [int.from_bytes(data[max(0,min(bw-1,point[0]-bx+dx))*4:][:4], 'little')
+                            for dx in range(-3,4)]
+                    colors.append(tuple((sum((color>>shift)&255 for color in line)+3)//7
+                                        for shift in (16,8,0)))
+                blurred = sum(((sum(row[c] for row in colors)+3)//7)<<shift
+                              for c,shift in enumerate((16,8,0)))
+                return mix(blurred,tint,160)
+            g.wait(lambda: g.words('glass_backdrops')[6] != 0, 'glass cache allocated')
+            g.move(x+8,y+90)
+            panel_point = (x + 196, y + 30)
+            panel = rgb(glass_color(1,panel_point))
+            stable = [rgb(mix(glass_color(1,p),card_tint,136)) if i != 1 else rgb(glass_color(1,p))
+                      for i,p in enumerate(samples)]
+            base, _ = snapshot('main', [(panel_point,panel), *zip(samples, stable)])
+            assert panel != rgb(tint), 'panel is opaque instead of glass'
             assert base.getpixel((x, y)) != base.getpixel((x + 196, y + 30)), 'square panel corner'
             assert fx >= x + 400 + 16 and fx + 248 <= g.width - 12, 'flyout outside screen'
             for kind, point, name, popup_top in (
@@ -84,9 +105,12 @@ def main():
                 g.wait(lambda: value('cc_list') == kind and value('cc_detail_kind') == kind
                        and value('cc_detail_slide') == 256, name + ' flyout opens')
                 height = 204 if kind == 3 else 184 if kind == 4 else 176
+                g.wait(lambda: g.words('glass_backdrops')[18] != 0 and
+                       g.words('glass_backdrops')[23] == height+6, 'flyout glass painted')
+                g.move(point[0]+1,point[1])
                 picture, path = snapshot(name, (
-                    ((fx + 124, y + popup_top + 8), panel),
-                    ((fx + 124, y + popup_top + height - 8), panel),
+                    ((fx + 124, y + popup_top + 8), rgb(glass_color(3,(fx + 124,y + popup_top + 8)))),
+                    ((fx + 124, y + popup_top + height - 8), rgb(glass_color(3,(fx + 124,y + popup_top + height - 8)))),
                     *zip(samples, stable),
                 ))
                 assert [picture.getpixel(point) for point in samples] == stable, 'flyout covered main controls'

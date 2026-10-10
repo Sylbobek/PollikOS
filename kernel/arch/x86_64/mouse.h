@@ -11,6 +11,8 @@ typedef struct {
 _Static_assert(sizeof(MouseEvent64)==USER_INPUT_EVENT_SIZE, "mouse event ABI size");
 int mouse64_init(void);
 void mouse64_byte(uint8_t value);
+void mouse64_stream_reset(void);
+void mouse64_usb_poll(void);
 int mouse64_pop(MouseEvent64 *event);
 void mouse64_flush(void);
 int mouse64_wheel_enabled(void);

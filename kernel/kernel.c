@@ -9,6 +9,16 @@
 #include "audio.h"
 
 /* Freestanding runtime and machine boot remain separate from the GUI shell. */
+unsigned long long __udivdi3(unsigned long long value,unsigned long long divisor) {
+    if(!divisor) __builtin_trap();
+    unsigned long long remainder=0,quotient=0;
+    for(int bit=63;bit>=0;--bit) {
+        unsigned carry=(unsigned)(remainder>>63);
+        remainder=(remainder<<1)|((value>>bit)&1);
+        if(carry || remainder>=divisor) { remainder-=divisor;quotient|=1ULL<<bit; }
+    }
+    return quotient;
+}
 /* Scalar 64-bit remainder required by the vendored Argon2 implementation on
  * i386. Binary division avoids a recursive compiler-runtime dependency. */
 unsigned long long __umoddi3(unsigned long long value,unsigned long long divisor) {

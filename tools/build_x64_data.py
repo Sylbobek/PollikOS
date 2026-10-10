@@ -74,6 +74,7 @@ def build(output):
         "files.pol": (output / "userspace/files.elf").read_bytes(),
         "browser.pol": (output / "userspace/browser.elf").read_bytes(),
         "notes.pol": (output / "userspace/notes.elf").read_bytes(),
+        "settings.pol": (output / "userspace/settings.elf").read_bytes(),
         "calculator.pol": (output / "userspace/calculator.elf").read_bytes(),
         "etc/read_test.txt": b"Alpha file data\n",
         "etc/other.txt": b"Bravo file data\n",

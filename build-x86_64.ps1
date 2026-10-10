@@ -87,6 +87,7 @@ try {
         'files'             = @{ Sources = @('sdk/apps/files.c');              Optimization = '-O2' }
         'browser'           = @{ Sources = @('sdk/apps/browser.c','sdk/apps/browser_js.c','kernel/browser/html_parser.c','kernel/browser/css_engine.c','kernel/browser/layout.c','kernel/browser/render.c','third_party/elk/elk.c'); Optimization = '-O2'; Defines = @('POLLIK_BROWSER_STANDALONE=1') }
         'notes'             = @{ Sources = @('sdk/apps/notes.c');              Optimization = '-O2' }
+        'settings'          = @{ Sources = @('sdk/apps/settings.c');           Optimization = '-O2' }
         # C4 ABI, fault and preemption fixtures.
         'abi_test_o2'       = @{ Sources = @('sdk/tests/abi_test_c.c');        Optimization = '-O2' }
         'stack_guard_c'     = @{ Sources = @('sdk/tests/stack_guard_c.c');     Optimization = '-O2' }
@@ -226,7 +227,7 @@ try {
         $linkOptions += '--wrap=ata_write_sector'
     }
     $objects = @()
-    $modules += @('../../account','../../account_platform','../../security','../../vfs','../../fs_journal','../../fs_journal_platform','../../pollikfs','../../storage','../../hal','../../audio','../../../third_party/monocypher/monocypher')
+    $modules += @('../../account','../../account_platform','../../security','../../vfs','../../fs_journal','../../fs_journal_platform','../../pollikfs','../../factory_reset','../../storage','../../hal','../../audio','../../../third_party/monocypher/monocypher')
     $modules += @('../../../sdk/lib/font_data')
     foreach ($module in $modules) {
         $objectName = Split-Path $module -Leaf
@@ -250,6 +251,8 @@ try {
         '-c','kernel/net/tls.c','-o',"$output/net_tls.o")
     $objects += "$output/net_tls.o"
     $objects += $bearSslArchive
+    & "$PSScriptRoot/tools/build_usb.ps1" -Arch x86_64 -Output $output
+    $objects += "$output/libusb-input.a"
     Invoke-Checked ld.lld (@('-m','elf_x86_64','-T','kernel/arch/x86_64/linker.ld',
         "$output/entry.o","$output/interrupts.o","$output/user_payload.o") + $objects + $linkOptions + @('-o',"$output/kernel.elf"))
     Invoke-Checked llvm-objcopy @('-O','binary',"$output/kernel.elf","$output/kernel.bin")

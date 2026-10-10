@@ -2,6 +2,9 @@
 #include "../audio.h"
 #include "../pmm.h"
 #include "../auth.h"
+#include "../security.h"
+#include "../ui.h"
+#include "../ui.h"
 int framebuffer_width(void);
 int framebuffer_height(void);
 
@@ -46,6 +49,7 @@ static int g_settings_tab = TAB_APPEARANCE;
 static int g_sound_played = 0;
 static const char *g_last_net_status = 0;
 static int slider_capture=-1,slider_changed;
+static int reset_confirm;
 
 /* Layout computation helper */
 typedef struct {
@@ -110,6 +114,7 @@ void settings_close(void) {
     if(slider_changed)app_host_save_settings();
     slider_capture=-1;slider_changed=0;
 }
+void settings_window_close(void){reset_confirm=0;settings_close();}
 int settings_drag(int x,int y,int active) {
     GuiAppSize s=gui_app_size(APP_SETTINGS);
     SettingsLayout l=settings_calc_layout(s.width,s.height);
@@ -230,12 +235,34 @@ void settings_render(int width,int height,int active) {
         setting_button(cx+14,336,110,30,"Restart",0,l);
         setting_button(cx+134,336,120,30,"Shut down",0,l);
         setting_button(cx+264,336,110,30,"Lock",1,l);
+        draw_card((AppRect){cx,388,cw,112},l.bg_card,l.border_card,12);
+        setting_text(cx+14,396,cw-28,"Factory reset",l.text_head);
+        setting_text(cx+14,424,cw-28,"Erase account, /home, /tmp and preferences",l.text_body);
+        setting_button(cx+14,460,180,28,"Reset system...",0,l);
+    }
+    if(reset_confirm) {
+        draw_card((AppRect){cx,190,cw,238},l.bg_card,l.border_card,12);
+        setting_text(cx+14,206,cw-28,"Factory reset - data will be deleted",l.text_head);
+        setting_text(cx+14,242,cw-28,"Account, /home files and /tmp are removed.",l.text_body);
+        setting_text(cx+14,270,cw-28,"Programs and libraries remain. Then restart.",l.text_body);
+        setting_text(cx+14,300,cw-28,"Administrator password is required.",l.text_muted);
+        setting_button(cx+14,354,110,32,"Cancel",0,l);
+        setting_button(cx+136,354,190,32,"Erase and restart",0,l);
     }
 }
 
 void settings_click(int x, int y) {
     GuiAppSize s = gui_app_size(APP_SETTINGS);
     SettingsLayout l = settings_calc_layout(s.width, s.height);
+    if(reset_confirm) {
+        int cx=l.content.x;
+        if(y>=354 && y<386 && x>=cx+14 && x<cx+124){reset_confirm=0;app_host_invalidate(APP_SETTINGS);}
+        else if(y>=354 && y<386 && x>=cx+136 && x<cx+326) {
+            if(!security_has(security_current(),CAP_ADMIN))auth_run_admin(APP_SETTINGS);
+            else if(!auth_factory_reset())ui_notify("Factory reset","Could not reset: filesystem is unavailable or read-only",ICON_WARNING);
+        }
+        return;
+    }
     if(settings_drag(x,y,1)>=0)return;
 
     /* 1. Sidebar clicks */
@@ -343,6 +370,7 @@ void settings_click(int x, int y) {
             app_host_invalidate(APP_SETTINGS);
         }
     } else if (g_settings_tab == TAB_GENERAL) {
+        if(x>=cx+14 && x<cx+194 && y>=460 && y<488){reset_confirm=1;app_host_invalidate(APP_SETTINGS);return;}
         /* Restart: cx + 14, 336, 110, 30 */
         if (x >= cx + 14 && x <= cx + 124 && y >= 336 && y <= 366) {
             app_host_power(1);

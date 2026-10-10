@@ -128,6 +128,7 @@ void settings_render(int width, int height, int active);
 void settings_click(int x, int y);
 int settings_drag(int x,int y,int active);
 void settings_close(void);
+void settings_window_close(void);
 void calculator_init(void);
 void calculator_close(void);
 void calculator_render(int width,int height,int active);

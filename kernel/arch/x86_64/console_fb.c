@@ -176,12 +176,7 @@ void console_fb_elevation_capture(void){
     pollik_box_blur(elevation_blur,elevation_original,(int)elevation_sw,(int)elevation_sh,1);
     /* Expand from the last pixel: source samples stay intact until consumed.
      * Original is scratch here; save_background repopulates it after hiding. */
-    for(int y=(int)height-1;y>=0;y--)for(int x=(int)width-1;x>=0;x--){
-        unsigned sx=(unsigned)x/2,sy=(unsigned)y/2,nx=sx+1<elevation_sw?sx+1:sx,ny=sy+1<elevation_sh?sy+1:sy;
-        u32 a=pollik_color_mix(elevation_blur[sy*elevation_sw+sx],elevation_blur[sy*elevation_sw+nx],(x&1)*128);
-        u32 b=pollik_color_mix(elevation_blur[ny*elevation_sw+sx],elevation_blur[ny*elevation_sw+nx],(x&1)*128);
-        elevation_blur[(unsigned)y*width+(unsigned)x]=pollik_color_mix(pollik_color_mix(a,b,(y&1)*128),0x100b20,112);
-    }
+    pollik_expand_blur2(elevation_blur,width,height);
     elevation_pages=(unsigned)total;console_fb_overlay_end();
 }
 void console_fb_elevation_save_background(void){

@@ -41,6 +41,7 @@ static int read_line(const char *prompt,char *buffer,size_t capacity,int secret)
     uint64_t blink=scheduler64_ticks()/50;
     if(secret==2)console_fb_elevation_draw(process64_elevation_name(),0,elevation_error,1);
     for (;;) {
+        tty64_usb_poll();
         u8 key;
         int has_key=(int)tty64_pop(&key,1);
         if(secret==2){

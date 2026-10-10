@@ -8,11 +8,13 @@
 #include "auth.h"
 #include "control_center.h"
 #include "../common/ps2_pointer.h"
+#include "usb_input.h"
 
 /* Private PS/2 decoder and pointer state. Symbol names remain compatible with
  * the existing QMP tests without exporting mutable pointers to other modules. */
 static int mx = 760, my = 500;
 static Ps2Pointer ps2_pointer;
+static unsigned ps2_buttons,usb_buttons;
 static int alt_held;
 static int window_only;
 static int s_ctrl_held = 0;
@@ -105,10 +107,11 @@ static int mouse_cmd(u8 c) {
     return 0;
 }
 void input_dispatch_init(void) {
+    usb_input_init();
     wait_write(); outb(0x64, 0xa8);
     wait_write(); outb(0x64, 0x20);
     int config = -1;
-    for (int t = 0; t < 100000; t++) if (inb(0x64) & 1) { config = inb(0x60); break; }
+    for (int t = 0; t < 100000; t++){u8 status=inb(0x64);if(status&1){int byte=inb(0x60);if(!(status&0x20)){config=byte;break;}}}
     if (config < 0) { serial("INPUT controller timeout\n"); return; }
     wait_write(); outb(0x64, 0x60);
     /* Polling needs no IRQ enables, but both PS/2 clocks must be on. The
@@ -613,6 +616,16 @@ static void pointer_packet(const Ps2Motion *motion) {
     compositor_draw_cursor(0);
 }
 void input_dispatch_poll(void) {
+    if(!window_only)usb_input_poll();
+    UsbPointerEvent event;
+    while(usb_input_read(&event)){
+        usb_buttons=event.buttons;
+        Ps2Motion motion={.dx=event.dx,.dy=event.dy,.wheel=event.wheel,.buttons=usb_buttons|ps2_buttons};
+        int acceleration=pointer_acceleration;
+        if(event.absolute&&event.max_x>0&&event.max_y>0){motion.dx=(int)((unsigned long long)event.x*(shell.width-1)/event.max_x)-mx;motion.dy=(int)((unsigned long long)event.y*(shell.height-1)/event.max_y)-my;pointer_acceleration=0;}
+        pointer_packet(&motion);pointer_acceleration=acceleration;
+    }
+    u8 scan;while(usb_input_read_key(&scan))key(scan);
     for (int count = 0; count < 256; count++) {
         u8 s = inb(0x64);
         if (!(s & 1)) break;
@@ -621,6 +634,7 @@ void input_dispatch_poll(void) {
         if (s & 32) {
             Ps2Motion motion;
             if(ps2_pointer_feed(&ps2_pointer,c,wm_time_ms(),&motion)){
+                ps2_buttons=motion.buttons;motion.buttons|=usb_buttons;
                 if(motion.tap){Ps2Motion down=motion;down.buttons|=1;pointer_packet(&down);motion.dx=motion.dy=motion.wheel=0;}
                 pointer_packet(&motion);
             }

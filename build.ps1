@@ -37,7 +37,7 @@ Invoke-Checked nasm @('-f','bin','boot/stage2.asm','-o','build/stage2.bin')
 Invoke-Checked nasm @('-f','elf32','kernel/entry.asm','-o','build/entry.o')
 Invoke-Checked nasm @('-f','elf32','kernel/interrupts.asm','-o','build/interrupts.o')
 $netModules = @('net_util','rtl8139','wifi_if','arp','ipv4','icmp','udp','dhcp','dns','tcp','tls','http','net_manager')
-foreach ($module in @('kernel','desktop','compositor','graphics','gfx_device','soft3d','input_dispatch','wm','hw','hal','mem','pmm','vmm','klog','ahci','storage','fs_journal','fs_journal_platform','pollikfs','vfs','process','syscall','elf','network','framebuffer','ui','ui_icons','control_center','trash','ui_animation','desktop_items','auth','account','account_platform','security','media','pollikgl','audio')) {
+foreach ($module in @('kernel','desktop','compositor','graphics','gfx_device','soft3d','input_dispatch','wm','hw','hal','mem','pmm','vmm','klog','ahci','storage','fs_journal','fs_journal_platform','pollikfs','factory_reset','vfs','process','syscall','elf','network','framebuffer','ui','ui_icons','control_center','trash','ui_animation','desktop_items','auth','account','account_platform','security','media','pollikgl','audio')) {
     $optimization = if ($module -eq 'wm') { '-Oz' } else { '-Os' }
     $moduleFlags = @()
     if ($module -eq 'compositor' -and $LegacyDamage) { $moduleFlags += '-DPOLLIK_COMPOSITOR_LEGACY_DAMAGE=1' }
@@ -76,8 +76,11 @@ foreach ($app in $userApps) {
 $browserObjs = @($browserModules | ForEach-Object { "build/$_.o" })
 Invoke-Checked clang @('--target=i386-none-elf','-m32','-march=i386','-ffreestanding','-fno-pic','-fno-pie','-fno-stack-protector','-mno-sse','-mno-mmx','-Os','-Wall','-Wextra','-Werror','-c','sdk/lib/font_data.c','-o','build/font_data.o')
 $netObjs = @($netModules | ForEach-Object { "build/$_.o" })
+& "$PSScriptRoot/tools/build_usb.ps1" -Arch i386 -Output build
 $linkArgs = @('--gc-sections','-m','elf_i386','-T','kernel/linker.ld','build/entry.o','build/interrupts.o','build/kernel.o','build/desktop.o','build/compositor.o','build/graphics.o','build/gfx_primitives.o','build/gfx_device.o','build/soft3d.o','build/input_dispatch.o','build/wm.o','build/ui.o','build/ui_icons.o','build/control_center.o','build/hw.o','build/hal.o','build/mem.o','build/pmm.o','build/vmm.o','build/klog.o','build/ahci.o','build/storage.o','build/fs_journal.o','build/fs_journal_platform.o','build/pollikfs.o','build/vfs.o','build/process.o','build/syscall.o','build/elf.o','build/trash.o','build/ui_animation.o','build/desktop_items.o','build/auth.o','build/account.o','build/account_platform.o','build/security.o','build/monocypher.o','build/media.o','build/pollikgl.o','build/audio.o') + $userElfObjs + @('build/network.o','build/framebuffer.o') + $netObjs + $browserObjs + $guiObjs + @('build/elk.o') + @('build/libbearssl.a','-o','build/kernel.elf')
 $linkArgs += @('build/font_data.o')
+$linkArgs += @('build/factory_reset.o')
+$linkArgs += @('build/libusb-input.a')
 Invoke-Checked ld.lld $linkArgs
 Invoke-Checked llvm-objcopy @('-O','binary','build/kernel.elf','build/kernel.bin')
 $kernelBytes = [IO.File]::ReadAllBytes("$PSScriptRoot/build/kernel.bin")

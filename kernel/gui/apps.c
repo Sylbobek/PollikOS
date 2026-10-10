@@ -55,7 +55,7 @@ static const GuiApp registry[APP_COUNT] = {
         .render = notes_render, .key = notes_client_key, .click = notes_click,
         .drag = notes_client_drag, .resize = notes_resized, .scroll = notes_client_scroll, .cursor = notes_cursor },
     [APP_SETTINGS] = { .name = "Settings", .icon = ICON(APP_SETTINGS), .min_width = 640, .min_height = 520, LIGHT_BODY,
-        .render = settings_render, .click = settings_click, .drag = settings_drag, .close = settings_close },
+        .render = settings_render, .click = settings_click, .drag = settings_drag, .close = settings_window_close },
     [APP_BROWSER] = { .name = "Browser", .icon = ICON(APP_BROWSER), MIN_SIZE, LIGHT_BODY, .bottom_inset = 18,
         .init = browser_client_init, .render = browser_client_render, .key = browser_client_key,
         .click = browser_handle_click, .drag = browser_client_drag, .open = browser_open, .close = browser_close,

@@ -11,7 +11,7 @@ def build(output):
     if output not in ((ROOT/'build/x86_64/kernel').resolve(),(ROOT/'build/x86_64/system').resolve()):raise ValueError('production output must be a managed x64 output directory')
     with (output/'PollikData-test.img').open('rb') as f:source=validate(f.read(SPAN))
     records=manifest(source)
-    apps=('pollish','tcc','desktop.pol','files.pol','terminal.pol','notes.pol','browser.pol','calculator.pol','windowdemo.pol')
+    apps=('pollish','tcc','desktop.pol','files.pol','terminal.pol','notes.pol','settings.pol','browser.pol','calculator.pol','windowdemo.pol')
     selected=dict(FILES)
     selected['/usr/share/licenses/PollikOS-AGPL-3.0.txt']=(ROOT/'LICENSE').read_bytes()
     for library in ('libdom','libcss','libhubbub','libparserutils','libwapcaplet'):

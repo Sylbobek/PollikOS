@@ -15,14 +15,14 @@ def main():
         raise RuntimeError("clang not found on PATH")
     build = ROOT / "build"
     build.mkdir(exist_ok=True)
-    command = [clang, "-std=c11", "-O2", "-fno-builtin", "-Wall", "-Wextra", "-Werror"]
+    command = [clang, "-std=c11", "-O2", "-fno-builtin", "-Wall", "-Wextra", "-Werror", "-ffunction-sections", "-fdata-sections"]
     if os.name == "nt":
-        command.append("-fuse-ld=lld")
+        command += ["-fuse-ld=lld", "-Wl,/OPT:REF"]
     results = []
     for name, define in (("legacy", "-DGFX_RECT_LEGACY=1"), ("primitive", None)):
         executable = build / ((f"held_drag_{name}.exe") if os.name == "nt" else f"held_drag_{name}")
         variant_command = command + ([define] if define else [])
-        variant_command += ["tests/held_drag.c", "kernel/graphics.c", "kernel/gfx/gfx_primitives.c", "-o", str(executable)]
+        variant_command += ["tests/held_drag.c", "kernel/graphics.c", "sdk/lib/font_data.c", "kernel/gfx/gfx_primitives.c", "-o", str(executable)]
         print("Compile native regression (" + name + "): " + subprocess.list2cmdline(variant_command), flush=True)
         subprocess.run(variant_command, cwd=ROOT, check=True)
         result = subprocess.run([str(executable)], cwd=ROOT, check=True,

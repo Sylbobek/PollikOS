@@ -7,6 +7,7 @@
 #include "ui.h"
 #include "pollikfs.h"
 #include "vfs.h"
+#include "factory_reset.h"
 #include "gui/apps.h"
 #include "gui/app_host.h"
 #include "audio.h"
@@ -75,6 +76,13 @@ static int admin_app=-1;
 static char old_password[64];
 
 void auth_init(void) {
+    if(pollikfs_mounted()) {
+        int reset=factory_reset_pending();
+        if(reset<0 || (reset && !factory_reset_finish())) {
+            state=AUTH_LOGIN;copy_text(message,"Factory reset incomplete; disk needs repair",sizeof(message));
+            serial("RESET: pending reset could not complete\n");return;
+        }
+    }
     pointer_was_down = 0;
     clear_input();
     account_wipe(new_password, sizeof(new_password));
@@ -139,6 +147,20 @@ void auth_run_admin(int app_id) {
     if(!gui_app_get(app_id)||auth_is_active())return;
     app_host_capture_admin_background();
     admin_app=app_id;auth_lock();
+}
+int auth_factory_reset(void) {
+    if(auth_is_active() || !security_has(security_current(),CAP_ADMIN|CAP_SESSION|CAP_FILE_WRITE))return 0;
+    unsigned long flags=hal_irq_save_disable();
+    if(!factory_reset_mark()){hal_irq_restore(flags);return 0;}
+    for(int id=0;id<APP_COUNT;id++){gui_app_closed(id);wm_close(id);}
+    process_end_session(security_session_id());security_session_end();
+    if(!factory_reset_finish()) {
+        state=AUTH_LOGIN;clear_input();copy_text(message,"Reset incomplete; restart to retry",sizeof(message));
+        hal_irq_restore(flags);return 0;
+    }
+    account_wipe(&account,sizeof(account));clear_input();
+    serial("RESET: factory reset complete; restarting\n");
+    hal_cpu_triple_fault();
 }
 static void cancel_admin(void){admin_app=-1;clear_input();security_session_resume();state=AUTH_UNLOCKED;message[0]=0;}
 static void submit(void) {
