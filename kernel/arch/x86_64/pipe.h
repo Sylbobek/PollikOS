@@ -1,4 +1,4 @@
-#ifndef POLLIK_X64_PIPE_H
+#if !defined(POLLIK_X64_PIPE_H)
 #define POLLIK_X64_PIPE_H
 #include <stddef.h>
 #include <stdint.h>

@@ -89,3 +89,29 @@ Bufory odbiorcze TCP x86_64 są teraz stronami kernela przydzielanymi na
 otwarcie i zwalnianymi na zamknięcie/abort. Pozwala to zachować osiem gniazd
 bez 256 KiB statycznego BSS i bez naruszania granic bootstrapu SELFTEST.
 Format PollikFS i dane użytkownika pozostają zgodne.
+
+Produkcja zawiera także istniejące `/usr/src/libc`, a powłoka przygotowuje
+`/tmp` przed odbudową biblioteki dla TinyCC. To usuwa brakujące katalogi z
+pierwszego uruchomienia produkcyjnego terminala. Timeout ATA x86_64 mierzy
+czas skalibrowanym TSC (PIT kanał 2), niezależnie od włączonych IRQ, zamiast
+odmawiać zakończenia zapisu po arbitralnej liczbie odczytów portu. Błędy
+i timeout nadal są zgłaszane; dziennik nie wyłącza ochrony read-only.
+
+## Zebrane wyniki
+
+- Build x86_64 normalny, SELFTEST i produkcyjny: zaliczone.
+- `build/terminal-final-guest.log`: 60 nazw komend, snapshoty, obliczenia,
+  pliki/potoki, administrator i terminal GUI — `TERMINAL_COMMANDS_PASS`.
+- `build/terminal-final-kernel.log`: pełny checkpoint — `PASS: selftest-qemu64-64-ci`.
+- `build/terminal-normal-delivery-console.log`: edycja, przekierowania, potoki,
+  natywna kompilacja TinyCC, Ctrl+C, historia i ponowne logowanie — `CONSOLE PASS`.
+- `build/terminal-admin-security.log`: natywne testy security/VFS/journal,
+  19 przerwanych transakcji, Argon2id i odwołanie sesji — PASS.
+- `build/terminal-delivery-network.log` i `build/terminal-delivery-browser.log`:
+  równoległy HTTP, ownership/closed handles oraz przeglądarka z HTTPS — PASS.
+- i386: build `799564` bajty kernela oraz 100 cykli Ring 3; PMM przed/po
+  `51836/51836` — PASS. Nowy rejestr komend nie jest portem powłoki i386.
+
+Testy używały kopii danych. Nie wykonano walidacji sprzętu ani każdego polecenia
+z każdym możliwym zestawem argumentów. Wyłączenie/restart i odtwarzanie tonu są
+podłączone do usług urządzeń; te działania nie są częścią testu terminala.

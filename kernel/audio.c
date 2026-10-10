@@ -1,17 +1,6 @@
 #include "audio.h"
 #include "audio_chime.h"
-#ifdef POLLIK_X64
 #include "arch/x86_64/audio_platform.h"
-#else
-#include "hw.h"
-#include "klog.h"
-#include "mem.h"
-#include "pmm.h"
-#include "vfs.h"
-#include "hal.h"
-static void *audio_dma_alloc(uintptr_t *physical){*physical=pmm_alloc_page();return (void *)*physical;}
-static void audio_dma_free(void *mapped,uintptr_t physical){if(mapped)pmm_free_page(physical);}
-#endif
 
 typedef short s16;
 typedef int s32;
@@ -76,9 +65,7 @@ static Ac97BdlEntry *s_bdl = 0;
 static uintptr_t s_bdl_phys = 0;
 static s16 *s_pcm_buf = 0;
 static uintptr_t s_pcm_phys = 0;
-#ifdef POLLIK_X64
 static PciDevice dma_controller;
-#endif
 
 static void ac97_write_mixer(u8 reg, u16 val) {
     if (!s_nambar) return;
@@ -98,7 +85,6 @@ static int ac97_reset_output(void){
     }
     KLOG_WARN(KLOG_CAT_BOOT,"Audio: DMA reset timeout");return 0;
 }
-#ifdef POLLIK_X64
 unsigned audio_bus_master_port(void){return s_ac97_present?s_nabmbar:0;}
 int audio_reset_dma(void){return s_ac97_present&&ac97_reset_output();}
 int audio_quiesce_dma(void){
@@ -111,7 +97,6 @@ int audio_quiesce_dma(void){
     pci_config_write32(dma_controller.bus,dma_controller.dev,dma_controller.fn,4,(command&0xffffu)&~4u);
     s_ac97_present=0;KLOG_ERROR(KLOG_CAT_BOOT,"Audio: DMA halt timeout; bus mastering disabled");return 0;
 }
-#endif
 int audio_init(void) {
     if(s_ac97_present)return 1;
     PciDevice devs[MAX_PCI_DEVICES];
@@ -136,9 +121,7 @@ int audio_init(void) {
     }
 
     PciDevice *pci = &devs[found_idx];
-#ifdef POLLIK_X64
     dma_controller=*pci;
-#endif
 
     /* Enable I/O Space (bit 0) and Bus Master (bit 2) */
     u32 cmd = pci_config_read32(pci->bus, pci->dev, pci->fn, 0x04);
@@ -242,19 +225,13 @@ void audio_play_tone(u32 freq_hz, u32 duration_ms) {
         s16 val = (phase < half_period)
             ? (s16)(-amplitude + (2 * amplitude * (s32)phase) / (s32)half_period)
             : (s16)(amplitude - (2 * amplitude * (s32)(phase - half_period)) / (s32)half_period);
-#ifdef POLLIK_X64
         s_pcm_buf[i*2]=s_pcm_buf[i*2+1]=val;
-#else
-        s_pcm_buf[i] = val;
-#endif
     }
 
     /* Setup BDL entry 0 */
     s_bdl[0].ptr = (u32)s_pcm_phys;
     s_bdl[0].samples = (u16)total_samples;
-#ifdef POLLIK_X64
     s_bdl[0].samples=(u16)(total_samples*2); /* AC97 counts channel samples. */
-#endif
     s_bdl[0].flags = (u16)AC97_BDL_IOC;
 
     /* Reset PCM Out DMA channel */
@@ -271,65 +248,17 @@ void audio_play_tone(u32 freq_hz, u32 duration_ms) {
     /* Start DMA playback */
     outb((u16)(s_nabmbar + AC97_PO_CR), AC97_CR_RP);
 
-    #ifndef POLLIK_X64
-    /* Wait for playback completion or timeout */
-    u32 timeout = duration_ms * 4000;
-    while (!(inw((u16)(s_nabmbar + AC97_PO_SR)) & AC97_SR_CELV) && --timeout) {
-        __asm__ volatile("pause");
-    }
-
-    /* Stop DMA */
-    outb((u16)(s_nabmbar + AC97_PO_CR), 0);
-    #endif
 }
 
-#ifndef POLLIK_X64
-static s16 *s_chime_pcm;
-#define CHIME_PAGES 24u
-static int audio_play_chime(int login) {
-    if (!audio_output()) return 0;
-    /* Stop the previous DMA before touching its descriptors/sample memory. */
-    if (!ac97_reset_output()) return 1;
-    if (!s_chime_pcm) s_chime_pcm = (s16 *)pmm_alloc_pages(CHIME_PAGES);
-    if (!s_chime_pcm) return 0;
-    u32 frames = audio_chime_frames(login);
-    u32 blocks = (frames + 1023u) / 1024u;
-    for (u32 i = 0; i < frames; i++) {
-        s16 sample = audio_chime_sample(login, i);
-        s_chime_pcm[i * 2] = s_chime_pcm[i * 2 + 1] = sample;
-    }
-    for (u32 i = 0; i < blocks; i++) {
-        u32 count = frames - i * 1024u;
-        if (count > 1024u) count = 1024u;
-        s_bdl[i].ptr = (u32)(uintptr_t)(s_chime_pcm + i * 2048u);
-        s_bdl[i].samples = (u16)(count * 2u);
-        s_bdl[i].flags = AC97_BDL_IOC;
-    }
-    if (ac97_read_mixer(AC97_MIX_EXT_AUDIO_ID) & 1u)
-        ac97_write_mixer(AC97_MIX_FRONT_DAC_RATE, 48000);
-    outl((u16)(s_nabmbar + AC97_PO_BDBAR), (u32)s_bdl_phys);
-    outb((u16)(s_nabmbar + AC97_PO_LVI), (u8)(blocks - 1u));
-    outw((u16)(s_nabmbar + AC97_PO_SR), 0x1c);
-    outb((u16)(s_nabmbar + AC97_PO_CR), AC97_CR_RP);
-    KLOG_INFO(KLOG_CAT_BOOT, login ? "Audio: login chime started" : "Audio: startup chime started");
-    return 1;
-}
-#endif
 
 void audio_play_sound(SoundEffect s) {
     if (!s_volume || sound_is_muted()) return;
     switch (s) {
         case SOUND_STARTUP:
-#ifndef POLLIK_X64
-            if (audio_play_chime(0)) break;
-#endif
             audio_play_tone(392, 24);
             audio_play_tone(587, 36);
             break;
         case SOUND_LOGIN:
-#ifndef POLLIK_X64
-            if (audio_play_chime(1)) break;
-#endif
             audio_play_tone(587, 20);
             audio_play_tone(784, 30);
             break;
@@ -454,32 +383,3 @@ int audio_play_wav(const u8 *data, u32 len) {
     return 1;
 }
 
-#ifndef POLLIK_X64
-int audio_play_wav_file(const char *path) {
-    if (!path || !path[0]) return 0;
-    int fd = vfs_open(path, O_RDONLY);
-    if (fd < 0) return 0;
-
-    vfs_stat_t st;
-    if (vfs_stat(path, &st) < 0 || st.size < 44 || st.size > 2 * 1024 * 1024) {
-        vfs_close(fd);
-        return 0;
-    }
-
-    u8 *buf = (u8 *)kmalloc(st.size);
-    if (!buf) {
-        vfs_close(fd);
-        return 0;
-    }
-
-    int read_bytes = vfs_read(fd, buf, st.size);
-    vfs_close(fd);
-
-    int ok = 0;
-    if (read_bytes == (int)st.size) {
-        ok = audio_play_wav(buf, st.size);
-    }
-    kfree(buf);
-    return ok;
-}
-#endif

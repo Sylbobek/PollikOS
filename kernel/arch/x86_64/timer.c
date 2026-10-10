@@ -9,7 +9,7 @@ static void out8(uint16_t port, uint8_t value) {
 void timer64_start(void) {
     memory_context_check();
     if (!initialized) {
-        /* Same legacy PIC/PIT hardware as i386 process.c; separate IDT ABI. */
+        /* Legacy PIC/PIT hardware; native 64-bit IDT. */
         out8(0x20, 0x11); out8(0xa0, 0x11);
         out8(0x21, 32); out8(0xa1, 40);
         out8(0x21, 4); out8(0xa1, 2);

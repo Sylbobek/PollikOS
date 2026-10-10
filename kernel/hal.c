@@ -32,11 +32,7 @@ u32 hal_port_read32(u16 port) {
 
 unsigned long hal_irq_save_disable(void) {
     unsigned long flags;
-#if defined(__x86_64__)
     __asm__ volatile("pushfq; popq %0; cli" : "=r"(flags) :: "memory");
-#else
-    __asm__ volatile("pushfl; popl %0; cli" : "=r"(flags) :: "memory");
-#endif
     return flags;
 }
 
@@ -57,11 +53,7 @@ void hal_irq_disable(void) {
 
 unsigned long hal_read_flags(void) {
     unsigned long flags;
-#if defined(__x86_64__)
     __asm__ volatile("pushfq; popq %0" : "=r"(flags) :: "memory");
-#else
-    __asm__ volatile("pushfl; popl %0" : "=r"(flags) :: "memory");
-#endif
     return flags;
 }
 
@@ -71,15 +63,9 @@ int hal_interrupts_enabled(void) {
 
 int hal_cpu_has_cpuid(void) {
     unsigned long before, after;
-#if defined(__x86_64__)
     __asm__ volatile("pushfq; popq %0; movq %0, %1; xorq $0x200000, %1;"
                      " pushq %1; popfq; pushfq; popq %1; pushq %0; popfq"
                      : "=&r"(before), "=&r"(after) :: "cc", "memory");
-#else
-    __asm__ volatile("pushfl; popl %0; movl %0, %1; xorl $0x200000, %1;"
-                     " pushl %1; popfl; pushfl; popl %1; pushl %0; popfl"
-                     : "=&r"(before), "=&r"(after) :: "cc", "memory");
-#endif
     return ((before ^ after) & (1ul << 21)) != 0;
 }
 
@@ -201,13 +187,8 @@ unsigned long long hal_read_tsc_serialized(void) {
         return ((unsigned long long)high << 32) | low;
     }
 #endif
-#if defined(__x86_64__)
     __asm__ volatile("cpuid; rdtsc" : "=a"(low), "=d"(high) : "a"(0)
                      : "rbx", "rcx", "memory");
-#else
-    __asm__ volatile("cpuid; rdtsc" : "=a"(low), "=d"(high) : "a"(0)
-                     : "ebx", "ecx", "memory");
-#endif
     return ((unsigned long long)high << 32) | low;
 }
 
@@ -221,14 +202,3 @@ int hal_rdrand32(unsigned int *value) {
     return 1;
 }
 
-void hal_x87_init(void) {
-    __asm__ volatile("fninit" ::: "memory");
-}
-
-void hal_x87_save_reset(void *state) {
-    __asm__ volatile("fnsave (%0); fwait" :: "r"(state) : "memory");
-}
-
-void hal_x87_restore(const void *state) {
-    __asm__ volatile("frstor (%0)" :: "r"(state) : "memory");
-}

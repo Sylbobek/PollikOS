@@ -1,4 +1,4 @@
-#ifndef POLLIK_X64_FPU_H
+#if !defined(POLLIK_X64_FPU_H)
 #define POLLIK_X64_FPU_H
 
 #include <stdint.h>

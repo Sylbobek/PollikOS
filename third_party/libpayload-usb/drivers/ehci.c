@@ -866,13 +866,16 @@ hci_t *
 ehci_pci_init(pcidev_t addr)
 {
 	hci_t *controller;
-	u32 reg_base;
+	uint64_t reg_base;
 
 	u16 pci_command = pci_read_config16(addr, PCI_COMMAND);
 	pci_command = (pci_command | PCI_COMMAND_MEMORY) & ~PCI_COMMAND_IO;
 	pci_write_config16(addr, PCI_COMMAND, pci_command);
 
-	reg_base = pci_read_config32(addr, USBBASE);
+	reg_base = pci_read_config32(addr, USBBASE) & PCI_BASE_ADDRESS_MEM_MASK;
+	if ((pci_read_config32(addr, USBBASE) & 6) == 4)
+		reg_base |= (uint64_t)pci_read_config32(addr, USBBASE+4) << 32;
+	if (reg_base > UINTPTR_MAX) return NULL;
 
 	/* default value for frame length adjust */
 	pci_write_config8(addr, FLADJ, FLADJ_framelength(60000));

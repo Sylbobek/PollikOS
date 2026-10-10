@@ -11,7 +11,7 @@ def build(output):
     if output not in ((ROOT/'build/x86_64/kernel').resolve(),(ROOT/'build/x86_64/system').resolve()):raise ValueError('production output must be a managed x64 output directory')
     with (output/'PollikData-test.img').open('rb') as f:source=validate(f.read(SPAN))
     records=manifest(source)
-    apps=('pollish','tcc','desktop.pol','files.pol','terminal.pol','notes.pol','browser.pol','calculator.pol','windowdemo.pol')
+    apps=('pollish','tcc','desktop.pol','files.pol','terminal.pol','notes.pol','settings.pol','browser.pol','calculator.pol','windowdemo.pol')
     selected=dict(FILES)
     selected['/usr/share/licenses/PollikOS-AGPL-3.0.txt']=(ROOT/'LICENSE').read_bytes()
     for library in ('libdom','libcss','libhubbub','libparserutils','libwapcaplet'):
@@ -38,6 +38,12 @@ def build(output):
         if '/bin/'+app not in selected:raise ValueError(f'missing production app {app}')
     target=output/'PollikData-system.img'
     created=not target.exists()
+    if not created:
+        print(f'Native system disk preserved without writes: {target}')
+        if output.name=='system':
+            from create_vm_profile import create
+            create(target,output/'PollikData-system-30g.img',30)
+        return
     if created:
         pending=target.with_suffix('.img.pending');format_disk(pending,total_size_mb=40)
         sync(pending,selected);pending.replace(target)
@@ -51,5 +57,5 @@ def build(output):
     if output.name=='system':
         from create_vm_profile import create
         profile=create(target,output/'PollikData-system-30g.img',30)
-        sync(profile,selected)
+        # The new profile is an exact copy; never sync an existing private disk.
 if __name__=='__main__':build(sys.argv[1])

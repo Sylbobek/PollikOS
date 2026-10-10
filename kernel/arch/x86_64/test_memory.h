@@ -1,4 +1,4 @@
-#ifndef POLLIK_X64_TEST_MEMORY_H
+#if !defined(POLLIK_X64_TEST_MEMORY_H)
 #define POLLIK_X64_TEST_MEMORY_H
 #include "memory.h"
 

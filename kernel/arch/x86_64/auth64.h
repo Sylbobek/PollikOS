@@ -1,4 +1,4 @@
-#ifndef POLLIK_X64_AUTH_H
+#if !defined(POLLIK_X64_AUTH_H)
 #define POLLIK_X64_AUTH_H
 
 /* Authenticate or create the shared PollikOS account on the mounted data disk.

@@ -306,7 +306,7 @@ usb_decode_interval(usb_speed speed, const endpoint_type type, const unsigned ch
 	case LOW_SPEED:
 		switch (type) {
 		case ISOCHRONOUS: case INTERRUPT:
-			return LOG2(bInterval) + 3;
+			return LOG2(bInterval ? bInterval : 1) + 3;
 		default:
 			return 0;
 		}
@@ -315,7 +315,7 @@ usb_decode_interval(usb_speed speed, const endpoint_type type, const unsigned ch
 		case ISOCHRONOUS:
 			return (bInterval - 1) + 3;
 		case INTERRUPT:
-			return LOG2(bInterval) + 3;
+			return LOG2(bInterval ? bInterval : 1) + 3;
 		default:
 			return 0;
 		}
@@ -324,7 +324,7 @@ usb_decode_interval(usb_speed speed, const endpoint_type type, const unsigned ch
 		case ISOCHRONOUS: case INTERRUPT:
 			return bInterval - 1;
 		default:
-			return LOG2(bInterval);
+			return LOG2(bInterval ? bInterval : 1);
 		}
 	case SUPER_SPEED:
 	/* Intentional fallthrough */
@@ -458,24 +458,20 @@ set_address(hci_t *controller, usb_speed speed, int hubport, int hubaddr)
 		return -1;
 	}
 
-	/*
-	 * If the device is not well known (ifnum == -1), we use the first
-	 * interface we encounter, as there was no need to implement something
-	 * else for the time being. If you need it, see the SetInterface and
-	 * GetInterface functions in the USB specification and set it yourself.
-	 */
-	usb_debug("device has %x interfaces\n", cd->bNumInterfaces);
+	/* Prefer all alternate-zero HID interfaces of composite input devices. */
 	int ifnum = usb_interface_check(dev->descriptor->idVendor,
 					dev->descriptor->idProduct);
-	if (cd->bNumInterfaces > 1 && ifnum < 0)
-		usb_debug("NOTICE: Your device has multiple interfaces and\n"
-			   "this driver will only use the first one. That may\n"
-			   "be the wrong choice and cause the device to not\n"
-			   "work correctly. Please report this case\n"
-			   "(including the above debugging output) to\n"
-			   "coreboot@coreboot.org to have the device added to\n"
-			   "the list of well-known quirks.\n");
-
+	int composite_hid = 0;
+	for (unsigned at=cd->bLength; at+2<=cd->wTotalLength; ) {
+		u8 *desc=(u8 *)cd+at;
+		if (desc[0]<2 || desc[0]>cd->wTotalLength-at) break;
+		if (desc[1]==DT_INTF && desc[0]>=sizeof(interface_descriptor_t)) {
+			interface_descriptor_t *candidate=(void *)desc;
+			if (candidate->bInterfaceClass==3 && !candidate->bAlternateSetting)
+				composite_hid=1;
+		}
+		at+=desc[0];
+	}
 	u8 *end = (void *)dev->configuration + cd->wTotalLength;
 	interface_descriptor_t *intf;
 	u8 *ptr;
@@ -494,7 +490,7 @@ set_address(hci_t *controller, usb_speed speed, int hubport, int hubaddr)
 			usb_debug("Skipping broken DT_INTF\n");
 			continue;
 		}
-		if (ifnum >= 0 && intf->bInterfaceNumber != ifnum)
+		if (intf->bAlternateSetting || (composite_hid ? intf->bInterfaceClass!=3 : (ifnum >= 0 && intf->bInterfaceNumber != ifnum)))
 			continue;
 		usb_debug("Interface %d: class 0x%x, sub 0x%x. proto 0x%x\n",
 			intf->bInterfaceNumber, intf->bInterfaceClass,
@@ -505,11 +501,16 @@ set_address(hci_t *controller, usb_speed speed, int hubport, int hubaddr)
 
 	/* Gather up all endpoints belonging to this interface */
 	dev->num_endp = 1;
+	int selected_interface=1;
 	for (; ptr + 2 <= end && ptr[0] && ptr + ptr[0] <= end; ptr += ptr[0]) {
-		if (ptr[1] == DT_INTF || ptr[1] == DT_CFG ||
-				dev->num_endp >= ARRAY_SIZE(dev->endpoints))
-			break;
-		if (ptr[1] != DT_ENDP)
+		if (ptr[1] == DT_CFG || dev->num_endp >= ARRAY_SIZE(dev->endpoints)) break;
+		if (ptr[1] == DT_INTF) {
+			if (!composite_hid) break;
+			interface_descriptor_t *candidate=(void *)ptr;
+			selected_interface=ptr[0]>=sizeof(*candidate) && candidate->bInterfaceClass==3 && !candidate->bAlternateSetting;
+			continue;
+		}
+		if (!selected_interface || ptr[0]<sizeof(endpoint_descriptor_t) || ptr[1] != DT_ENDP)
 			continue;
 
 		endpoint_descriptor_t *desc = (void *)ptr;
@@ -542,8 +543,8 @@ set_address(hci_t *controller, usb_speed speed, int hubport, int hubaddr)
 	}
 
 	int class = dev->descriptor->bDeviceClass;
-	if (class == 0)
-		class = intf->bInterfaceClass;
+	if (composite_hid) class=3;
+	else if (class == 0) class = intf->bInterfaceClass;
 
 	enum {
 		audio_device      = 0x01,

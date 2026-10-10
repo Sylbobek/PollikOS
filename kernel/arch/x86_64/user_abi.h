@@ -1,4 +1,4 @@
-#ifndef POLLIK_X64_USER_ABI_H
+#if !defined(POLLIK_X64_USER_ABI_H)
 #define POLLIK_X64_USER_ABI_H
 /* PollikOS SYSCALL ABI: RAX number/result; arguments RDI, RSI, RDX, R10,
  * R8, R9 (current operations use at most three). RCX and R11 are clobbered;
@@ -112,6 +112,7 @@
 #define USER_SESSION_ELEVATE 5
 #define USER_SESSION_RIGHTS 6
 #define USER_SESSION_ELEVATE_APP 7
+#define USER_SESSION_FACTORY_RESET 8
 #define USER_AUDIO_BEGIN 1
 #define USER_AUDIO_SUBMIT 2
 #define USER_AUDIO_PENDING 3

@@ -1,4 +1,7 @@
-build/
+/build/
 __pycache__/
 *.pyc
 qemu.wav
+
+.cache/
+compile_commands.json

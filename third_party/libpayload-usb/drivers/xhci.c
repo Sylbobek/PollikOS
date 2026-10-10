@@ -199,7 +199,7 @@ xhci_init(unsigned long physical_bar)
 	xhci->hcrreg = phys_to_virt(physical_bar) + xhci->capreg->rtsoff;
 	xhci->dbreg = phys_to_virt(physical_bar) + xhci->capreg->dboff;
 
-	xhci_debug("regbase: 0x%"PRIxPTR"\n", physical_bar);
+	xhci_debug("regbase: 0x%"PRIxPTR"\n", (uintptr_t)physical_bar);
 	xhci_debug("caplen:  0x%"PRIx32"\n", CAP_GET(CAPLEN, xhci->capreg));
 	xhci_debug("rtsoff:  0x%"PRIx32"\n", xhci->capreg->rtsoff);
 	xhci_debug("dboff:   0x%"PRIx32"\n", xhci->capreg->dboff);
@@ -314,13 +314,15 @@ _exit_xhci:
 hci_t *
 xhci_pci_init(pcidev_t addr)
 {
-	u32 reg_addr;
+	uint64_t reg_addr;
 	hci_t *controller;
 
 	reg_addr = pci_read_config32(addr, PCI_BASE_ADDRESS_0) &
 		   PCI_BASE_ADDRESS_MEM_MASK;
-	if (pci_read_config32(addr, PCI_BASE_ADDRESS_1) > 0)
-		fatal("We don't do 64bit addressing.\n");
+	if ((pci_read_config32(addr, PCI_BASE_ADDRESS_0) & 6) == 4)
+		reg_addr |= (uint64_t)pci_read_config32(addr, PCI_BASE_ADDRESS_1) << 32;
+	if (reg_addr > UINTPTR_MAX)
+		return NULL; /* i386 cannot map a BAR above its physical address space. */
 
 	controller = xhci_init((unsigned long)reg_addr);
 	if (controller) {

@@ -1,5 +1,5 @@
 #include "gfx_device.h"
-#include "graphics.h"
+#include "../common/rounded.h"
 extern int framebuffer_width(void), framebuffer_height(void), framebuffer_bpp(void);
 void gfx_device_info(GfxInfo *out) {
     if (out) *out = (GfxInfo){framebuffer_width(), framebuffer_height(), framebuffer_bpp(), 31};
@@ -62,7 +62,7 @@ u32 gfx_shape(GfxTarget *t, int x, int y, int w, int h, u32 color, u32 kind) {
         int a=64;
         if(kind==1) {
             int cx=i<w/2?i:w-1-i,cy=j<h/2?j:h-1-j;
-            a=graphics_corner_coverage(radius,cx,cy);
+            a=pollik_corner_coverage(radius,cx,cy);
         } else if(kind==2) {
             /* Supercover of the diagonal: bounded, connected at any slope. */
             int d=i*(h-1)-j*(w-1);if(d<0)d=-d;

@@ -1,4 +1,4 @@
-#ifndef POLLIK_X64_PAGING_H
+#if !defined(POLLIK_X64_PAGING_H)
 #define POLLIK_X64_PAGING_H
 #include "memory.h"
 #include "../../hal.h"

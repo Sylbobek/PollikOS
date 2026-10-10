@@ -1,3 +1,4 @@
+#include "fixture_manifest.h"
 #include "launch.h"
 #include "scheduler.h"
 #include "fs_platform.h"
@@ -5,6 +6,11 @@
 #include "../../pollikfs.h"
 #include "test_memory.h"
 #define check memory_require
+static int fixture_name_equal(const char *a, const char *b) {
+    unsigned i = 0;
+    while (i < VFS_MAX_NAME && a[i] && a[i] == b[i]) ++i;
+    return i < VFS_MAX_NAME && a[i] == b[i];
+}
 uint8_t *hello_elf_start, *schedule_elf_start;
 size_t hello_elf_size, schedule_elf_size;
 static const char *args[] = {"hello.elf", "first", "second"};
@@ -92,16 +98,24 @@ void path64_selftest(void) {
     int fd = vfs_open("/bin", O_RDONLY);
     vfs_dirent_t entry;
     unsigned entries = 0;
+    unsigned char seen[X64_FIXTURE_BIN_FILES] = {0};
     int n;
     check(fd >= 0, "directory open");
-    while ((n = vfs_readdir(fd, &entry)) > 0) { check(++entries <= 64, "bounded directory enumeration"); }
-    if (n != 0 || entries != 55) {
+    while ((n = vfs_readdir(fd, &entry)) > 0) {
+        check(++entries <= 64, "bounded directory enumeration");
+        unsigned match = X64_FIXTURE_BIN_FILES;
+        for (unsigned i = 0; i < X64_FIXTURE_BIN_FILES; ++i)
+            if (fixture_name_equal(entry.name, x64_fixture_bin_names[i])) { match = i; break; }
+        check(match < X64_FIXTURE_BIN_FILES, "declared fixture filename");
+        check(!seen[match], "unique fixture filename");
+        seen[match] = 1;
+    }
+    if (n != 0 || entries != X64_FIXTURE_BIN_FILES) {
         memory_log("[PATH64] directory count="); memory_hex(entries);
         memory_log(" result="); memory_hex((uint64_t)n); memory_log("\n");
     }
-    /* Calculator was appended to the fixture; keep an exact count rather
-     * than a lower bound. Both normal and SelfTest images contain 55 files. */
-    check(n == 0 && entries == 55, "disk files visible through VFS");
+    /* Exact membership and count, including separately installed sdk_hello. */
+    check(n == 0 && entries == X64_FIXTURE_BIN_FILES, "disk files visible through VFS");
     check(vfs_close(fd) == 0, "directory close");
     fd = vfs_open("/bin/hello", O_RDONLY);
     uint8_t header[4];

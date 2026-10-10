@@ -5,7 +5,7 @@ typedef unsigned int gfx_u32;
 typedef unsigned char gfx_u8;
 typedef __SIZE_TYPE__ gfx_size_t;
 
-/* Pixels are numeric 0xAARRGGBB in memory; the i386 framebuffer writes the
+/* Pixels are numeric 0xAARRGGBB in memory; the VBE framebuffer writes the
  * low B,G,R bytes to a VBE 32-bpp LFB whose unused high byte is X. Source RGB
  * must already be premultiplied by alpha; destination is opaque 0x00RRGGBB.
  * For each channel C, source-over is out_C = min(255, src_C +

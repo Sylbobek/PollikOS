@@ -4,8 +4,11 @@
 #include "../../hal.h"
 #include "../../../common/ps2_pointer.h"
 #include "scheduler.h"
+#include "../../usb_input.h"
 
 static int enabled;
+static int ps2_enabled;
+static unsigned ps2_buttons,usb_buttons;
 static Ps2Pointer ps2_pointer;
 static int x, y;
 static unsigned buttons;
@@ -62,6 +65,9 @@ static void queue_event(unsigned kind, unsigned changed, int wheel) {
 }
 
 int mouse64_init(void) {
+    x=(int)console_fb_width()/2;y=(int)console_fb_height()/2;
+    buttons=ps2_buttons=usb_buttons=0;event_head=event_count=0;enabled=1;
+    console_fb_mouse_move(x,y);console_fb_mouse_enable();
     uint8_t config;
     if (!command(0xa8) || !command(0x20) || !wait_output(&config,0)) return 0;
     /* Keep both PIC IRQs disabled: tty64_poll() services the controller on PIT. */
@@ -72,6 +78,7 @@ int mouse64_init(void) {
     buttons=0;
     event_head=event_count=0;
     enabled=1;
+    ps2_enabled=1;
     console_fb_mouse_move(x,y);
     console_fb_mouse_enable();
     return 1;
@@ -92,10 +99,19 @@ static void pointer_motion(const Ps2Motion *motion){
     if (kind) queue_event(kind,changed,wheel);
 }
 void mouse64_byte(uint8_t value){
-    if(!enabled)return;Ps2Motion motion;
+    if(!ps2_enabled)return;Ps2Motion motion;
     if(!ps2_pointer_feed(&ps2_pointer,value,(unsigned)(scheduler64_ticks()*10),&motion))return;
+    ps2_buttons=motion.buttons;motion.buttons|=usb_buttons;
     if(motion.tap){Ps2Motion down=motion;down.buttons|=1;pointer_motion(&down);motion.dx=motion.dy=motion.wheel=0;}
     pointer_motion(&motion);
+}
+void mouse64_stream_reset(void){ps2_pointer_stream_reset(&ps2_pointer);}
+void mouse64_usb_poll(void){
+    UsbPointerEvent event;while(usb_input_read(&event)){
+        usb_buttons=event.buttons;Ps2Motion motion={.dx=event.dx,.dy=event.dy,.wheel=event.wheel,.buttons=usb_buttons|ps2_buttons};
+        if(event.absolute&&event.max_x>0&&event.max_y>0){motion.dx=(int)((uint64_t)event.x*(console_fb_width()-1)/event.max_x)-x;motion.dy=(int)((uint64_t)event.y*(console_fb_height()-1)/event.max_y)-y;}
+        pointer_motion(&motion);
+    }
 }
 
 int mouse64_pop(MouseEvent64 *event) {

@@ -115,7 +115,9 @@ def build(output,native):
             command=['clang',*flags,'-I'+str(library/'src'),'-I'+str(library/'bindings'),'-c',str(source),'-o',str(obj)]
             print('COMMAND '+subprocess.list2cmdline(command),flush=True)
             subprocess.run(command,cwd=ROOT,check=True);objects.append(str(obj))
-        archive=output/(name+'.a');subprocess.run(['llvm-ar','rcs',str(archive),*objects],check=True)
+        archive=output/(name+'.a')
+        response=output/(name+'.rsp');response.write_text('\n'.join(chr(34)+obj.replace('\\','/')+chr(34) for obj in objects))
+        subprocess.run(['llvm-ar','rcs',str(archive),'@'+str(response)],check=True)
         print(f'WEB_LIBRARY {name} objects={len(objects)} bytes={archive.stat().st_size}',flush=True)
         archives.append(archive)
     stamp.write_text(key)

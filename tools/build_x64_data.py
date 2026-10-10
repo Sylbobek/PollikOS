@@ -74,6 +74,8 @@ def build(output):
         "files.pol": (output / "userspace/files.elf").read_bytes(),
         "browser.pol": (output / "userspace/browser.elf").read_bytes(),
         "notes.pol": (output / "userspace/notes.elf").read_bytes(),
+        "devices_c.pol": (output / "userspace/devices_c.elf").read_bytes(),
+        "settings.pol": (output / "userspace/settings.elf").read_bytes(),
         "calculator.pol": (output / "userspace/calculator.elf").read_bytes(),
         "etc/read_test.txt": b"Alpha file data\n",
         "etc/other.txt": b"Bravo file data\n",
@@ -318,6 +320,14 @@ def build(output):
     image[tmp_entry:tmp_entry+64] = pack_dirent(tmp_inode, "tmp", 2)
     manifest["tmp"] = {"inode": tmp_inode}
     struct.pack_into("<II", image, START+16, 32768-next_block, 512-next_inode)
+    # Expected names come from the declared fixture, independent of guest VFS.
+    bin_names=sorted(set(name for name in files if '/' not in name)|{'sdk_hello'})
+    header='#ifndef POLLIK_FIXTURE_MANIFEST_H\n#define POLLIK_FIXTURE_MANIFEST_H\n'
+    header+=f'#define X64_FIXTURE_BIN_FILES {len(bin_names)}u\n'
+    header+='static const char *const x64_fixture_bin_names[] = {\n'
+    header+=''.join('    '+json.dumps(name)+',\n' for name in bin_names)
+    header+='};\n#endif\n'
+    (output/'fixture_manifest.h').write_text(header)
     pending.write_bytes(image)
     pending.replace(target)
     (output / "data-manifest.json").write_text(json.dumps(manifest, indent=2)+"\n")

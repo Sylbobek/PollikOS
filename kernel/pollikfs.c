@@ -1,24 +1,11 @@
 #include "pollikfs.h"
 #include "klog.h"
 #include "fs_journal.h"
-#ifndef POLLIK_X64
-#include "storage.h"
-#endif
 
 extern int ata_read_sector(u32 lba, void *buffer);
 extern int ata_write_sector(u32 lba, const void *buffer);
 extern int ata_flush(void);
 
-#if !defined(POLLIK_X64) && !defined(POLLIK_FS_READONLY)
-extern u8 _binary_build_hello_elf_start[];
-extern u8 _binary_build_hello_elf_end[];
-extern u8 _binary_build_fault_test_elf_start[];
-extern u8 _binary_build_fault_test_elf_end[];
-extern u8 _binary_build_fault_kernel_elf_start[];
-extern u8 _binary_build_fault_kernel_elf_end[];
-extern u8 _binary_build_fault_stack_elf_start[];
-extern u8 _binary_build_fault_stack_elf_end[];
-#endif
 static BlockDevice volume={ata_read_sector,ata_write_sector,ata_flush,UINT32_MAX,POLLIK2_START_LBA};
 static PollikSuperblock g_sb;
 static u8 g_block_buf[POLLIK2_BLOCK_SIZE];
@@ -30,13 +17,11 @@ int pollikfs_format_status(void) { return g_format_success; }
  * hands out a slot, so an open descriptor can detect that its inode was
  * unlinked and the slot was reused by a different file. In-memory only; no
  * on-disk byte changes and the format stays byte-for-byte identical. */
-#ifdef POLLIK_X64
 static u32 g_inode_generation[POLLIK2_INODE_COUNT];
 static int inode_generation_valid(const vfs_file_t *file) {
     if (!file || file->inode == 0 || file->inode >= POLLIK2_INODE_COUNT) return 0;
     return file->inode_generation == g_inode_generation[file->inode];
 }
-#endif
 
 static int g_fs_error;
 int pollikfs_error(void) { return g_fs_error; }
@@ -64,11 +49,7 @@ static int filesystem_check(void);
 static int read_block(u32 block_num, void *buf) {
     if (block_num >= POLLIK2_TOTAL_BLOCKS) return corrupt();
     if(fs_journal_overlay(block_num,buf)) return 1;
-#ifdef POLLIK_X64
     u32 lba = POLLIK2_START_LBA + block_num * POLLIK2_SECTORS_PER_BLOCK;
-#else
-    u32 lba = storage_pollikfs_start_lba() + block_num * POLLIK2_SECTORS_PER_BLOCK;
-#endif
     if (!block_read(&volume,lba,buf) || !block_read(&volume,lba+1,(u8 *)buf+512)) {
         if(g_formatting) g_format_failed=1;
         g_fs_error = VFS_IO; return 0;
@@ -77,11 +58,7 @@ static int read_block(u32 block_num, void *buf) {
 }
 
 static int write_raw_block(u32 block_num, const void *buf) {
-#ifdef POLLIK_X64
     u32 lba = POLLIK2_START_LBA + block_num * POLLIK2_SECTORS_PER_BLOCK;
-#else
-    u32 lba = storage_pollikfs_start_lba() + block_num * POLLIK2_SECTORS_PER_BLOCK;
-#endif
     if (!block_write(&volume,lba,buf)) {
         if(g_formatting) g_format_failed=1;
         return 0;
@@ -213,9 +190,7 @@ static u32 alloc_inode(u32 mode) {
             g_sb.free_inodes--;
             /* A new occupant of this slot is a different file: invalidate any
              * descriptor still holding the previous allocation's token. */
-#ifdef POLLIK_X64
             g_inode_generation[i]++;
-#endif
             return i;
         }
     }
@@ -369,21 +344,15 @@ static u32 resolve_path(const char *path) {
     return dir_find_entry(parent, name, &type);
 }
 
-#ifndef POLLIK_FS_READONLY
 void pollikfs_format(void) {
     g_formatting=1;g_format_failed=g_format_success=0;
     fs_journal_detach();
-#ifndef POLLIK_X64
-    volume.fs_start=storage_pollikfs_start_lba();
-#endif
     volume.sector_limit=(u64)volume.fs_start+POLLIK2_TOTAL_BLOCKS*2u;
     /* Destructive operation: callers must explicitly request formatting.
      * Never invoke this as recovery from a mount failure. */
     g_fs_mounted = 0;
     KLOG_INFO(KLOG_CAT_BOOT, "Formatting PollikFS v2 filesystem");
-#ifdef POLLIK_X64
     memset(g_inode_generation, 0, sizeof(g_inode_generation));
-#endif
 
     memset(&g_sb, 0, sizeof(PollikSuperblock));
     g_sb.magic = POLLIK2_MAGIC;
@@ -474,12 +443,6 @@ void pollikfs_format(void) {
         } \
     } while(0)
 
-#ifndef POLLIK_X64
-    INSTALL_EMBEDDED("hello", _binary_build_hello_elf_start, _binary_build_hello_elf_end);
-    INSTALL_EMBEDDED("fault_test", _binary_build_fault_test_elf_start, _binary_build_fault_test_elf_end);
-    INSTALL_EMBEDDED("fault_kernel", _binary_build_fault_kernel_elf_start, _binary_build_fault_kernel_elf_end);
-    INSTALL_EMBEDDED("fault_stack", _binary_build_fault_stack_elf_start, _binary_build_fault_stack_elf_end);
-#endif
     #undef INSTALL_EMBEDDED
 
     /* Install default /home/notes.txt */
@@ -510,19 +473,11 @@ void pollikfs_format(void) {
     else KLOG_ERROR(KLOG_CAT_BOOT,"PollikFS format incomplete; I/O error or protected journal prefix");
 }
 
-#endif
 void pollikfs_init(void) {
     fs_journal_detach();
     g_fs_mounted = 0; g_fs_error = VFS_OK;
-#ifndef POLLIK_X64
-    storage_select_pollikfs();
-#endif
     volume.fs_start=
-#ifdef POLLIK_X64
         POLLIK2_START_LBA;
-#else
-        storage_pollikfs_start_lba();
-#endif
     volume.sector_limit=(u64)volume.fs_start+POLLIK2_TOTAL_BLOCKS*2u;
     /* Establish the v2 volume identity before allowing replay to write it.
      * Metadata transactions never change these fixed geometry fields. */
@@ -686,9 +641,7 @@ static int mutate_open(const char *path, int flags, vfs_file_t *out_file) {
     out_file->offset = (flags & O_APPEND) ? node.size : 0;
     out_file->size = node.size;
     out_file->inode = ino;
-#ifdef POLLIK_X64
     out_file->inode_generation = g_inode_generation[ino];
-#endif
     out_file->ref_count = 1;
     out_file->fs_private = 0;
 
@@ -703,14 +656,12 @@ int pollikfs_read(vfs_file_t *file, void *buf, u32 count) {
     PollikInode node;
     if (!read_inode(file->inode, &node))
         return -1;
-#ifdef POLLIK_X64
     if (!inode_generation_valid(file)) {
         /* The slot was unlinked and reallocated to a different file. The
          * descriptor keeps the original unlink-while-open semantics: reads
          * observe EOF and never touch the new occupant's data. */
         return 0;
     }
-#endif
 
     if (file->offset >= node.size)
         return 0;
@@ -792,12 +743,10 @@ static int mutate_write(vfs_file_t *file, const void *buf, u32 count) {
         g_fs_error = VFS_DENIED; /* deleted/reused or non-regular inode */
         return -1;
     }
-#ifdef POLLIK_X64
     if (!inode_generation_valid(file)) {
         g_fs_error = VFS_DENIED; /* inode slot now belongs to a different file */
         return -1;
     }
-#endif
     /* Validate the complete range before changing offsets or allocating. */
     u32 start = (file->flags & O_APPEND) ? node.size : file->offset;
     if (start > POLLIK2_MAX_FILE || count > POLLIK2_MAX_FILE - start) {
@@ -957,9 +906,7 @@ int pollikfs_stat(const char *path, vfs_stat_t *st) {
 int pollikfs_fstat(const vfs_file_t *file, vfs_stat_t *st) {
     g_fs_error = VFS_OK;
     if (!g_fs_mounted || !file || !st || file->ref_count <= 0) return -1;
-#ifdef POLLIK_X64
     if (!inode_generation_valid(file)) { g_fs_error = VFS_DENIED; return -1; }
-#endif
     PollikInode node;
     if (!read_inode(file->inode, &node)) return -1;
     st->inode = file->inode;
@@ -1177,9 +1124,7 @@ static int mutate_rmdir(const char *path) {
 int pollikfs_readdir(vfs_file_t *file, vfs_dirent_t *dirent) {
     if (!g_fs_mounted || !file || !dirent || file->type != VFS_DIR)
         return -1;
-#ifdef POLLIK_X64
     if (!inode_generation_valid(file)) { g_fs_error = VFS_DENIED; return -1; }
-#endif
 
     PollikInode dir_node;
     if (!read_inode(file->inode, &dir_node) || dir_node.mode != VFS_DIR)
@@ -1368,15 +1313,11 @@ u32 pollikfs_free_inodes(void) { return g_fs_mounted ? g_sb.free_inodes : 0; }
 
 static PollikSuperblock transaction_before;
 #include "pollikfs_check.inc"
-#ifdef POLLIK_X64
 static u32 generations_before[POLLIK2_INODE_COUNT];
-#endif
 static int mutation_begin(void) {
     if(!g_fs_mounted || !fs_journal_begin()) { g_fs_error=VFS_DENIED;return 0; }
     transaction_before=g_sb;
-#ifdef POLLIK_X64
     memcpy(generations_before,g_inode_generation,sizeof(generations_before));
-#endif
     return 1;
 }
 static int mutation_end(int result) {
@@ -1384,9 +1325,7 @@ static int mutation_end(int result) {
     if(!fs_journal_end(result>=0)) result=-1;
     if(result<0 && !fs_journal_committed()) {
         g_sb=transaction_before;
-#ifdef POLLIK_X64
         memcpy(g_inode_generation,generations_before,sizeof(generations_before));
-#endif
     }
     if(result<0) g_fs_error=saved?saved:VFS_IO;
     return result;

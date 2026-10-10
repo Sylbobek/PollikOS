@@ -1,4 +1,4 @@
-#ifndef POLLIK_X64_CONSOLE_FB_H
+#if !defined(POLLIK_X64_CONSOLE_FB_H)
 #define POLLIK_X64_CONSOLE_FB_H
 #include <stddef.h>
 #include <stdint.h>

@@ -19,10 +19,6 @@ jobs:
   regression:
     runs-on: windows-2022
     timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        target: [i386, x86_64]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -43,12 +39,12 @@ jobs:
           EXTENDED: ${{ github.event_name == 'schedule' || inputs.extended }}
         run: |
           $env:PATH = "C:\Program Files\LLVM\bin;C:\Program Files\NASM;C:\Program Files\qemu;$env:PATH"
-          ./tools/ci.ps1 -Target '${{ matrix.target }}' -Extended:($env:EXTENDED -eq 'true')
+          ./tools/ci.ps1 -Extended:($env:EXTENDED -eq 'true')
       - name: Preserve regression evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: regression-${{ matrix.target }}
+          name: regression-x86_64
           if-no-files-found: warn
           retention-days: 14
           path: |

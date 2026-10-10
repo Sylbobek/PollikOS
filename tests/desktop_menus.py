@@ -2,7 +2,8 @@
 import argparse,json,shutil,subprocess,tempfile,time
 from pathlib import Path
 from PIL import Image
-from gui_metrics import Guest,ROOT,BUILD
+from x86_64_console import ROOT
+BUILD=ROOT/"build"
 from x86_64_console import newest_image
 from x86_64_security_session import port,connect,RecordingConsole
 
@@ -16,77 +17,6 @@ def shutdown_event(stream,reason):
             assert reply['data']['guest'] and reply['data']['reason']==reason,reply
             print('PASS power event: '+reason,flush=True);return
     raise AssertionError('no guest power event')
-
-def i386():
-    for action in (0,1):
-        with Guest('1024x768','desktop-menus-'+str(action),boot_timeout=120) as g:
-            def scalar(name):return g.words(name)[0]
-            def click(x,y):g.move(x,y);g.button(True);g.button(False)
-            def key(name):g.hmp('sendkey '+name+' 1');time.sleep(.12)
-            def open_panel():
-                click(512,15);g.wait(lambda:scalar('cc_shown') and not scalar('cc_animating'),'Control Center opens')
-            def profile():
-                click(340+30,38+412);g.wait(lambda:scalar('cc_detail_kind')==4 and scalar('cc_detail_slide')==256,'profile slides open')
-            open_panel()
-            click(108+24,38+60)
-            for ch in 'calc':key(ch)
-            if action==0:
-                key('ctrl-a');address,size=g.symbol('cc_input')
-                import struct
-                values=struct.unpack('<32sii',g.memory(address,size));assert values[1:]==(4,0),values
-                g.wait(lambda:scalar('cc_blink')==0,'caret off');g.wait(lambda:scalar('cc_blink')==1,'caret on')
-                key('backspace');g.wait(lambda:not g.memory(address,32).split(b'\0')[0],'selected query deleted')
-                for ch in 'calc':key(ch)
-                click(108+204,38+124);click(356,38+116+96);assert scalar('cc_pins')==174
-                click(108+24,38+60);key('ctrl-a');key('backspace');assert scalar('cc_pins')==174
-                print('PASS i386: caret blink, selection/replacement and saved recommendations',flush=True)
-                for _ in range(4):key('down')
-                key('ret')
-            else:key('ret')
-            g.wait(lambda:scalar('g_focused_window')==7 and not scalar('cc_shown'),'search launches Calculator')
-            if action==0:
-                def terminal_command(text):
-                    start=len(g.log.read_text());
-                    for ch in text:key({' ':'spc','/':'slash','-':'minus'}.get(ch,ch))
-                    key('ret');g.wait(lambda:'SHELL END' in g.log.read_text()[start:],'terminal command');return g.log.read_text()[start:]
-                key('f3');g.wait(lambda:scalar('g_focused_window')==2,'Terminal opens')
-                assert 'touch: failed' in terminal_command('touch /etc/admin-probe')
-                open_panel();click(108+24,38+60)
-                for ch in 'term':key(ch)
-                click(108+204,38+124);g.wait(lambda:scalar('cc_context')==2,'context opens to the right')
-                assert scalar('cc_detail_slide')==0
-                click(356,38+116+60)
-                g.wait(lambda:'AUTH: session locked' in g.log.read_text(),'administrator password')
-                assert not any(g.words('admin_sessions',2))
-                g.wait(lambda:scalar('cancel_w')!=0 and scalar('auth_scene_snapshot')==1,'frozen administrator prompt')
-                backdrop=scalar('auth_backdrop');assert backdrop
-                frozen=g.memory(backdrop+4096,128);key('a');key('backspace');assert g.memory(backdrop+4096,128)==frozen
-                shot=BUILD/'admin-prompt-i386.ppm';g.screendump(shot);Image.open(shot).save(shot.with_suffix('.png'))
-                click(scalar('cancel_x')+90,scalar('cancel_y')+21)
-                assert not any(g.words('admin_sessions',2))
-                open_panel();click(108+24,38+60)
-                for ch in 'term':key(ch)
-                click(108+204,38+124);click(356,38+116+60)
-                for ch in 'test123':key(ch)
-                key('ret');g.wait(lambda:'AUTH: administrator application authorized' in g.log.read_text(),'administrator authorized',30)
-                g.wait(lambda:scalar('g_focused_window')==2,'administrator Terminal focus')
-                assert any(g.words('admin_sessions',2))
-                assert 'File ready.' in terminal_command('touch /etc/admin-probe')
-                print('PASS i386: normal protected write denied, cancellation grants nothing, authenticated administrator write succeeds',flush=True)
-            open_panel();profile()
-            picture=BUILD/'desktop-menus-i386.ppm';g.screendump(picture);Image.open(picture).save(picture.with_suffix('.png'))
-            if action==0:
-                start=len(g.log.read_text())
-                click(786,38+248+70+76);g.wait(lambda:'AUTH: session locked' in g.log.read_text()[start:],'profile logout')
-                g.wait(lambda:all(not g.window(i)[7] for i in range(g.apps)),'logout closes all apps')
-                start=len(g.log.read_text())
-                for ch in 'test123':key(ch)
-                key('ret');g.wait(lambda:'AUTH: login accepted' in g.log.read_text()[start:],'sign in after logout',30)
-                open_panel();profile()
-                print('PASS i386: actual app search, Calculator launch, logout/window cleanup and sign in',flush=True)
-            g.move(786,38+248+70+action*38)
-            g.hmp('mouse_button 1')
-            shutdown_event(g.stream,'guest-reset' if action else 'guest-shutdown')
 
 def x64():
     kernel=ROOT/'build/x86_64/kernel'
@@ -220,6 +150,4 @@ def x64():
                 if error:print(error.decode(errors='replace')[-1000:])
 
 if __name__=='__main__':
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--arch',choices=('i386','x64','both'),default='both');a=p.parse_args()
-    if a.arch in ('i386','both'):i386()
-    if a.arch in ('x64','both'):x64()
+    x64()

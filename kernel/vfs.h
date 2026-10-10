@@ -1,19 +1,11 @@
 #ifndef POLLIK_VFS_H
 #define POLLIK_VFS_H
 
-#ifdef POLLIK_X64
 #include "arch/x86_64/fs_platform.h"
-#else
-#include "system.h"
-#endif
 
 #define VFS_MAX_PATH     128
 #define VFS_MAX_NAME     64
-#ifdef POLLIK_X64
 #define VFS_MAX_FDS      128
-#else
-#define VFS_MAX_FDS      64
-#endif
 
 #define VFS_FILE         1
 #define VFS_DIR          2
@@ -55,12 +47,10 @@ typedef struct vfs_file {
     u32 inode;
     int ref_count;
     unsigned user_access; /* snapshotted policy, checked on inherited fds */
-#ifdef POLLIK_X64
     /* In-memory identity token, never part of an on-disk or syscall ABI.
      * Snapshots the inode allocation epoch at open so a descriptor whose
      * inode was unlinked and later reused cannot touch the new occupant. */
     u32 inode_generation;
-#endif
     void *fs_private;
 } vfs_file_t;
 

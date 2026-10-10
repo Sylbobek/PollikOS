@@ -1,7 +1,5 @@
 #include "browser.h"
-#ifdef POLLIK_BROWSER_STANDALONE
 #include "../../common/utf8.h"
-#endif
 
 /* Extern system rendering primitives declared in system.h */
 extern void sys_draw_rect_clipped(int x, int y, int w, int h, u32 c, int cx1, int cy1, int cx2, int cy2);
@@ -18,18 +16,8 @@ static int get_font_height(int scale) {
 }
 
 static void render_text_string(int x, int y, const char *s, u32 color, int scale, int cx1, int cy1, int cx2, int cy2) {
-#ifdef POLLIK_BROWSER_STANDALONE
     size_t left=strlen(s);while(left){size_t used;uint32_t c=pollik_utf8_next(s,left,&used);
         if(c>=32){sys_draw_codepoint_clipped(x,y,c,color,scale,cx1,cy1,cx2,cy2);x+=sys_get_codepoint_advance(c,scale);}s+=used;left-=used;}
-#else
-    while (*s) {
-        u8 c = (u8)*s++;
-        if (c >= 32 && c < 127) {
-            sys_draw_letter_clipped(x, y, c, color, scale, cx1, cy1, cx2, cy2);
-            x += sys_get_glyph_advance(c, scale);
-        }
-    }
-#endif
 }
 static void copy_text_range(char *out, int cap, const char *src, int begin, int end) {
     if (cap <= 0) return;
@@ -195,11 +183,9 @@ static void render_node_text(DomNode *node, int sx, int sy, int cx1, int cy1, in
         for (const char *q = node->text; *q; q++) if (*q == '\n') { nl = 1; break; }
         if (align != TEXT_ALIGN_LEFT && !nl) {
             int tw = sys_text_width(node->text, scale);
-#ifdef POLLIK_BROWSER_STANDALONE
             /* A centered paragraph can still wrap. The one-line fast path
              * must not paint an overlong line past its laid-out width. */
             if (tw <= avail_w) {
-#endif
             int ox = sx;
             if (tw < cw) {
                 if (align == TEXT_ALIGN_CENTER) ox = sx + (cw - tw) / 2;
@@ -209,9 +195,7 @@ static void render_node_text(DomNode *node, int sx, int sy, int cx1, int cy1, in
             if (is_link)
                 sys_draw_rect_clipped(ox, sy + get_font_height(scale) + 1, tw, 1, color, cx1, cy1, cx2, cy2);
             return;
-#ifdef POLLIK_BROWSER_STANDALONE
             }
-#endif
         }
     }
     char word[128];

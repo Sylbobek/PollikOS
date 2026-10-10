@@ -1,4 +1,4 @@
-#ifndef POLLIK_X64_NET_PLATFORM_H
+#if !defined(POLLIK_X64_NET_PLATFORM_H)
 #define POLLIK_X64_NET_PLATFORM_H
 #include <stddef.h>
 #include <stdint.h>

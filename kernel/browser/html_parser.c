@@ -1,7 +1,4 @@
 #include "browser.h"
-#ifndef POLLIK_BROWSER_STANDALONE
-#include "../mem.h"
-#endif
 
 /* JS wrappers keep stable binding slots for DOM nodes. Standalone parser builds
  * use this weak no-op; the kernel JS engine supplies the strong implementation. */
@@ -236,9 +233,7 @@ void dom_free_tree(DomNode *node) {
         node->text = 0;
     }
     kfree(node->image);
-#ifdef POLLIK_BROWSER_STANDALONE
     for(int i=0;i<node->attr_count;i++){kfree(node->attr_names[i]);kfree(node->attr_vals[i]);}
-#endif
     if (node->canvas) { kfree(node->canvas); node->canvas = 0; }
     EventListener *el = node->listeners;
     while (el) {
@@ -282,16 +277,9 @@ void dom_remove_attribute(DomNode *node, const char *name) {
     if (!node || !name) return;
     for (int i = 0; i < node->attr_count; i++) {
         if (!str_eq_n(node->attr_names[i], name)) continue;
-#ifdef POLLIK_BROWSER_STANDALONE
         kfree(node->attr_names[i]);kfree(node->attr_vals[i]);
         for(int j=i;j+1<node->attr_count;j++){node->attr_names[j]=node->attr_names[j+1];node->attr_vals[j]=node->attr_vals[j+1];}
         node->attr_names[node->attr_count-1]=0;node->attr_vals[node->attr_count-1]=0;
-#else
-        for (int j = i; j + 1 < node->attr_count; j++) {
-            int k = 0; while (node->attr_names[j+1][k] && k < DOM_ATTR_NAME_MAX) { node->attr_names[j][k]=node->attr_names[j+1][k]; k++; } node->attr_names[j][k]=0;
-            k = 0; while (node->attr_vals[j+1][k] && k < DOM_ATTR_VAL_MAX) { node->attr_vals[j][k]=node->attr_vals[j+1][k]; k++; } node->attr_vals[j][k]=0;
-        }
-#endif
         node->attr_count--;
         /* Clear mirrored fast fields so layout/selectors stop seeing them. */
         if (str_eq_n(name, "id")) node->id[0] = 0;
@@ -543,7 +531,6 @@ int str_eq_n(const char *a, const char *b) {
 }
 static void store_attr(DomNode *node, const char *name, const char *val, int overwrite) {
     if (!name[0]) return;
-#ifdef POLLIK_BROWSER_STANDALONE
     size_t nl=strlen(name),vl=strlen(val);
     if(nl>=DOM_ATTR_NAME_MAX || vl>=DOM_ATTR_VAL_MAX)return;
     int index=node->attr_count;
@@ -556,25 +543,6 @@ static void store_attr(DomNode *node, const char *name, const char *val, int ove
     if(index<node->attr_count){kfree(node->attr_names[index]);kfree(node->attr_vals[index]);}
     else ++node->attr_count;
     node->attr_names[index]=n;node->attr_vals[index]=v;
-#else
-    for (int i = 0; i < node->attr_count; i++)
-        if (str_eq_n(node->attr_names[i], name)) {
-            if (!overwrite) return; /* first wins when parsing */
-            char decoded[DOM_ATTR_VAL_MAX];
-            decode_html_entities(val, (int)strlen(val), decoded, sizeof(decoded));
-            int m = 0; while (decoded[m] && m < DOM_ATTR_VAL_MAX - 1) { node->attr_vals[i][m] = decoded[m]; m++; }
-            node->attr_vals[i][m] = 0;
-            return;
-        }
-    if (node->attr_count >= DOM_MAX_ATTRS) return;
-    int i = node->attr_count++;
-    int n = 0; while (name[n] && n < DOM_ATTR_NAME_MAX - 1) { node->attr_names[i][n] = name[n]; n++; }
-    node->attr_names[i][n] = 0;
-    char decoded[DOM_ATTR_VAL_MAX];
-    decode_html_entities(val, (int)strlen(val), decoded, sizeof(decoded));
-    int m = 0; while (decoded[m] && m < DOM_ATTR_VAL_MAX - 1) { node->attr_vals[i][m] = decoded[m]; m++; }
-    node->attr_vals[i][m] = 0;
-#endif
 }
 
 static void parse_attribute(DomNode *node, const char *attr_name, const char *attr_val) {

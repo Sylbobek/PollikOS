@@ -1,4 +1,4 @@
-#ifndef POLLIK_X64_NETWORK_H
+#if !defined(POLLIK_X64_NETWORK_H)
 #define POLLIK_X64_NETWORK_H
 #include <stdint.h>
 void network64_init(void);

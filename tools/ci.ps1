@@ -1,48 +1,37 @@
-param([ValidateSet('i386','x86_64')][string]$Target='x86_64',[switch]$Extended)
+param([ValidateSet('x86_64')][string]$Target='x86_64', [switch]$Extended)
 $ErrorActionPreference='Stop'
-$ciRoot=Split-Path -Parent $PSScriptRoot
-Push-Location $ciRoot
+Push-Location (Split-Path -Parent $PSScriptRoot)
 try {
     New-Item -ItemType Directory -Force build/ci | Out-Null
     function Run-Check([string]$Name,[string]$Program,[string[]]$Arguments) {
         Write-Host "CHECK $Name"
-        $ciLog="build/ci/$Name.log"
-        try {
-            if($Program.EndsWith('.ps1')) {
-                & powershell -NoProfile -File $Program @Arguments *> $ciLog
-            } else { & $Program @Arguments *> $ciLog }
-            if($LASTEXITCODE -ne 0) { throw "$Name failed ($LASTEXITCODE)" }
-            Get-Content -LiteralPath $ciLog -Tail 4
-        } catch {
-            if(Test-Path -LiteralPath $ciLog) { Get-Content -LiteralPath $ciLog -Tail 80 }
-            throw
-        }
+        & python tools/run_check.py --log "build/ci/$Name.log" -- $Program @Arguments
+        if ($LASTEXITCODE -ne 0) { throw "$Name failed ($LASTEXITCODE)" }
     }
+    Run-Check 'x64-only' python @('tests/x64_only.py')
     Run-Check 'shared-security-journal' python @('tests/security_account_native.py')
     Run-Check 'shared-read' python @('tests/pollikfs_read_native.py')
     Run-Check 'host-journal' python @('tests/host_journal.py')
     Run-Check 'utf8-ui' python @('tests/utf8_ui_native.py')
-    if($Target -eq 'i386') {
-        Run-Check 'build-i386' ./build.ps1 @('-NoSync')
-        Run-Check 'process-i386' python @('tests/process_stress.py','--ram','256','--timeout','120')
-        if($Extended) { Run-Check 'account-i386' python @('tests/i386_security_account.py') }
-    } else {
-        Run-Check 'build-x64-selftest' ./build-x86_64.ps1 @('-SelfTest')
-        Run-Check 'guest-x64-selftest' python @('tests/kernel_checkpoint.py')
-        Run-Check 'build-x64' ./build-x86_64.ps1 @()
-        Run-Check 'terminal-x64' python @('tests/terminal_commands_x64.py')
-        Run-Check 'web-engine-x64' python @('tests/web_engine_x64.py')
-        Run-Check 'apps-x64' python @('tests/x86_64_app_checkpoint.py')
-        $previousVariant=$env:POLLIK_X64_VARIANT
-        try {
-            $env:POLLIK_X64_VARIANT='kernel'
-            Run-Check 'browser-x64' python @('tests/browser_images_x64.py')
-        } finally { $env:POLLIK_X64_VARIANT=$previousVariant }
-        if($Extended) {
-            Run-Check 'session-x64' python @('tests/x86_64_security_session.py')
-            Run-Check 'network-x64' python @('tests/network_clients_x64.py')
-            Run-Check 'console-x64' python @('tests/x86_64_console.py','--timeout','300')
-        }
+    Run-Check 'build-x64-selftest' ./build.ps1 @('-SelfTest')
+    Run-Check 'guest-x64-selftest' python @('tests/kernel_checkpoint.py')
+    Run-Check 'build-x64' ./build.ps1 @()
+    Run-Check 'storage-x64' python @('tests/x86_64_storage.py')
+    Run-Check 'terminal-x64' python @('tests/terminal_commands_x64.py')
+    Run-Check 'web-engine-x64' python @('tests/web_engine_x64.py')
+    Run-Check 'apps-x64' python @('tests/x86_64_app_checkpoint.py')
+    $previousVariant=$env:POLLIK_X64_VARIANT
+    try {
+        $env:POLLIK_X64_VARIANT='kernel'
+        Run-Check 'browser-x64' python @('tests/browser_images_x64.py')
+    } finally { $env:POLLIK_X64_VARIANT=$previousVariant }
+    Run-Check 'build-production' ./build.ps1 @('-Production')
+    if ($Extended) {
+        Run-Check 'boot-full-x64' python @('tests/x86_64_boot.py')
+        Run-Check 'session-x64' python @('tests/x86_64_security_session.py')
+        Run-Check 'network-x64' python @('tests/network_clients_x64.py')
+        Run-Check 'console-x64' python @('tests/x86_64_console.py','--timeout','300')
+        Run-Check 'usb-x64' python @('tests/usb_input_x64_guest.py')
     }
-    Write-Host "PASS CI commands: $Target"
+    Write-Host 'PASS CI commands: x86_64'
 } finally { Pop-Location }

@@ -4,13 +4,8 @@
 typedef struct { u32 offset; u8 width, height, advance; } FontGlyph;
 typedef enum { FONT_FORMAT_1BPP=1, FONT_FORMAT_4BPP=4 } FontPixelFormat;
 typedef struct { const char *name; int first_char, char_count, cell_width, cell_height; FontPixelFormat format; const FontGlyph *glyphs; const u8 *coverage; } BitmapFont;
-#if defined(__i386__)
-#define FONT_GLYPH_COUNT 95
-extern const u8 font_coverage[157253];
-#else
 #define FONT_GLYPH_COUNT 113
 extern const u8 font_coverage[188604];
-#endif
 extern const u32 font_codepoints[FONT_GLYPH_COUNT];
 extern const FontGlyph font_glyphs[5][FONT_GLYPH_COUNT];
 #endif

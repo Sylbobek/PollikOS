@@ -87,6 +87,7 @@ try {
         'files'             = @{ Sources = @('sdk/apps/files.c');              Optimization = '-O2' }
         'browser'           = @{ Sources = @('sdk/apps/browser.c','sdk/apps/browser_js.c','kernel/browser/html_parser.c','kernel/browser/css_engine.c','kernel/browser/layout.c','kernel/browser/render.c','third_party/elk/elk.c'); Optimization = '-O2'; Defines = @('POLLIK_BROWSER_STANDALONE=1') }
         'notes'             = @{ Sources = @('sdk/apps/notes.c');              Optimization = '-O2' }
+        'settings'          = @{ Sources = @('sdk/apps/settings.c');           Optimization = '-O2' }
         # C4 ABI, fault and preemption fixtures.
         'abi_test_o2'       = @{ Sources = @('sdk/tests/abi_test_c.c');        Optimization = '-O2' }
         'stack_guard_c'     = @{ Sources = @('sdk/tests/stack_guard_c.c');     Optimization = '-O2' }
@@ -101,6 +102,7 @@ try {
         'sdk_errno'         = @{ Sources = @('sdk/examples/errno.c');          Optimization = '-O2' }
         'sdk_write'         = @{ Sources = @('sdk/examples/write.c');          Optimization = '-O2' }
     }
+    $sdkApplications['devices_c']=@{Sources=@('sdk/tests/devices_c.c');Optimization='-O2'}
     $browserLibraries=@()
     if($LegacyBrowserJS){$sdkApplications['browser'].Defines+=@('POLLIK_BROWSER_ELK=1')}
     if(!$LegacyBrowserJS){
@@ -172,8 +174,11 @@ try {
     Invoke-Checked llvm-ar (@('rcs',"$userOutput/libc-native.a") + $nativeLibcObjects)
     # Reproducibility: identical inputs and flags must produce identical ELF.
     Invoke-Pollikcc @('sdk/examples/hello.c','-o',"$userOutput/sdk_hello_repeat.elf")
-    $first = (Get-FileHash -Algorithm SHA256 "$userOutput/sdk_hello.elf").Hash
-    $second = (Get-FileHash -Algorithm SHA256 "$userOutput/sdk_hello_repeat.elf").Hash
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        $first = [BitConverter]::ToString($sha256.ComputeHash([IO.File]::ReadAllBytes("$PSScriptRoot/$userOutput/sdk_hello.elf")))
+        $second = [BitConverter]::ToString($sha256.ComputeHash([IO.File]::ReadAllBytes("$PSScriptRoot/$userOutput/sdk_hello_repeat.elf")))
+    } finally { $sha256.Dispose() }
     if ($first -ne $second) { throw 'SDK build is not reproducible for sdk_hello.elf' }
     Remove-Item -LiteralPath "$userOutput/sdk_hello_repeat.elf" -Force
     Invoke-Checked python @('assets/build_system_icons.py')
@@ -226,13 +231,13 @@ try {
         $linkOptions += '--wrap=ata_write_sector'
     }
     $objects = @()
-    $modules += @('../../account','../../account_platform','../../security','../../vfs','../../fs_journal','../../fs_journal_platform','../../pollikfs','../../storage','../../hal','../../audio','../../../third_party/monocypher/monocypher')
+    $modules += @('../../account','../../account_platform','../../security','../../vfs','../../fs_journal','../../fs_journal_platform','../../pollikfs','../../factory_reset','../../storage','../../hal','../../audio','../../../third_party/monocypher/monocypher')
     $modules += @('../../../sdk/lib/font_data')
     foreach ($module in $modules) {
         $objectName = Split-Path $module -Leaf
         Invoke-Checked clang (@('--target=x86_64-none-elf','-ffreestanding','-fno-pic','-fno-pie',
         '-fno-stack-protector','-mno-red-zone','-mgeneral-regs-only','-ffunction-sections','-fdata-sections','-O2','-Wall','-Wextra','-Werror',
-        '-Ithird_party/bearssl/inc','-Isdk/include',
+        '-Ithird_party/bearssl/inc','-Isdk/include',"-I$output",
         '-c',"kernel/arch/x86_64/$module.c",'-o',"$output/$objectName.o") + $defines + $productionCompileFlags)
         $objects += "$output/$objectName.o"
     }
@@ -246,10 +251,12 @@ try {
     }
     Invoke-Checked clang @('--target=x86_64-none-elf','-ffreestanding','-fno-pic','-fno-pie',
         '-fno-stack-protector','-mno-red-zone','-mgeneral-regs-only','-O2','-Wall','-Wextra','-Werror',
-        '-DPOLLIK_X64=1','-Ithird_party/bearssl/inc','-Isdk/include',
+        '-DPOLLIK_X64=1','-Ithird_party/bearssl/inc','-Isdk/include',"-I$output",
         '-c','kernel/net/tls.c','-o',"$output/net_tls.o")
     $objects += "$output/net_tls.o"
     $objects += $bearSslArchive
+    & "$PSScriptRoot/tools/build_usb.ps1" -Arch x86_64 -Output $output
+    $objects += "$output/libusb-input.a"
     Invoke-Checked ld.lld (@('-m','elf_x86_64','-T','kernel/arch/x86_64/linker.ld',
         "$output/entry.o","$output/interrupts.o","$output/user_payload.o") + $objects + $linkOptions + @('-o',"$output/kernel.elf"))
     Invoke-Checked llvm-objcopy @('-O','binary',"$output/kernel.elf","$output/kernel.bin")
@@ -273,29 +280,12 @@ try {
         $stream.Write($kernelBytes, 0, $kernelBytes.Length)
         $stream.Flush($true)
     } finally { $stream.Dispose() }
-    # Host scanners can hold an older image briefly. Try the canonical name
-    # first, then bounded alternates; the test harness boots the newest image.
-    $installed = $false
-    $lastError = ''
-    foreach ($slot in @('', 'b', 'c')) {
-        $candidate = "$PSScriptRoot/$output/PollikOS-x86_64$slot.img"
-        for ($attempt = 0; $attempt -lt 10 -and -not $installed; ++$attempt) {
-            try {
-                if (Test-Path -LiteralPath $candidate) {
-                    try { [IO.File]::Delete($candidate) } catch {}
-                }
-                if (Test-Path -LiteralPath $candidate) {
-                    [IO.File]::Replace("$destination.pending", $candidate, "$candidate.previous")
-                } else {
-                    [IO.File]::Move("$destination.pending", $candidate)
-                }
-                $installed = $true
-                if ($slot) { Write-Warning "installed as PollikOS-x86_64$slot.img (older name busy)" }
-            } catch { $lastError = $_.Exception.Message; Start-Sleep -Milliseconds 300 }
-        }
-        if ($installed) { break }
+    # One canonical boot artifact; data images are handled separately.
+    if (Test-Path -LiteralPath $destination) {
+        [IO.File]::Replace("$destination.pending", $destination, $null)
+    } else {
+        [IO.File]::Move("$destination.pending", $destination)
     }
-    if (-not $installed) { throw "Could not install $destination ($lastError)" }
     Write-Host "Built $output/PollikOS-x86_64.img ($($kernelBytes.Length) kernel bytes)"
     if ($PerturbSchedule) { Write-Host 'Self-test schedule perturbation: TIMER64_HZ=137' }
     if ($CrashWriteLog) { Write-Host 'Crash write log enabled: PKWL sector frames on debugcon port 0xe9' }

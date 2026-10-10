@@ -1,4 +1,4 @@
-#ifndef POLLIK_X64_USER_H
+#if !defined(POLLIK_X64_USER_H)
 #define POLLIK_X64_USER_H
 #include "memory.h"
 #include "user_abi.h"

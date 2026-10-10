@@ -1,4 +1,4 @@
-#ifndef POLLIK_X64_SCHEDULER_H
+#if !defined(POLLIK_X64_SCHEDULER_H)
 #define POLLIK_X64_SCHEDULER_H
 #include "user.h"
 /* Owns runnable dispatch, timer accounting and context switching. The process

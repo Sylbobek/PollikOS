@@ -1,11 +1,7 @@
 #ifndef POLLIK_POLLIKFS_H
 #define POLLIK_POLLIKFS_H
 
-#ifdef POLLIK_X64
 #include "arch/x86_64/fs_platform.h"
-#else
-#include "system.h"
-#endif
 #include "vfs.h"
 
 #define POLLIK2_MAGIC        0x504B4632u /* "PKF2" */

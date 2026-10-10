@@ -68,7 +68,8 @@ void security_session_begin(const char *username) {
 int security_session_request(const Credentials *c,unsigned state) {
     if(!c || !c->session || !security_has(c,CAP_SESSION) || c->session!=session.id ||
        session.state!=SESSION_ACTIVE ||
-       (state!=SESSION_LOCKED && state!=SESSION_LOGOUT && state!=SESSION_PASSWORD && state!=SESSION_ELEVATE)) return 0;
+       (state!=SESSION_LOCKED && state!=SESSION_LOGOUT && state!=SESSION_PASSWORD && state!=SESSION_ELEVATE && state!=SESSION_FACTORY_RESET)) return 0;
+    if(state==SESSION_FACTORY_RESET && !security_has(c,CAP_ADMIN|CAP_FILE_WRITE))return 0;
     session.state=state; return 1;
 }
 void security_session_resume(void) {

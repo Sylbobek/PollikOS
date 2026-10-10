@@ -1,16 +1,10 @@
 CompileFlags:
   Add:
-    - --target=i386-none-elf
-    - -m32
+    - --target=x86_64-none-elf
     - -ffreestanding
-    - -Ikernel/include
-    - -Ikernel
+    - -mno-red-zone
+    - -Isdk/include
     - -Iinclude
     - -Ithird_party/bearssl/inc
     - -Ithird_party/bearssl/src
-    - -Wno-unused-parameter
-    - -Wno-unused-variable
-Diagnostics:
-  ClangTidy:
-    Remove:
-      - misc-definitions-in-headers
+    - -Ithird_party/libpayload-usb/include

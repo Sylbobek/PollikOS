@@ -65,7 +65,13 @@ static int usb_controller_initialize(int bus, int dev, int func)
 
 		pci_command = pci_read_config16(pci_device, PCI_COMMAND);
 		pci_command |= PCI_COMMAND_MASTER;
+		pci_command |= prog_if == 0 ? PCI_COMMAND_IO : PCI_COMMAND_MEMORY;
 		pci_write_config16(pci_device, PCI_COMMAND, pci_command);
+		extern int usb_platform_handoff(pcidev_t device, unsigned kind);
+		if (!usb_platform_handoff(pci_device, prog_if)) {
+			usb_debug("USB firmware ownership/mapping unavailable\n");
+			return -1;
+		}
 
 		usb_debug("%02x:%02x.%x %04x:%04x.%d ", bus, dev, func,
 			pciid >> 16, pciid & 0xFFFF, func);

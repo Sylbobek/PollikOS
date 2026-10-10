@@ -13,6 +13,7 @@
 #include "console_fb.h"
 #include "window.h"
 #include "../../hal.h"
+#include "../../usb_input.h"
 extern void kernel64_debug_bytes(const char *data, size_t length);
 
 #define TTY64_QUEUE 1024
@@ -30,6 +31,7 @@ static uint8_t in8(uint16_t port) {
 void tty64_init(void) { head = tail = count = 0; foreground_pgid = 0; }
 void tty64_enable(void) {
     enabled = 1;
+    usb_input_init();
     if (mouse64_init()) {
         static const char message[]="[INPUT64] PS/2 mouse enabled\n";
         static const char wheel[]="[INPUT64] PS/2 wheel packets enabled\n";
@@ -129,9 +131,15 @@ void tty64_poll(void) {
     limit=TTY64_POLL_LIMIT;
     while (limit-- && (in8(0x64)&1)) {
         uint8_t status=in8(0x64), byte=in8(0x60);
+        if(status&0xc0){mouse64_stream_reset();continue;}
         if (status&0x20) mouse64_byte(byte);
         else ps2_key(byte);
     }
+}
+/* Enumeration and control transfers run on a kernel dispatcher stack, never PIT. */
+void tty64_usb_poll(void){
+    if(!enabled)return;usb_input_poll();mouse64_usb_poll();
+    uint8_t scan;while(usb_input_read_key(&scan))ps2_key(scan);
 }
 size_t tty64_available(void) { return count; }
 size_t tty64_pop(void *destination, size_t maximum) {

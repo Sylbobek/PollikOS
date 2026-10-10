@@ -56,6 +56,9 @@ ohci_rh_enable_port(usbdev_t *dev, int port)
 		/* start reset */
 		OHCI_INST(dev->controller)->opreg->HcRhPortStatus[port] =
 			SetPortReset;
+		/* Some controllers complete reset before the first status read.
+		 * Always advance the 50ms budget so that case cannot loop forever. */
+		udelay(500); total_delay--;
 		int timeout = 200; /* timeout after 200 * 500us == 100ms */
 		while ((OHCI_INST(dev->controller)->opreg->HcRhPortStatus[port]
 					& PortResetStatus)

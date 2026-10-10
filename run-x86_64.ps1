@@ -6,11 +6,12 @@ param(
     [switch]$NoNetwork,
     [switch]$Audio,
     [switch]$PersistData,
-    [int]$MemoryMiB = 8192
+    [int]$MemoryMiB = 8192,
+    [ValidateSet('system','kernel')][string]$Variant = 'system'
 )
 $ErrorActionPreference = 'Stop'
-$image = Join-Path $PSScriptRoot 'build/x86_64/system/PollikOS-x86_64.img'
-if (!$DataImage) { $DataImage = Join-Path $PSScriptRoot 'build/x86_64/system/PollikData-system-30g.img' }
+$image = Join-Path $PSScriptRoot "build/x86_64/$Variant/PollikOS-x86_64.img"
+if (!$DataImage) { $DataImage = Join-Path $PSScriptRoot "build/x86_64/$Variant/$(if($Variant -eq 'system'){'PollikData-system-30g.img'}else{'PollikData-system.img'})" }
 foreach ($path in @($image,$DataImage)) {
     if (!(Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Missing image: $path. Run build-x86_64.ps1 -Production first. This launcher never formats disks."
@@ -30,7 +31,7 @@ $qemuArgs = @('-name','PollikOS v0.0.001','-machine',$nativeMachine,'-accel',$Ac
 if($NoNetwork){$qemuArgs+=@('-nic','none')}
 else{$qemuArgs+=@('-netdev','user,id=native_net','-device','rtl8139,netdev=native_net')}
 if($Audio){$qemuArgs+=@('-audiodev','dsound,id=native_audio','-device','AC97,audiodev=native_audio')}
-Write-Host 'Native x86-64 kernel and .pol applications; desktop migration is incomplete.'
+Write-Host 'PollikOS x86_64: native kernel and .pol applications.'
 if($PersistData){Write-Host 'Data disk writes persist across restarts; the boot disk uses a temporary snapshot.'}
 else{Write-Host 'Both disks use snapshots: changes in this session are temporary. Use -PersistData to retain files and bookmarks.'}
 Write-Host "Guest RAM: $MemoryMiB MiB. Disk profile: 30 GiB; PollikFS v2 usable filesystem remains about 32 MiB."

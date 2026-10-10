@@ -21,7 +21,7 @@ static int panel_profile_origin;
 static const struct {const char *name,*path;int icon;} panel_apps[]={
  {"Files","/bin/files.pol",1},{"Terminal","/bin/terminal.pol",2},{"Demo","/bin/windowdemo.pol",0},
  {"Browser","/bin/browser.pol",5},{"Notes","/bin/notes.pol",3},
- {"Calculator","/bin/calculator.pol",7}
+ {"Calculator","/bin/calculator.pol",7},{"Settings","/bin/settings.pol",4}
 };
 static int panel_matches(unsigned id){return panel_query[0]?app_search_matches(panel_apps[id].name,panel_query):(panel_pins&(1u<<panel_apps[id].icon))!=0;}
 static int panel_app_at(int row){for(unsigned i=0;i<sizeof(panel_apps)/sizeof(panel_apps[0]);i++)if(panel_matches(i)&&row--==0)return (int)i;return -1;}

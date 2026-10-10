@@ -6,7 +6,7 @@
 typedef struct {int dx,dy,wheel;unsigned buttons;int tap;} Ps2Motion;
 typedef struct {
     unsigned char bytes[6];unsigned size,index,device_id;
-    int synaptics,wmode,multifinger,palm,clickpad;
+    int synaptics,wmode,multifinger,palm,clickpad,passthrough;
     int contact,last_x,last_y,start_x,start_y,remainder_x,remainder_y,scroll;
     unsigned started,last_byte;int tap_possible;
 } Ps2Pointer;
@@ -27,7 +27,7 @@ static inline int ps2_pointer_configure(Ps2Pointer *p,Ps2Send send,Ps2Read read)
     unsigned char identity[3],model[3],caps[3]={0},ext[3]={0};
     if(ps2_query(send,read,0,identity)&&identity[1]==0x47&&ps2_query(send,read,3,model)&&(model[2]&0x80)){
         if(ps2_query(send,read,2,caps)&&(caps[0]&0x80)){
-            p->wmode=1;p->multifinger=(caps[2]&2)!=0;p->palm=(caps[2]&1)!=0;
+            p->wmode=1;p->multifinger=(caps[2]&2)!=0;p->palm=(caps[2]&1)!=0;p->passthrough=(caps[2]&0x80)!=0;
             if(((caps[0]>>4)&7)>=4&&ps2_query(send,read,0x0c,ext))p->clickpad=(ext[0]&0x10)!=0;
         }
         unsigned mode=0xc4u|(p->wmode?1u:0u);
@@ -60,7 +60,12 @@ static inline int ps2_pointer_feed(Ps2Pointer *p,unsigned char value,unsigned no
     }
     int w=p->wmode?((b[0]&0x30)>>2)|((b[0]&4)>>1)|((b[3]&4)>>2):4;
     m->buttons=b[0]&3;if(p->clickpad&&((b[0]^b[3])&1))m->buttons|=1;
-    if(w==2||w==3)return 0; /* Extra AGM/pass-through packets are not contacts. */
+    if(w==3&&p->passthrough){
+        m->buttons=b[1]&7;
+        if(!(b[1]&0xc0)){m->dx=(int)b[4]-((b[1]&16)?256:0);m->dy=-((int)b[5]-((b[1]&32)?256:0));}
+        return 1;
+    }
+    if(w==2||w==3)return 0; /* AGM packets are not ordinary contacts. */
     int x=((b[3]&0x10)<<8)|((b[1]&15)<<8)|b[4],y=((b[3]&0x20)<<7)|((b[1]&0xf0)<<4)|b[5];
     int contact=p->contact?b[2]>=25:b[2]>30;
     if((p->palm&&w>=12)||b[2]>=200){contact=0;p->tap_possible=0;}

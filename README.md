@@ -1,114 +1,69 @@
 # PollikOS
 
-A hobby operating system written from scratch in C and NASM. No Linux, no GRUB, no host libc: custom bootloader, kernel, filesystem, network stack, windowing system, C library and a self-hosted C compiler.
+PollikOS is an independent experimental **x86_64-only** operating system with
+its own C/NASM kernel, legacy BIOS boot, Ring 3 ELF64 `.pol` applications and
+PollikFS v2. It does not use Linux or BSD. Required 16/32-bit BIOS transition
+code remains; there is no separate 32-bit OS, ELF32 loader or application API.
 
-> **Status: alpha, QEMU only.** It has never been verified on physical hardware. Expect bugs, breaking changes and unfinished parts. See [Known limitations](#known-limitations).
+## Build and run (Windows)
 
-## Two targets
-
-| | i386 (legacy desktop) | x86_64 (the future) |
-|---|---|---|
-| Boot | BIOS, own boot sector + stage 2 | BIOS, 64-bit long mode |
-| Userspace | ELF32 in Ring 3; GUI apps still run inside the kernel | ELF64 in Ring 3 under a preemptive scheduler |
-| Desktop | Full desktop, dock, windows, browser, USB installer | Native `.pol` apps (desktop, terminal, files, browser) |
-| Memory | Up to 1 GiB direct-mapped | 4-level paging, tested up to 32 GiB RAM |
-| Storage | ATA PIO, AHCI/SATA | ATA PIO |
-
-The long-term plan is to make x86_64 the main target and retire the i386 desktop.
-
-## Features
-
-**Kernel (both targets)**
-- Own bootloader, GDT/IDT, paging, physical memory manager (E820), kernel heap
-- PollikFS v2: a small own filesystem with directories, inodes and a persistent account database
-- Shared local login with Argon2id and verified migration of legacy SHA-256 accounts
-
-**i386 desktop**
-- Software-rendered compositor, rounded windows, dock, animations, own vector font (Pollik Sans)
-- PollikOS Web: HTTPS via BearSSL, HTML/CSS layout, a subset of JavaScript (Elk)
-- Intel AC'97 audio, RTL8139 networking (ARP, IPv4, ICMP, UDP, DHCP, DNS, TCP), AHCI
-- Bootable USB installer image (ATA and AHCI targets verified in QEMU)
-- PollikMark: a built-in 2D/3D software-rendering benchmark
-
-**x86_64**
-- SYSCALL entry, static ELF64 loader, per-process address spaces, guarded stacks
-- Preemptive round-robin scheduler, `spawn`/`waitpid`, pipes, process groups, basic signals
-- Isolated x87/SSE2 state per process
-- C SDK: crt0, a small libc (`stdio`, `malloc`, `math`, ...), `pollikcc` driver
-- **Native TinyCC** running inside PollikOS: compile, link and run C programs in the guest
-- `pollish` shell with line editing, history, pipes and redirection
-
-## Quick start (Windows host)
-
-Requirements on `PATH`: `nasm`, `clang`, `ld.lld`, `llvm-objcopy`, `llvm-ar`, `qemu-system-x86_64`, Python 3.
+Required on PATH: NASM, Clang/LLVM (`ld.lld`, `llvm-ar`, `llvm-objcopy`,
+`llvm-readobj`, `llvm-nm`), QEMU x86_64, Python 3, and Perl (Git for Windows
+supplies it). Python image generators use Pillow and fontTools. Third-party
+sources, including the PollikOS TinyCC port, are checked into this repository.
 
 ```powershell
-# i386 desktop
+# Production kernel and curated disk; run uses snapshots by default.
+.\build.ps1 -Production
+.\run.ps1
+
+# Developer kernel with regression fixtures.
 .\build.ps1
-.\run.ps1                       # use -Accel whpx if Windows Hypervisor Platform is enabled
+.\run.ps1 -Variant kernel
 
-# x86_64 target
-.\build-x86_64.ps1
+# Kernel self-tests.
+.\build.ps1 -SelfTest
+python tests\kernel_checkpoint.py
+
+# Complete CI, including the high-memory boot matrix.
+.\tools\ci.ps1 -Extended
 ```
 
-Compile a C program for PollikOS:
+`build.ps1` delegates to `build-x86_64.ps1`; both build only ELF64/x86_64.
+Artifacts live under `build/x86_64/{kernel,selftest,system}/` with the canonical
+boot name `PollikOS-x86_64.img`. Existing `PollikData-system*.img` are preserved
+without sync, format or migration. Updating files in an existing private disk
+is a separate explicit operation. `run.ps1` delegates to the x86_64 launcher;
+`-PersistData` explicitly enables persistent writes for that VM session.
 
-```powershell
-.\sdk\tools\pollikcc.ps1 sdk\examples\hello.c -o hello.pol
-```
+## Implemented components
 
-## Tests
+- PMM/VMM with 64-bit physical addresses, high RAM, DMA32, NX/WP and guarded stacks.
+- Static ELF64 loader, preemptive user scheduler, spawn/wait, pipes, signals,
+  process-owned descriptors, capability checks and cleanup after exit.
+- Native Desktop, Terminal, Files, Notes, Settings, Browser, Calculator and media
+  applications. Window composition remains in the kernel; applications run in Ring 3.
+- C SDK/crt0/libc, `pollish`, native TinyCC compile/link/run and a writable sysroot.
+- PollikFS v2 with compatible geometry, metadata journal/CRC/recovery, read-only
+  corruption handling, persistent accounts, Argon2id, sessions and administration.
+- ATA PIO, RTL8139 IPv4/TCP/TLS, AC'97/PC speaker, PS/2 and USB HID adapters.
+  HTTP is implemented in userspace. Browser uses QuickJS and NetSurf parser/libcss
+  libraries with a PollikOS renderer; it is not a complete modern Web platform.
 
-Tests boot real images in QEMU on disposable disks and never touch your data disk.
+## Limits
 
-```powershell
-python tests\x86_64_boot.py        # 16 MiB - 32 GiB guests, scheduler, files, console, TinyCC
-python tests\x86_64_storage.py     # damaged / unsupported disks are refused
-python tests\process_stress.py --ram 64 256
-python tests\smoke.py --notes-only
-```
+One CPU, a non-preemptible kernel and one thread per process; no SMP, UEFI,
+NVMe, GPU acceleration, dynamic linker, fork/exec or multi-user ACLs. The current
+filesystem has 32 MiB gross capacity even in the sparse 30 GiB VM disk profile.
+The legacy-only AHCI driver and physical installer were retired with the old OS;
+no x86_64 functionality depended on them. Physical hardware is not certified.
 
-The x86_64 suites check that physical memory, file handles, process slots and zombies return exactly to baseline after every phase, including failure injection on allocation paths.
-
-## Known limitations
-
-- Only tested in QEMU; physical hardware is unverified
-- Single CPU (no SMP); the kernel is non-preemptible
-- PollikFS: one local user, directory access policy, fixed 32 MiB geometry; metadata redo journal and read-only consistency checks, without whole-file data atomicity
-- GUI is software-rendered without GPU acceleration or VSync; performance is limited, especially under pure emulation (TCG)
-- x86_64 target does not yet have AHCI, a graphical installer or all i386 desktop apps
-- No `fork`/`exec`, threads, dynamic linking, AVX or `long double`
-- BIOS/legacy boot only (no UEFI, NVMe or GPT)
-- Browser: native HTML5 parsing/libcss/QuickJS; layout and Web APIs remain incomplete,
-  with no HTTP/2 or multi-process site isolation. See [browser checkpoint](docs/NATIVE_BROWSER_CHECKPOINT.md).
-
-See [kernel/userspace checkpoint 6–10](docs/IO_USERSPACE_CHECKPOINT.md) for descriptor rights, Ring 3 HTTP, metadata recovery, CI commands and validation boundaries.
-
-The default CI now also builds the normal x86_64 desktop, exercises real Notes
-and Files I/O/GUI operations, and checks Browser framebuffer output and native Web APIs.
-`tools/ci.ps1 -Target x86_64 -Extended` adds sessions, concurrent networking
-and console regressions. Weekly CI runs Extended and preserves failure logs.
-Host image tools refuse pending, corrupt or unknown journal prefixes; recovery
-must be performed by the current kernel before host installation or sync.
-
-## Repository layout
-
-```
-boot/               BIOS boot sector and stage 2
-kernel/             i386 kernel, desktop, network stack, browser
-kernel/arch/x86_64/ 64-bit kernel, scheduler, memory manager, syscalls
-sdk/                C SDK for x86_64 (crt0, libc, headers, pollikcc)
-third_party/        BearSSL, Elk, stb_image, TinyCC (see licences)
-tests/              QEMU and host-native test suites
-tools/              image and filesystem builders
-fonts/ assets/      Pollik Sans generator, UI assets
-```
-
-Design notes and ABI contracts live next to the code (`ARCHITECTURE.md`, `kernel/arch/x86_64/*.md`).
+[Architecture](ARCHITECTURE.md), [migration and real test results](docs/migration/X64_ONLY.md),
+[inventory](docs/migration/X64_INVENTORY.json), [SDK](sdk/README.md).
+Historical checkpoint documents are evidence of earlier versions, not current
+build instructions or a second supported target.
 
 ## Licence
 
-PollikOS's own code is licensed under the GNU Affero General Public License,
-version 3 only (`AGPL-3.0-only`); see [LICENSE](LICENSE).
-Third-party components retain their own licences and notices; see the
-[dependency index](third_party/README.md).
+PollikOS code is AGPL-3.0-only; see [LICENSE](LICENSE).
+[Third-party licences](third_party/README.md) remain unchanged.

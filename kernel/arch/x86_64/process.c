@@ -17,6 +17,7 @@
 #include "audio_stream.h"
 #include "../../vfs.h"
 #include "../../pollikfs.h"
+#include "../../factory_reset.h"
 #include "../../hal.h"
 #include "../../../include/pollikos_abi.h"
 #include "../../../sdk/include/pollikos_system.h"
@@ -928,7 +929,10 @@ int process64_trap(UserFrame *frame, uint64_t cr2) {
             unsigned requested=frame->rdi==USER_SESSION_LOCK?SESSION_LOCKED:
                 frame->rdi==USER_SESSION_LOGOUT?SESSION_LOGOUT:
                 frame->rdi==USER_SESSION_PASSWORD?SESSION_PASSWORD:
-                (frame->rdi==USER_SESSION_ELEVATE||frame->rdi==USER_SESSION_ELEVATE_APP)?SESSION_ELEVATE:SESSION_NONE;
+                (frame->rdi==USER_SESSION_ELEVATE||frame->rdi==USER_SESSION_ELEVATE_APP)?SESSION_ELEVATE:
+                frame->rdi==USER_SESSION_FACTORY_RESET?SESSION_FACTORY_RESET:SESSION_NONE;
+            if(requested==SESSION_FACTORY_RESET && (!security_has(&process->credentials,CAP_ADMIN|CAP_SESSION|CAP_FILE_WRITE) ||
+                !factory_reset_mark())){frame->rax=(uint64_t)-(int64_t)USER_EPERM;goto session_done;}
             if(requested==SESSION_ELEVATE){
                 if(!security_has(&process->credentials,CAP_SESSION)){frame->rax=(uint64_t)-(int64_t)USER_EPERM;goto session_done;}
                 for(unsigned n=0;n<sizeof(elevation_path);n++)elevation_path[n]=0;

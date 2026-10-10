@@ -1,4 +1,4 @@
-/* Compile-only ABI check against the real kernel headers (i386-none-elf). */
+/* Compile-only ABI check against the real kernel headers (x86_64-none-elf). */
 #include "../kernel/pollikfs.h"
 _Static_assert(sizeof(PollikInode) == 60, "on-disk inode is 60 bytes, not 64");
 _Static_assert(sizeof(PollikDirent) == 64, "directory entry ABI");

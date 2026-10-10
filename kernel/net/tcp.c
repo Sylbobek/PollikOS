@@ -1,9 +1,6 @@
 #include "tcp.h"
 #include "ipv4.h"
 #include "net_util.h"
-#ifndef POLLIK_X64
-#include "../mem.h"
-#endif
 
 #define MAX_TCP_SOCKETS 8
 #define TCP_RX_BUFFER_SIZE 32768
@@ -138,11 +135,7 @@ TcpSocket *tcp_connect_start(NetworkInterface *iface, const u8 *remote_ip, u16 r
     s->state = TCP_STATE_SYN_SENT;
     s->retrans_count = 0;
 
-#ifdef POLLIK_X64
     s->rx_buf = (u8 *)tcp64_buffer_alloc((unsigned)slot,TCP_RX_BUFFER_SIZE);
-#else
-    s->rx_buf = (u8 *)kmalloc(TCP_RX_BUFFER_SIZE);
-#endif
     if (!s->rx_buf) {
         s->active = 0;
         return 0;
@@ -252,11 +245,7 @@ int tcp_has_error(TcpSocket *s) {
 void tcp_abort(TcpSocket *s) {
     if (!s || !s->active) return;
     if (s->rx_buf) {
-#ifdef POLLIK_X64
         tcp64_buffer_free(s->rx_buf);
-#else
-        kfree(s->rx_buf);
-#endif
         s->rx_buf = 0;
     }
     s->active = 0;
@@ -280,11 +269,7 @@ void tcp_close(TcpSocket *s) {
     }
 
     if (s->rx_buf) {
-#ifdef POLLIK_X64
         tcp64_buffer_free(s->rx_buf);
-#else
-        kfree(s->rx_buf);
-#endif
         s->rx_buf = 0;
     }
     s->active = 0;

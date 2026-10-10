@@ -6,7 +6,7 @@ typedef struct { uint32_t uid, gid; uint64_t session; uint32_t capabilities; } C
 enum { CAP_FILE_READ=1, CAP_FILE_WRITE=2, CAP_NETWORK=4, CAP_WINDOW=8,
        CAP_SESSION=16, CAP_DEVICE=32, CAP_ADMIN=64, CAP_USER_DEFAULT=31, CAP_ADMIN_ALL=127 };
 int security_has(const Credentials *credentials,unsigned capabilities);
-enum { SESSION_NONE, SESSION_ACTIVE, SESSION_LOCKED, SESSION_LOGOUT, SESSION_PASSWORD, SESSION_ELEVATE };
+enum { SESSION_NONE, SESSION_ACTIVE, SESSION_LOCKED, SESSION_LOGOUT, SESSION_PASSWORD, SESSION_ELEVATE, SESSION_FACTORY_RESET };
 enum { ACCESS_READ=1, ACCESS_WRITE=2 };
 const Credentials *security_current(void); /* architecture-owned caller context */
 Credentials security_user_credentials(void);

@@ -1,7 +1,4 @@
 #include "browser.h"
-#ifndef POLLIK_BROWSER_STANDALONE
-#include "../mem.h"
-#endif
 
 static int hexval(char ch) {
     if (ch >= '0' && ch <= '9') return ch - '0';

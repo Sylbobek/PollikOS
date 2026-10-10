@@ -9,7 +9,7 @@ unsigned short hal_port_read16(unsigned short port);
 void hal_port_write32(unsigned short port, unsigned int value);
 unsigned int hal_port_read32(unsigned short port);
 
-/* CPU and interrupt primitives shared by the i386 kernel and x86_64 build. */
+/* CPU and interrupt primitives for the x86_64 kernel. */
 unsigned long hal_irq_save_disable(void);
 void hal_irq_restore(unsigned long flags);
 void hal_irq_enable(void);
@@ -41,8 +41,5 @@ void hal_cpuid(unsigned int leaf, unsigned int subleaf,
 unsigned long long hal_read_tsc(void);
 unsigned long long hal_read_tsc_serialized(void);
 int hal_rdrand32(unsigned int *value);
-void hal_x87_init(void);
-void hal_x87_save_reset(void *state);
-void hal_x87_restore(const void *state);
 
 #endif

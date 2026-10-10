@@ -14,7 +14,6 @@ static int file_access(const vfs_file_t *file,unsigned access) {
     pollikfs_access_denied(); return 0;
 }
 
-#ifdef POLLIK_X64
 #include "arch/x86_64/user_abi.h"
 #include "arch/x86_64/memory.h"
 /* Every process slot can own all non-standard descriptors at once. */
@@ -26,18 +25,12 @@ static unsigned g_system_file_count;
 static unsigned g_free_file_count;
 _Static_assert((uint64_t)PROCESS_MAX * (USER_FD_LIMIT - 3) <= UINT32_MAX,
                "VFS free index width");
-#else
-#define MAX_SYSTEM_FILES 64
-static vfs_file_t g_system_files[MAX_SYSTEM_FILES];
-static unsigned g_system_file_count = MAX_SYSTEM_FILES;
-#endif
 static int g_vfs_initialized = 0;
-#if defined(POLLIK_X64) && defined(SELFTEST)
+#if 1 && defined(SELFTEST)
 static int fail_file_alloc;
 void vfs_test_fail_alloc(int fail) { fail_file_alloc = fail; }
 #endif
 
-#ifdef POLLIK_X64
 static int vfs_allocate_file_pool(void) {
     if (g_system_files) return 1;
     size_t count = process64_capacity() * (USER_FD_LIMIT - 3);
@@ -62,61 +55,43 @@ static int vfs_allocate_file_pool(void) {
     g_system_file_count = count;
     return 1;
 }
-#endif
 
 /* External process hooks */
 extern int process_get_current_pid(void);
 extern vfs_file_t **process_get_current_file_slot(unsigned fd);
 
 static vfs_file_t *alloc_file_desc(void) {
-#if defined(POLLIK_X64) && defined(SELFTEST)
+#if 1 && defined(SELFTEST)
     if (fail_file_alloc) return 0;
 #endif
-#ifdef POLLIK_X64
     if (!g_system_files || !g_free_file_count) return 0;
     size_t index = g_free_file_indices[--g_free_file_count];
     vfs_file_t *file = &g_system_files[index];
     memset(file, 0, sizeof(*file));
     file->ref_count = 1;
     return file;
-#else
-    for (int i = 0; i < MAX_SYSTEM_FILES; i++) {
-        if (g_system_files[i].ref_count == 0) {
-            memset(&g_system_files[i], 0, sizeof(vfs_file_t));
-            g_system_files[i].ref_count = 1;
-            return &g_system_files[i];
-        }
-    }
-    return 0;
-#endif
 }
 
 static void free_file_desc(vfs_file_t *f) {
     if (!f || f->ref_count <= 0) return;
     if (--f->ref_count == 0) {
         memset(f, 0, sizeof(vfs_file_t));
-#ifdef POLLIK_X64
         size_t index = (size_t)(f - g_system_files);
         if (index < g_system_file_count && g_free_file_count < g_system_file_count)
             g_free_file_indices[g_free_file_count++] = (uint32_t)index;
-#endif
     }
 }
 
 void vfs_init(void) {
-#ifdef POLLIK_X64
     g_vfs_initialized = 0;
     if (!vfs_allocate_file_pool()) {
         KLOG_ERROR(KLOG_CAT_BOOT, "VFS descriptor pool allocation failed");
         return;
     }
-#endif
     memset(g_system_files, 0, g_system_file_count * sizeof(vfs_file_t));
-#ifdef POLLIK_X64
     g_free_file_count = g_system_file_count;
     for (size_t i = 0; i < g_system_file_count; ++i)
         g_free_file_indices[i] = (uint32_t)(g_system_file_count-1-i);
-#endif
     pollikfs_init();
     g_vfs_initialized = 1;
     KLOG_INFO(KLOG_CAT_BOOT, "Virtual File System (VFS) initialized");
@@ -265,26 +240,7 @@ int vfs_write(int fd, const void *buf, u32 count) {
     vfs_file_t *f = *slot;
     if (f->type == VFS_DEVICE) {
         /* The x86_64 process layer owns stdout/stderr before VFS is reached. */
-#ifdef POLLIK_X64
         return -1;
-#else
-        if (fd == 1 || fd == 2) {
-            char kbuf[128];
-            u32 total = 0;
-            const u8 *src = (const u8 *)buf;
-            while (total < count) {
-                u32 chunk = count - total;
-                if (chunk > sizeof(kbuf) - 1)
-                    chunk = sizeof(kbuf) - 1;
-                memcpy(kbuf, src + total, chunk);
-                kbuf[chunk] = 0;
-                serial(kbuf);
-                total += chunk;
-            }
-            return (int)total;
-        }
-        return -1;
-#endif
     }
 
     if(!(f->flags&O_WRONLY) || !file_access(f,ACCESS_WRITE)) return -1;

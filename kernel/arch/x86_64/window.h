@@ -1,4 +1,4 @@
-#ifndef POLLIK_X64_WINDOW_H
+#if !defined(POLLIK_X64_WINDOW_H)
 #define POLLIK_X64_WINDOW_H
 #include "user.h"
 int window64_init(void);
